@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Supplier;
@@ -23,10 +24,16 @@ import java.util.function.Supplier;
 public class TradeFeedbackController {
 
     private final TradeFeedbackService tradeFeedbackService;
+    private final TradeOutcomeService tradeOutcomeService;
     private final TradeFeedbackMapper mapper;
 
-    public TradeFeedbackController(TradeFeedbackService tradeFeedbackService, TradeFeedbackMapper mapper) {
+    public TradeFeedbackController(
+            TradeFeedbackService tradeFeedbackService,
+            TradeOutcomeService tradeOutcomeService,
+            TradeFeedbackMapper mapper
+    ) {
         this.tradeFeedbackService = tradeFeedbackService;
+        this.tradeOutcomeService = tradeOutcomeService;
         this.mapper = mapper;
     }
 
@@ -84,13 +91,40 @@ public class TradeFeedbackController {
         return detail(translate(() -> tradeFeedbackService.cancelCase(caseId)));
     }
 
+    @PostMapping("/{caseId}/refresh")
+    public TradeCaseDetail refresh(@PathVariable String caseId) {
+        TradeOutcomeRefresh refresh = translate(() -> tradeOutcomeService.refresh(caseId));
+        TradeCaseEntity tradeCase = translate(() -> tradeFeedbackService.getCase(caseId));
+        return detail(tradeCase, refresh.warnings());
+    }
+
     private TradeCaseDetail detail(TradeCaseEntity tradeCase) {
+        return detail(tradeCase, List.of());
+    }
+
+    private TradeCaseDetail detail(TradeCaseEntity tradeCase, List<String> warnings) {
         List<TradeFillEntity> fills = translate(() -> tradeFeedbackService.fills(tradeCase.getCaseId()));
+        List<TradeOutcomeEntity> outcomes = translate(() -> tradeOutcomeService.outcomes(tradeCase.getCaseId()));
+        BigDecimal latestPrice = currentEvaluationPrice(outcomes);
         return mapper.detail(
                 tradeCase,
-                translate(() -> tradeFeedbackService.ledger(tradeCase.getCaseId(), null)),
-                fills
+                translate(() -> tradeFeedbackService.ledger(tradeCase.getCaseId(), latestPrice)),
+                fills,
+                outcomes,
+                warnings
         );
+    }
+
+    private BigDecimal currentEvaluationPrice(List<TradeOutcomeEntity> outcomes) {
+        return outcomes.stream()
+                .filter(outcome -> "CURRENT".equals(outcome.getHorizon()))
+                .filter(outcome -> "MATURED".equals(outcome.getStatus()))
+                .sorted(java.util.Comparator.comparing(
+                        outcome -> "EXECUTION".equals(outcome.getBaselineType()) ? 0 : 1))
+                .map(TradeOutcomeEntity::getEvaluationPrice)
+                .filter(java.util.Objects::nonNull)
+                .findFirst()
+                .orElse(null);
     }
 
     private boolean matches(String actual, String filter) {

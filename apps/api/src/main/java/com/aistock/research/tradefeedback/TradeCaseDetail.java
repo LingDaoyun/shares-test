@@ -19,6 +19,8 @@ public record TradeCaseDetail(
         String status,
         TradeLedgerSummary ledger,
         List<TradeFillView> fills,
+        List<TradeOutcomeView> outcomes,
+        List<String> outcomeWarnings,
         Instant createdAt,
         Instant updatedAt
 ) {

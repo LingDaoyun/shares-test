@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -15,6 +16,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -29,10 +33,55 @@ class TradeFeedbackControllerTest {
     @Autowired
     private TradeFillRepository fillRepository;
 
+    @Autowired
+    private TradeOutcomeRepository outcomeRepository;
+
+    @MockBean
+    private TradeMarketDataGateway marketDataGateway;
+
     @AfterEach
     void cleanJournal() {
+        outcomeRepository.deleteAll();
         fillRepository.deleteAll();
         caseRepository.deleteAll();
+    }
+
+    @Test
+    void refreshesAndReturnsOutcomeViewsWithLivePriceLedgerAndPendingNulls() throws Exception {
+        String caseId = createCase();
+        mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"side":"BUY","executedAt":"2026-07-13T01:35:00Z","price":35.20,"quantity":100}
+                                """))
+                .andExpect(status().isCreated());
+        when(marketDataGateway.dailyKLines(anyString(), any(), any())).thenReturn(java.util.List.of(
+                bar("2026-07-14", "37", "38", "35"),
+                bar("2026-07-15", "38", "39", "36"),
+                bar("2026-07-16", "39", "40", "37"),
+                bar("2026-07-17", "40", "41", "38"),
+                bar("2026-07-20", "41", "42", "39")));
+        when(marketDataGateway.latestPrice("002714")).thenReturn(java.util.Optional.of(
+                new LatestMarketPrice(new java.math.BigDecimal("40"), "EAST_MONEY_LIVE_QUOTE")));
+
+        mockMvc.perform(post("/api/trade-cases/{caseId}/refresh", caseId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.outcomeWarnings").isEmpty())
+                .andExpect(jsonPath("$.ledger.latestPrice").value(40))
+                .andExpect(jsonPath("$.ledger.averageCost").value(35.2))
+                .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'RECOMMENDATION' && @.horizon == 'T1')].status")
+                        .value("MATURED"))
+                .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'RECOMMENDATION' && @.horizon == 'T20')].status")
+                        .value("PENDING"))
+                .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'RECOMMENDATION' && @.horizon == 'T20')].returnPct")
+                        .value(org.hamcrest.Matchers.everyItem(org.hamcrest.Matchers.nullValue())))
+                .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'EXECUTION' && @.horizon == 'CURRENT')].returnPct")
+                        .value(13.6364));
+
+        mockMvc.perform(post("/api/trade-cases/{caseId}/refresh", caseId))
+                .andExpect(status().isOk());
+        org.assertj.core.api.Assertions.assertThat(outcomeRepository.findByCaseIdOrderByHorizonAsc(caseId))
+                .hasSize(5);
     }
 
     @Test
@@ -233,5 +282,13 @@ class TradeFeedbackControllerTest {
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         return new com.fasterxml.jackson.databind.ObjectMapper().readTree(response).path("caseId").asText();
+    }
+
+    private MarketBar bar(String date, String close, String high, String low) {
+        return new MarketBar(
+                java.time.LocalDate.parse(date),
+                new java.math.BigDecimal(close),
+                new java.math.BigDecimal(high),
+                new java.math.BigDecimal(low));
     }
 }

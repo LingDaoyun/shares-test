@@ -36,6 +36,14 @@ class TradeFeedbackPersistenceTest {
 
         assertThat(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc("case-1"))
                 .extracting(TradeFillEntity::getSide).containsExactly("BUY", "SELL");
-        assertThat(outcomes.findByCaseIdOrderByHorizonAsc("case-1")).hasSize(1);
+        assertThat(outcomes.findByCaseIdOrderByHorizonAsc("case-1")).singleElement().satisfies(outcome -> {
+            assertThat(outcome.getStatus()).isEqualTo("PENDING");
+            assertThat(outcome.getBaselinePrice()).isNull();
+            assertThat(outcome.getEvaluationPrice()).isNull();
+            assertThat(outcome.getEvaluationDate()).isNull();
+            assertThat(outcome.getReturnPct()).isNull();
+            assertThat(outcome.getMaxRunupPct()).isNull();
+            assertThat(outcome.getMaxDrawdownPct()).isNull();
+        });
     }
 }

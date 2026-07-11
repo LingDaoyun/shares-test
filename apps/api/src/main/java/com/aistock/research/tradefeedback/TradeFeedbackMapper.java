@@ -37,7 +37,9 @@ class TradeFeedbackMapper {
     TradeCaseDetail detail(
             TradeCaseEntity tradeCase,
             TradeLedgerSummary ledger,
-            List<TradeFillEntity> fills
+            List<TradeFillEntity> fills,
+            List<TradeOutcomeEntity> outcomes,
+            List<String> outcomeWarnings
     ) {
         return new TradeCaseDetail(
                 tradeCase.getCaseId(),
@@ -54,8 +56,25 @@ class TradeFeedbackMapper {
                 tradeCase.getStatus(),
                 ledger,
                 fills.stream().map(this::fill).toList(),
+                outcomes.stream().map(this::outcome).toList(),
+                List.copyOf(outcomeWarnings),
                 tradeCase.getCreatedAt(),
                 tradeCase.getUpdatedAt()
+        );
+    }
+
+    private TradeOutcomeView outcome(TradeOutcomeEntity outcome) {
+        return new TradeOutcomeView(
+                outcome.getBaselineType(),
+                outcome.getHorizon(),
+                outcome.getBaselinePrice(),
+                outcome.getEvaluationPrice(),
+                outcome.getEvaluationDate(),
+                outcome.getReturnPct(),
+                outcome.getMaxRunupPct(),
+                outcome.getMaxDrawdownPct(),
+                outcome.getStatus(),
+                outcome.getCalculatedAt()
         );
     }
 

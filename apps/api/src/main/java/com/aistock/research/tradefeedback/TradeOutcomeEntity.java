@@ -104,6 +104,46 @@ public class TradeOutcomeEntity {
         );
     }
 
+    public static TradeOutcomeEntity matured(
+            String snapshotId,
+            String caseId,
+            String baselineType,
+            String horizon,
+            BigDecimal baselinePrice,
+            BigDecimal evaluationPrice,
+            LocalDate evaluationDate,
+            BigDecimal returnPct,
+            BigDecimal maxRunupPct,
+            BigDecimal maxDrawdownPct,
+            Instant calculatedAt
+    ) {
+        return new TradeOutcomeEntity(
+                snapshotId,
+                caseId,
+                baselineType,
+                horizon,
+                baselinePrice,
+                evaluationPrice,
+                evaluationDate,
+                returnPct,
+                maxRunupPct,
+                maxDrawdownPct,
+                "MATURED",
+                calculatedAt
+        );
+    }
+
+    public void replaceWith(OutcomeResult result, Instant calculatedAt) {
+        this.baselinePrice = result.baselinePrice();
+        this.evaluationPrice = result.evaluationPrice();
+        this.evaluationDate = result.evaluationDate();
+        this.returnPct = result.returnPct();
+        this.maxRunupPct = result.maxRunupPct();
+        this.maxDrawdownPct = result.maxDrawdownPct();
+        this.status = result.status();
+        this.calculatedAt = calculatedAt;
+    }
+
     public String getSnapshotId() {
         return snapshotId;
     }
