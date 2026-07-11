@@ -154,7 +154,7 @@ public class TradeFeedbackService {
         TradeCaseEntity tradeCase = requireCaseForUpdate(caseId);
         if (!TradeCaseStatus.PLANNED.name().equals(tradeCase.getStatus())
                 || !fillRepository.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(tradeCase.getCaseId()).isEmpty()) {
-            throw new IllegalArgumentException("只有尚未成交的计划可以取消");
+            throw new TradeFeedbackConflictException("只有尚未成交的计划可以取消");
         }
         tradeCase.updateStatus(TradeCaseStatus.CANCELLED.name(), Instant.now());
         return caseRepository.save(tradeCase);
@@ -200,27 +200,27 @@ public class TradeFeedbackService {
     private TradeCaseEntity requireCase(String caseId) {
         String normalizedCaseId = requiredText(caseId, "复盘单 ID 不能为空");
         return caseRepository.findById(normalizedCaseId)
-                .orElseThrow(() -> new IllegalArgumentException("复盘单不存在"));
+                .orElseThrow(() -> new TradeFeedbackNotFoundException("复盘单不存在"));
     }
 
     private TradeCaseEntity requireCaseForUpdate(String caseId) {
         String normalizedCaseId = requiredText(caseId, "复盘单 ID 不能为空");
         return caseRepository.findByIdForUpdate(normalizedCaseId)
-                .orElseThrow(() -> new IllegalArgumentException("复盘单不存在"));
+                .orElseThrow(() -> new TradeFeedbackNotFoundException("复盘单不存在"));
     }
 
     private TradeFillEntity requireFill(TradeCaseEntity tradeCase, String fillId) {
         TradeFillEntity fill = fillRepository.findById(requiredText(fillId, "成交 ID 不能为空"))
-                .orElseThrow(() -> new IllegalArgumentException("成交记录不存在"));
+                .orElseThrow(() -> new TradeFeedbackNotFoundException("成交记录不存在"));
         if (!tradeCase.getCaseId().equals(fill.getCaseId())) {
-            throw new IllegalArgumentException("成交记录不属于该复盘单");
+            throw new TradeFeedbackNotFoundException("成交记录不存在");
         }
         return fill;
     }
 
     private void ensureFillAllowed(TradeCaseEntity tradeCase) {
         if (TradeCaseStatus.CANCELLED.name().equals(tradeCase.getStatus())) {
-            throw new IllegalArgumentException("已取消的复盘单不能录入成交");
+            throw new TradeFeedbackConflictException("已取消的复盘单不能录入成交");
         }
     }
 
