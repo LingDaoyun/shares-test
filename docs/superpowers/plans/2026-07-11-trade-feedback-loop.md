@@ -31,6 +31,7 @@
 - Create: `apps/api/src/main/java/com/aistock/research/tradefeedback/TradeFillRepository.java`
 - Create: `apps/api/src/main/java/com/aistock/research/tradefeedback/TradeOutcomeRepository.java`
 - Modify: `apps/api/src/main/resources/schema.sql`
+- Modify: `infra/db/init/001_schema.sql`
 - Test: `apps/api/src/test/java/com/aistock/research/tradefeedback/TradeFeedbackPersistenceTest.java`
 - Test: `apps/api/src/test/java/com/aistock/research/history/SchemaCompatibilityTest.java`
 

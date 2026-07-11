@@ -350,7 +350,7 @@ public record AshareQuoteSnapshot(
 }
 ```
 
-Change the EastMoney page reader to retain `data.total`, pass pages to `AshareQuotePaginator`, and include both `CN` and `BSE` active stocks from `stocks.index.json`. Build a snapshot as follows:
+Change the EastMoney page reader to retain `data.total` and use the live paginated result as the canonical沪深北 candidate universe. Do not restrict it through a bundled symbol index or a secondary security master. Build a snapshot as follows:
 
 ```text
 targetSymbols = balancedAshareSymbols(securityMaster, min(requestedCount, securityMaster.size))
