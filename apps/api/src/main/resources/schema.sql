@@ -85,3 +85,55 @@ CREATE TABLE IF NOT EXISTS investment_decision_history (
 
 CREATE INDEX IF NOT EXISTS idx_decision_symbol_time
   ON investment_decision_history(symbol, recorded_at);
+
+CREATE TABLE IF NOT EXISTS strategy_trade_case (
+  case_id VARCHAR(36) PRIMARY KEY,
+  recommendation_fingerprint VARCHAR(64) NOT NULL UNIQUE,
+  decision_id VARCHAR(36),
+  symbol VARCHAR(6) NOT NULL,
+  company_name VARCHAR(128) NOT NULL,
+  source_module VARCHAR(64) NOT NULL,
+  recommendation_action VARCHAR(64) NOT NULL,
+  recommendation_score NUMERIC(8, 2),
+  rule_version VARCHAR(64) NOT NULL,
+  recommended_price NUMERIC(20, 6) NOT NULL,
+  recommended_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  recommendation_payload_json TEXT NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  CONSTRAINT fk_trade_case_decision FOREIGN KEY (decision_id)
+    REFERENCES investment_decision_history(decision_id)
+);
+
+CREATE TABLE IF NOT EXISTS strategy_trade_fill (
+  fill_id VARCHAR(36) PRIMARY KEY,
+  case_id VARCHAR(36) NOT NULL,
+  side VARCHAR(8) NOT NULL,
+  executed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  price NUMERIC(20, 6) NOT NULL,
+  quantity BIGINT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  CONSTRAINT fk_trade_fill_case FOREIGN KEY (case_id) REFERENCES strategy_trade_case(case_id),
+  CONSTRAINT ck_trade_fill_side CHECK (side IN ('BUY', 'SELL')),
+  CONSTRAINT ck_trade_fill_price CHECK (price > 0),
+  CONSTRAINT ck_trade_fill_quantity CHECK (quantity > 0)
+);
+
+CREATE TABLE IF NOT EXISTS strategy_outcome_snapshot (
+  snapshot_id VARCHAR(36) PRIMARY KEY,
+  case_id VARCHAR(36) NOT NULL,
+  baseline_type VARCHAR(32) NOT NULL,
+  horizon VARCHAR(16) NOT NULL,
+  baseline_price NUMERIC(20, 6),
+  evaluation_price NUMERIC(20, 6),
+  evaluation_date DATE,
+  return_pct NUMERIC(12, 4),
+  max_runup_pct NUMERIC(12, 4),
+  max_drawdown_pct NUMERIC(12, 4),
+  status VARCHAR(32) NOT NULL,
+  calculated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  CONSTRAINT fk_trade_outcome_case FOREIGN KEY (case_id) REFERENCES strategy_trade_case(case_id),
+  CONSTRAINT uk_trade_outcome_scope UNIQUE (case_id, baseline_type, horizon)
+);
