@@ -62,7 +62,9 @@ class TradeFeedbackControllerTest {
                 bar("2026-07-17", "40", "41", "38"),
                 bar("2026-07-20", "41", "42", "39")));
         when(marketDataGateway.latestPrice("002714")).thenReturn(java.util.Optional.of(
-                new LatestMarketPrice(new java.math.BigDecimal("40"), "EAST_MONEY_LIVE_QUOTE")));
+                new LatestMarketPrice(new java.math.BigDecimal("40"), "EAST_MONEY_LIVE_QUOTE",
+                        java.time.LocalDate.parse("2026-07-20"),
+                        java.time.Instant.parse("2026-07-20T07:00:00Z"))));
 
         mockMvc.perform(post("/api/trade-cases/{caseId}/refresh", caseId))
                 .andExpect(status().isOk())
@@ -76,12 +78,16 @@ class TradeFeedbackControllerTest {
                 .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'RECOMMENDATION' && @.horizon == 'T20')].returnPct")
                         .value(org.hamcrest.Matchers.everyItem(org.hamcrest.Matchers.nullValue())))
                 .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'EXECUTION' && @.horizon == 'CURRENT')].returnPct")
-                        .value(13.6364));
+                        .value(13.6364))
+                .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'RECOMMENDATION' && @.horizon == 'CURRENT')].sourceName")
+                        .value("EAST_MONEY_LIVE_QUOTE"))
+                .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'RECOMMENDATION' && @.horizon == 'CURRENT')].marketTimestamp")
+                        .value("2026-07-20T07:00:00Z"));
 
         mockMvc.perform(post("/api/trade-cases/{caseId}/refresh", caseId))
                 .andExpect(status().isOk());
         org.assertj.core.api.Assertions.assertThat(outcomeRepository.findByCaseIdOrderByHorizonAsc(caseId))
-                .hasSize(5);
+                .hasSize(6);
     }
 
     @Test

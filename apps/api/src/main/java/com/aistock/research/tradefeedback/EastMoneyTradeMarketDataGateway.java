@@ -4,7 +4,7 @@ import com.aistock.research.integration.eastmoney.EastMoneyClient;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import org.springframework.stereotype.Component;
 
-import java.math.BigDecimal;
+import java.time.ZoneId;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -14,6 +14,7 @@ public class EastMoneyTradeMarketDataGateway implements TradeMarketDataGateway {
 
     static final String EAST_MONEY_LIVE_QUOTE = "EAST_MONEY_LIVE_QUOTE";
     static final String TENCENT_LIVE_QUOTE_FALLBACK = "TENCENT_LIVE_QUOTE_FALLBACK";
+    private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
 
     private final EastMoneyClient eastMoneyClient;
 
@@ -32,19 +33,19 @@ public class EastMoneyTradeMarketDataGateway implements TradeMarketDataGateway {
     public Optional<LatestMarketPrice> latestPrice(String symbol) {
         RuntimeException eastMoneyFailure = null;
         try {
-            Optional<BigDecimal> price = validPrice(
+            Optional<EastMoneyQuote> quote = validQuote(
                     symbol, eastMoneyClient.fetchEastMoneyQuotesBySymbols(List.of(symbol), 1));
-            if (price.isPresent()) {
-                return Optional.of(new LatestMarketPrice(price.get(), EAST_MONEY_LIVE_QUOTE));
+            if (quote.isPresent()) {
+                return Optional.of(latestPrice(quote.get(), EAST_MONEY_LIVE_QUOTE));
             }
         } catch (RuntimeException exception) {
             eastMoneyFailure = exception;
         }
 
         try {
-            Optional<LatestMarketPrice> fallback = validPrice(
+            Optional<LatestMarketPrice> fallback = validQuote(
                     symbol, eastMoneyClient.fetchTencentQuotes(List.of(symbol), 1))
-                    .map(price -> new LatestMarketPrice(price, TENCENT_LIVE_QUOTE_FALLBACK));
+                    .map(quote -> latestPrice(quote, TENCENT_LIVE_QUOTE_FALLBACK));
             if (fallback.isPresent()) {
                 return fallback;
             }
@@ -60,11 +61,19 @@ public class EastMoneyTradeMarketDataGateway implements TradeMarketDataGateway {
         }
     }
 
-    private Optional<BigDecimal> validPrice(String symbol, List<EastMoneyQuote> quotes) {
+    private Optional<EastMoneyQuote> validQuote(String symbol, List<EastMoneyQuote> quotes) {
         return quotes.stream()
                 .filter(quote -> symbol.equals(quote.symbol()))
-                .map(EastMoneyQuote::latestPrice)
-                .filter(price -> price != null && price.compareTo(BigDecimal.ZERO) > 0)
+                .filter(quote -> quote.latestPrice() != null
+                        && quote.latestPrice().signum() > 0
+                        && quote.tradeDate() != null
+                        && quote.marketTimestamp() != null
+                        && quote.tradeDate().equals(quote.marketTimestamp().atZone(SHANGHAI).toLocalDate()))
                 .findFirst();
+    }
+
+    private LatestMarketPrice latestPrice(EastMoneyQuote quote, String source) {
+        return new LatestMarketPrice(
+                quote.latestPrice(), source, quote.tradeDate(), quote.marketTimestamp());
     }
 }

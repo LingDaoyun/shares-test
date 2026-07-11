@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,6 +29,33 @@ class EastMoneyTradeMarketDataGatewayTest {
 
         assertThat(result.price()).isEqualByComparingTo("12");
         assertThat(result.source()).isEqualTo("TENCENT_LIVE_QUOTE_FALLBACK");
+        assertThat(result.tradeDate()).isEqualTo(LocalDate.parse("2026-07-11"));
+        assertThat(result.marketTimestamp()).isEqualTo(Instant.parse("2026-07-11T07:00:00Z"));
+    }
+
+    @Test
+    void preservesTheQuotesActualTradeDateAndMarketTimestamp() {
+        EastMoneyClient client = mock(EastMoneyClient.class);
+        when(client.fetchEastMoneyQuotesBySymbols(List.of("002714"), 1))
+                .thenReturn(List.of(quote("002714", "12")));
+        EastMoneyTradeMarketDataGateway gateway = new EastMoneyTradeMarketDataGateway(client);
+
+        LatestMarketPrice result = gateway.latestPrice("002714").orElseThrow();
+
+        assertThat(result.tradeDate()).isEqualTo(LocalDate.parse("2026-07-11"));
+        assertThat(result.marketTimestamp()).isEqualTo(Instant.parse("2026-07-11T07:00:00Z"));
+    }
+
+    @Test
+    void rejectsQuotesWithoutTrustworthyMarketTime() {
+        EastMoneyClient client = mock(EastMoneyClient.class);
+        when(client.fetchEastMoneyQuotesBySymbols(List.of("002714"), 1))
+                .thenReturn(List.of(undatedQuote("002714", "12")));
+        when(client.fetchTencentQuotes(List.of("002714"), 1))
+                .thenReturn(List.of(undatedQuote("002714", "13")));
+        EastMoneyTradeMarketDataGateway gateway = new EastMoneyTradeMarketDataGateway(client);
+
+        assertThat(gateway.latestPrice("002714")).isEmpty();
     }
 
     @Test
@@ -44,6 +72,13 @@ class EastMoneyTradeMarketDataGatewayTest {
     }
 
     private EastMoneyQuote quote(String symbol, String price) {
+        return new EastMoneyQuote(
+                symbol, symbol, "SZ", null, new BigDecimal(price), null, null, null, null,
+                null, null, null, "test", null, Instant.parse("2026-07-12T01:00:00Z"),
+                LocalDate.parse("2026-07-11"), Instant.parse("2026-07-11T07:00:00Z"));
+    }
+
+    private EastMoneyQuote undatedQuote(String symbol, String price) {
         return new EastMoneyQuote(
                 symbol, symbol, "SZ", null, new BigDecimal(price), null, null, null, null,
                 null, null, null, "test", null, Instant.parse("2026-07-12T01:00:00Z"));

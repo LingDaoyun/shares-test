@@ -244,7 +244,12 @@ CREATE TABLE IF NOT EXISTS strategy_outcome_snapshot (
   max_runup_pct NUMERIC(12, 4),
   max_drawdown_pct NUMERIC(12, 4),
   status VARCHAR(32) NOT NULL,
+  source_name VARCHAR(128),
+  market_timestamp TIMESTAMP WITH TIME ZONE,
   calculated_at TIMESTAMP WITH TIME ZONE NOT NULL,
   CONSTRAINT fk_trade_outcome_case FOREIGN KEY (case_id) REFERENCES strategy_trade_case(case_id),
   CONSTRAINT uk_trade_outcome_scope UNIQUE (case_id, baseline_type, horizon)
 );
+
+ALTER TABLE strategy_outcome_snapshot ADD COLUMN IF NOT EXISTS source_name VARCHAR(128);
+ALTER TABLE strategy_outcome_snapshot ADD COLUMN IF NOT EXISTS market_timestamp TIMESTAMP WITH TIME ZONE;

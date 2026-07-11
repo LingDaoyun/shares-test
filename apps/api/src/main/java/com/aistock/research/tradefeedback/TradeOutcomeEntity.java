@@ -47,6 +47,12 @@ public class TradeOutcomeEntity {
     @Column(name = "status", nullable = false, length = 32)
     private String status;
 
+    @Column(name = "source_name", length = 128)
+    private String sourceName;
+
+    @Column(name = "market_timestamp")
+    private Instant marketTimestamp;
+
     @Column(name = "calculated_at", nullable = false)
     private Instant calculatedAt;
 
@@ -65,6 +71,8 @@ public class TradeOutcomeEntity {
             BigDecimal maxRunupPct,
             BigDecimal maxDrawdownPct,
             String status,
+            String sourceName,
+            Instant marketTimestamp,
             Instant calculatedAt
     ) {
         this.snapshotId = snapshotId;
@@ -78,6 +86,8 @@ public class TradeOutcomeEntity {
         this.maxRunupPct = maxRunupPct;
         this.maxDrawdownPct = maxDrawdownPct;
         this.status = status;
+        this.sourceName = sourceName;
+        this.marketTimestamp = marketTimestamp;
         this.calculatedAt = calculatedAt;
     }
 
@@ -86,6 +96,18 @@ public class TradeOutcomeEntity {
             String caseId,
             String baselineType,
             String horizon,
+            Instant calculatedAt
+    ) {
+        return pending(snapshotId, caseId, baselineType, horizon, null, null, calculatedAt);
+    }
+
+    public static TradeOutcomeEntity pending(
+            String snapshotId,
+            String caseId,
+            String baselineType,
+            String horizon,
+            String sourceName,
+            Instant marketTimestamp,
             Instant calculatedAt
     ) {
         return new TradeOutcomeEntity(
@@ -100,6 +122,8 @@ public class TradeOutcomeEntity {
                 null,
                 null,
                 "PENDING",
+                sourceName,
+                marketTimestamp,
                 calculatedAt
         );
     }
@@ -117,6 +141,26 @@ public class TradeOutcomeEntity {
             BigDecimal maxDrawdownPct,
             Instant calculatedAt
     ) {
+        return matured(
+                snapshotId, caseId, baselineType, horizon, baselinePrice, evaluationPrice,
+                evaluationDate, returnPct, maxRunupPct, maxDrawdownPct, null, null, calculatedAt);
+    }
+
+    public static TradeOutcomeEntity matured(
+            String snapshotId,
+            String caseId,
+            String baselineType,
+            String horizon,
+            BigDecimal baselinePrice,
+            BigDecimal evaluationPrice,
+            LocalDate evaluationDate,
+            BigDecimal returnPct,
+            BigDecimal maxRunupPct,
+            BigDecimal maxDrawdownPct,
+            String sourceName,
+            Instant marketTimestamp,
+            Instant calculatedAt
+    ) {
         return new TradeOutcomeEntity(
                 snapshotId,
                 caseId,
@@ -129,11 +173,18 @@ public class TradeOutcomeEntity {
                 maxRunupPct,
                 maxDrawdownPct,
                 "MATURED",
+                sourceName,
+                marketTimestamp,
                 calculatedAt
         );
     }
 
-    public void replaceWith(OutcomeResult result, Instant calculatedAt) {
+    public void replaceWith(
+            OutcomeResult result,
+            String sourceName,
+            Instant marketTimestamp,
+            Instant calculatedAt
+    ) {
         this.baselinePrice = result.baselinePrice();
         this.evaluationPrice = result.evaluationPrice();
         this.evaluationDate = result.evaluationDate();
@@ -141,6 +192,8 @@ public class TradeOutcomeEntity {
         this.maxRunupPct = result.maxRunupPct();
         this.maxDrawdownPct = result.maxDrawdownPct();
         this.status = result.status();
+        this.sourceName = sourceName;
+        this.marketTimestamp = marketTimestamp;
         this.calculatedAt = calculatedAt;
     }
 
@@ -186,6 +239,14 @@ public class TradeOutcomeEntity {
 
     public String getStatus() {
         return status;
+    }
+
+    public String getSourceName() {
+        return sourceName;
+    }
+
+    public Instant getMarketTimestamp() {
+        return marketTimestamp;
     }
 
     public Instant getCalculatedAt() {

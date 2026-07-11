@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -85,7 +86,7 @@ class TradeOutcomeServiceTest {
         });
         when(gateway.latestPrice("002714")).thenAnswer(invocation -> {
             assertThat(transactionActive.get()).isFalse();
-            return Optional.of(new LatestMarketPrice(decimal("13"), "EAST_MONEY_LIVE_QUOTE"));
+            return Optional.of(latest("13", "2026-08-07", "2026-08-07T07:00:00Z"));
         });
 
         service.refresh("case-1");
@@ -95,10 +96,17 @@ class TradeOutcomeServiceTest {
                 .extracting(entity -> entity.getBaselineType() + "/" + entity.getHorizon())
                 .containsExactlyInAnyOrder(
                         "RECOMMENDATION/T1", "RECOMMENDATION/T5", "RECOMMENDATION/T20",
-                        "RECOMMENDATION/CURRENT", "EXECUTION/CURRENT");
-        assertThat(stored).hasSize(5);
+                        "RECOMMENDATION/CURRENT", "EXECUTION/CURRENT", "EXECUTION/CLOSED");
+        assertThat(stored).hasSize(6);
         assertThat(stored.get(key("case-1", "EXECUTION", "CURRENT")).getReturnPct())
                 .isEqualByComparingTo("30.0000");
+        assertThat(stored.get(key("case-1", "EXECUTION", "CLOSED")).getStatus()).isEqualTo("PENDING");
+        assertThat(stored.get(key("case-1", "RECOMMENDATION", "T1")).getSourceName())
+                .isEqualTo("DAILY_KLINE");
+        assertThat(stored.get(key("case-1", "RECOMMENDATION", "CURRENT")).getSourceName())
+                .isEqualTo("EAST_MONEY_LIVE_QUOTE");
+        assertThat(stored.get(key("case-1", "RECOMMENDATION", "CURRENT")).getMarketTimestamp())
+                .isEqualTo(Instant.parse("2026-08-07T07:00:00Z"));
         verify(outcomes, atLeastOnce()).saveAll(any());
     }
 
@@ -111,7 +119,7 @@ class TradeOutcomeServiceTest {
         when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(List.of(
                 new MarketBar(LocalDate.parse("2026-07-13"), decimal("11"), decimal("12"), decimal("9"))));
         when(gateway.latestPrice(anyString())).thenReturn(Optional.of(
-                new LatestMarketPrice(decimal("11"), "EAST_MONEY_LIVE_QUOTE")));
+                latest("11", "2026-08-07", "2026-08-07T07:00:00Z")));
 
         service.refresh("case-1");
 
@@ -149,6 +157,8 @@ class TradeOutcomeServiceTest {
         assertThat(stored.get(key("case-1", "RECOMMENDATION", "T5")).getReturnPct()).isNull();
         assertThat(stored.get(key("case-1", "RECOMMENDATION", "CURRENT")).getEvaluationPrice())
                 .isEqualByComparingTo("11");
+        assertThat(stored.get(key("case-1", "RECOMMENDATION", "CURRENT")).getSourceName())
+                .isEqualTo("LAST_KLINE_CLOSE_FALLBACK");
 
         stored.clear();
         when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(List.of());
@@ -174,6 +184,100 @@ class TradeOutcomeServiceTest {
         TradeOutcomeEntity execution = stored.get(key("case-1", "EXECUTION", "CLOSED"));
         assertThat(execution.getReturnPct()).isEqualByComparingTo("20.0000");
         assertThat(execution.getEvaluationDate()).isEqualTo(LocalDate.parse("2026-07-15"));
+    }
+
+    @Test
+    void weekendRefreshUsesTheQuotesFridayTradeDate() {
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(twentyBars());
+        when(gateway.latestPrice(anyString())).thenReturn(Optional.of(
+                latest("13", "2026-08-07", "2026-08-07T07:00:00Z")));
+
+        service.refresh("case-1");
+
+        assertThat(stored.get(key("case-1", "RECOMMENDATION", "CURRENT")).getEvaluationDate())
+                .isEqualTo(LocalDate.parse("2026-08-07"));
+    }
+
+    @Test
+    void undatedQuoteCannotBePersistedAsLiveToday() {
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(List.of());
+        when(gateway.latestPrice(anyString())).thenReturn(Optional.of(
+                new LatestMarketPrice(decimal("13"), "EAST_MONEY_LIVE_QUOTE", null, null)));
+
+        service.refresh("case-1");
+
+        TradeOutcomeEntity current = stored.get(key("case-1", "RECOMMENDATION", "CURRENT"));
+        assertThat(current.getStatus()).isEqualTo("PENDING");
+        assertThat(current.getEvaluationDate()).isNull();
+        assertThat(current.getSourceName()).isNull();
+    }
+
+    @Test
+    void olderRefreshCannotOverwriteNewerCurrentOutcome() {
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(twentyBars());
+        when(gateway.latestPrice(anyString())).thenAnswer(invocation -> {
+            stored.put(key("case-1", "RECOMMENDATION", "CURRENT"), TradeOutcomeEntity.matured(
+                    "newer", "case-1", "RECOMMENDATION", "CURRENT", decimal("10"), decimal("14"),
+                    LocalDate.parse("2026-08-10"), decimal("40"), null, null,
+                    "EAST_MONEY_LIVE_QUOTE", Instant.parse("2026-08-10T07:00:00Z"), NOW));
+            return Optional.of(latest("13", "2026-08-07", "2026-08-07T07:00:00Z"));
+        });
+
+        service.refresh("case-1");
+
+        assertThat(stored.get(key("case-1", "RECOMMENDATION", "CURRENT")).getEvaluationPrice())
+                .isEqualByComparingTo("14");
+    }
+
+    @Test
+    void fillMutationDuringMarketLoadPreventsStaleExecutionWrite() {
+        TradeFillEntity original = fill("buy", "BUY", "2026-07-13T01:30:00Z", "10", 100);
+        TradeFillEntity revised = fill("buy", "BUY", "2026-07-13T01:30:00Z", "12", 100);
+        AtomicReference<List<TradeFillEntity>> currentFills = new AtomicReference<>(List.of(original));
+        when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc("case-1"))
+                .thenAnswer(invocation -> currentFills.get());
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(twentyBars());
+        when(gateway.latestPrice(anyString())).thenAnswer(invocation -> {
+            currentFills.set(List.of(revised));
+            return Optional.of(latest("13", "2026-08-07", "2026-08-07T07:00:00Z"));
+        });
+
+        TradeOutcomeRefresh refresh = service.refresh("case-1");
+
+        assertThat(refresh.warnings()).contains("复盘事实已变更，本次刷新未写入");
+        assertThat(stored).isEmpty();
+        verify(outcomes, never()).saveAll(any());
+    }
+
+    @Test
+    void closedToHoldingTransitionClearsClosedAndRestoresCurrentExecution() {
+        stored.put(key("case-1", "EXECUTION", "CLOSED"), executionOutcome("closed", "CLOSED", "12", "2026-07-15"));
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(twentyBars());
+        when(gateway.latestPrice(anyString())).thenReturn(Optional.of(
+                latest("13", "2026-08-07", "2026-08-07T07:00:00Z")));
+
+        service.refresh("case-1");
+
+        assertThat(stored.get(key("case-1", "EXECUTION", "CLOSED")).getStatus()).isEqualTo("PENDING");
+        assertThat(stored.get(key("case-1", "EXECUTION", "CLOSED")).getEvaluationPrice()).isNull();
+        assertThat(stored.get(key("case-1", "EXECUTION", "CURRENT")).getStatus()).isEqualTo("MATURED");
+    }
+
+    @Test
+    void deletingAllFillsClearsBothExecutionOutcomes() {
+        stored.put(key("case-1", "EXECUTION", "CURRENT"), executionOutcome("current", "CURRENT", "13", "2026-08-07"));
+        stored.put(key("case-1", "EXECUTION", "CLOSED"), executionOutcome("closed", "CLOSED", "12", "2026-07-15"));
+        when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc("case-1")).thenReturn(List.of());
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(twentyBars());
+        when(gateway.latestPrice(anyString())).thenReturn(Optional.of(
+                latest("13", "2026-08-07", "2026-08-07T07:00:00Z")));
+
+        service.refresh("case-1");
+
+        assertThat(stored.get(key("case-1", "EXECUTION", "CURRENT")).getStatus()).isEqualTo("PENDING");
+        assertThat(stored.get(key("case-1", "EXECUTION", "CLOSED")).getStatus()).isEqualTo("PENDING");
+        assertThat(stored.get(key("case-1", "EXECUTION", "CURRENT")).getReturnPct()).isNull();
+        assertThat(stored.get(key("case-1", "EXECUTION", "CLOSED")).getReturnPct()).isNull();
     }
 
     @Test
@@ -213,6 +317,17 @@ class TradeOutcomeServiceTest {
     private TradeFillEntity fill(String id, String side, String at, String price, long quantity) {
         Instant instant = Instant.parse(at);
         return TradeFillEntity.create(id, "case-1", side, instant, decimal(price), quantity, instant);
+    }
+
+    private LatestMarketPrice latest(String price, String date, String timestamp) {
+        return new LatestMarketPrice(decimal(price), "EAST_MONEY_LIVE_QUOTE",
+                LocalDate.parse(date), Instant.parse(timestamp));
+    }
+
+    private TradeOutcomeEntity executionOutcome(String id, String horizon, String price, String date) {
+        return TradeOutcomeEntity.matured(
+                id, "case-1", "EXECUTION", horizon, decimal("10"), decimal(price), LocalDate.parse(date),
+                decimal("20"), null, null, "EXECUTION_FILLS", null, NOW.minusSeconds(60));
     }
 
     private List<MarketBar> twentyBars() {

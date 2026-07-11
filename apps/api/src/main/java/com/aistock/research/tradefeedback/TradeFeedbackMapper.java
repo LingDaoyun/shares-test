@@ -74,6 +74,8 @@ class TradeFeedbackMapper {
                 outcome.getMaxRunupPct(),
                 outcome.getMaxDrawdownPct(),
                 outcome.getStatus(),
+                outcome.getSourceName(),
+                outcome.getMarketTimestamp(),
                 outcome.getCalculatedAt()
         );
     }

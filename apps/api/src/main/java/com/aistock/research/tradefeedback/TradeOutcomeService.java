@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -25,6 +26,9 @@ public class TradeOutcomeService {
     private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private static final String RECOMMENDATION = "RECOMMENDATION";
     private static final String EXECUTION = "EXECUTION";
+    private static final String DAILY_KLINE = "DAILY_KLINE";
+    private static final String LAST_KLINE_CLOSE_FALLBACK = "LAST_KLINE_CLOSE_FALLBACK";
+    private static final String EXECUTION_FILLS = "EXECUTION_FILLS";
 
     private final TradeCaseRepository caseRepository;
     private final TradeFillRepository fillRepository;
@@ -86,8 +90,12 @@ public class TradeOutcomeService {
         }
 
         List<ScopedOutcome> calculated = calculate(facts, market);
-        writeTransaction.executeWithoutResult(status -> upsert(facts.caseId(), calculated));
-        return new TradeOutcomeRefresh(market.warnings());
+        Boolean written = writeTransaction.execute(status -> upsert(facts, calculated));
+        List<String> warnings = new ArrayList<>(market.warnings());
+        if (!Boolean.TRUE.equals(written)) {
+            warnings.add("复盘事实已变更，本次刷新未写入");
+        }
+        return new TradeOutcomeRefresh(List.copyOf(warnings));
     }
 
     public void refreshOpenCases() {
@@ -127,13 +135,18 @@ public class TradeOutcomeService {
 
     private CaseFacts loadFacts(String caseId) {
         TradeCaseEntity tradeCase = requireCase(caseId);
-        List<TradeFillEntity> fills = fillRepository.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(caseId);
+        List<FillFact> fills = fillFacts(caseId);
+        boolean hadExecutionOutcomes = outcomeRepository
+                .findByCaseIdAndBaselineTypeAndHorizon(caseId, EXECUTION, "CURRENT").isPresent()
+                || outcomeRepository.findByCaseIdAndBaselineTypeAndHorizon(caseId, EXECUTION, "CLOSED").isPresent();
         return new CaseFacts(
                 tradeCase.getCaseId(),
                 tradeCase.getSymbol(),
                 tradeCase.getRecommendedPrice(),
                 tradeCase.getRecommendedAt(),
-                List.copyOf(fills));
+                fills,
+                hadExecutionOutcomes,
+                new FactsVersion(tradeCase.getUpdatedAt(), fills));
     }
 
     private MarketFacts loadMarketFacts(CaseFacts facts) {
@@ -142,11 +155,16 @@ public class TradeOutcomeService {
         List<MarketBar> rows = gateway.dailyKLines(facts.symbol(), recommendationDate, today);
         Optional<LatestMarketPrice> latest = gateway.latestPrice(facts.symbol());
         List<String> warnings = new ArrayList<>();
-        if (latest.isPresent()) {
+        if (latest.filter(this::trustworthyQuote).isPresent()) {
             if (EastMoneyTradeMarketDataGateway.TENCENT_LIVE_QUOTE_FALLBACK.equals(latest.get().source())) {
                 warnings.add("CURRENT 使用 " + latest.get().source());
             }
-            return new MarketFacts(List.copyOf(rows), latest.get().price(), today, warnings);
+            return new MarketFacts(
+                    List.copyOf(rows), latest.get().price(), latest.get().tradeDate(), latest.get().source(),
+                    latest.get().marketTimestamp(), warnings);
+        }
+        if (latest.isPresent()) {
+            warnings.add("CURRENT 行情缺少可信交易时间，未按实时行情使用");
         }
 
         Optional<MarketBar> lastBar = rows.stream()
@@ -155,80 +173,151 @@ public class TradeOutcomeService {
                 .max(java.util.Comparator.comparing(MarketBar::tradeDate));
         if (lastBar.isPresent()) {
             warnings.add("CURRENT 使用 LAST_KLINE_CLOSE_FALLBACK");
-            return new MarketFacts(List.copyOf(rows), lastBar.get().close(), lastBar.get().tradeDate(), warnings);
+            return new MarketFacts(
+                    List.copyOf(rows), lastBar.get().close(), lastBar.get().tradeDate(),
+                    LAST_KLINE_CLOSE_FALLBACK, null, warnings);
         }
-        return new MarketFacts(List.copyOf(rows), null, null, warnings);
+        return new MarketFacts(List.copyOf(rows), null, null, null, null, warnings);
+    }
+
+    private boolean trustworthyQuote(LatestMarketPrice latest) {
+        return latest.price() != null
+                && latest.price().signum() > 0
+                && latest.tradeDate() != null
+                && latest.marketTimestamp() != null
+                && latest.tradeDate().equals(latest.marketTimestamp().atZone(SHANGHAI).toLocalDate());
     }
 
     private List<ScopedOutcome> calculate(CaseFacts facts, MarketFacts market) {
         List<ScopedOutcome> results = new ArrayList<>();
         outcomeCalculator.evaluateRecommendation(
                         facts.recommendedPrice(), market.rows(), facts.recommendedAt())
-                .forEach(result -> results.add(new ScopedOutcome(RECOMMENDATION, result)));
+                .forEach(result -> results.add(new ScopedOutcome(RECOMMENDATION, result, DAILY_KLINE, null)));
         results.add(new ScopedOutcome(RECOMMENDATION, outcomeCalculator.evaluateRecommendationCurrent(
                 facts.recommendedPrice(), market.rows(), facts.recommendedAt(),
-                market.latestPrice(), market.evaluationDate())));
+                market.latestPrice(), market.evaluationDate()), market.sourceName(), market.marketTimestamp()));
 
-        if (!facts.fills().isEmpty()) {
-            TradeLedgerSummary ledger = ledgerCalculator.calculate(facts.fills(), market.latestPrice());
+        if (!facts.fills().isEmpty() || facts.hadExecutionOutcomes()) {
+            if (facts.fills().isEmpty()) {
+                results.add(new ScopedOutcome(EXECUTION, OutcomeResult.pending("CURRENT"), null, null));
+                results.add(new ScopedOutcome(EXECUTION, OutcomeResult.pending("CLOSED"), null, null));
+                return results;
+            }
+            TradeLedgerSummary ledger = ledgerCalculator.calculate(ledgerFills(facts.fills()), market.latestPrice());
             if (ledger.positionQuantity() == 0) {
+                results.add(new ScopedOutcome(EXECUTION, OutcomeResult.pending("CURRENT"), null, null));
                 results.add(new ScopedOutcome(EXECUTION, outcomeCalculator.evaluateExecution(
-                        ledgerFills(facts.fills()), 0, null, market.evaluationDate())));
+                        ledgerFills(facts.fills()), 0, null, market.evaluationDate()), EXECUTION_FILLS, null));
             } else if (market.latestPrice() != null) {
                 results.add(new ScopedOutcome(EXECUTION, outcomeCalculator.evaluateExecution(
                         ledgerFills(facts.fills()), ledger.positionQuantity(), market.latestPrice(),
-                        market.evaluationDate())));
+                        market.evaluationDate()), market.sourceName(), market.marketTimestamp()));
+                results.add(new ScopedOutcome(EXECUTION, OutcomeResult.pending("CLOSED"), null, null));
             } else {
-                results.add(new ScopedOutcome(EXECUTION, OutcomeResult.pending("CURRENT")));
+                results.add(new ScopedOutcome(EXECUTION, OutcomeResult.pending("CURRENT"), null, null));
+                results.add(new ScopedOutcome(EXECUTION, OutcomeResult.pending("CLOSED"), null, null));
             }
         }
         return results;
     }
 
-    private List<LedgerFill> ledgerFills(List<TradeFillEntity> fills) {
+    private List<LedgerFill> ledgerFills(List<FillFact> fills) {
         return fills.stream().map(fill -> new LedgerFill(
-                TradeSide.valueOf(fill.getSide()), fill.getExecutedAt(), fill.getPrice(),
-                fill.getQuantity(), fill.getCreatedAt())).toList();
+                TradeSide.valueOf(fill.side()), fill.executedAt(), fill.price(),
+                fill.quantity(), fill.createdAt())).toList();
     }
 
-    private void upsert(String caseId, List<ScopedOutcome> calculated) {
-        caseRepository.findByIdForUpdate(caseId)
+    private boolean upsert(CaseFacts facts, List<ScopedOutcome> calculated) {
+        TradeCaseEntity lockedCase = caseRepository.findByIdForUpdate(facts.caseId())
                 .orElseThrow(() -> new TradeFeedbackNotFoundException("复盘单不存在"));
+        FactsVersion currentVersion = new FactsVersion(lockedCase.getUpdatedAt(), fillFacts(facts.caseId()));
+        if (!facts.version().equals(currentVersion)) {
+            return false;
+        }
         Instant calculatedAt = clock.instant();
         List<TradeOutcomeEntity> writes = new ArrayList<>();
         for (ScopedOutcome scoped : calculated) {
             OutcomeResult result = scoped.result();
             Optional<TradeOutcomeEntity> existing = outcomeRepository
-                    .findByCaseIdAndBaselineTypeAndHorizon(caseId, scoped.baselineType(), result.horizon());
+                    .findByCaseIdAndBaselineTypeAndHorizon(facts.caseId(), scoped.baselineType(), result.horizon());
             if (existing.isPresent()) {
-                if ("MATURED".equals(existing.get().getStatus()) && "PENDING".equals(result.status())) {
+                if (isProtectedFixedRecommendation(scoped, existing.get())
+                        || isOlderCurrent(scoped, existing.get())) {
                     continue;
                 }
-                existing.get().replaceWith(result, calculatedAt);
+                existing.get().replaceWith(result, scoped.sourceName(), scoped.marketTimestamp(), calculatedAt);
                 writes.add(existing.get());
                 continue;
             }
-            writes.add(entity(caseId, scoped.baselineType(), result, calculatedAt));
+            writes.add(entity(facts.caseId(), scoped, calculatedAt));
         }
         if (!writes.isEmpty()) {
             outcomeRepository.saveAll(writes);
         }
+        return true;
+    }
+
+    private boolean isProtectedFixedRecommendation(ScopedOutcome scoped, TradeOutcomeEntity existing) {
+        return RECOMMENDATION.equals(scoped.baselineType())
+                && List.of("T1", "T5", "T20").contains(scoped.result().horizon())
+                && "MATURED".equals(existing.getStatus())
+                && "PENDING".equals(scoped.result().status());
+    }
+
+    private boolean isOlderCurrent(ScopedOutcome scoped, TradeOutcomeEntity existing) {
+        if (!"CURRENT".equals(scoped.result().horizon()) || !"MATURED".equals(existing.getStatus())) {
+            return false;
+        }
+        if (EXECUTION.equals(scoped.baselineType()) && "PENDING".equals(scoped.result().status())) {
+            return false;
+        }
+        LocalDate incomingDate = scoped.result().evaluationDate();
+        LocalDate existingDate = existing.getEvaluationDate();
+        if (incomingDate == null) {
+            return existingDate != null;
+        }
+        if (existingDate == null) {
+            return false;
+        }
+        int dateOrder = incomingDate.compareTo(existingDate);
+        if (dateOrder != 0) {
+            return dateOrder < 0;
+        }
+        if (existing.getMarketTimestamp() == null) {
+            return false;
+        }
+        return scoped.marketTimestamp() == null
+                || scoped.marketTimestamp().isBefore(existing.getMarketTimestamp());
     }
 
     private TradeOutcomeEntity entity(
             String caseId,
-            String baselineType,
-            OutcomeResult result,
+            ScopedOutcome scoped,
             Instant calculatedAt
     ) {
+        OutcomeResult result = scoped.result();
         String snapshotId = UUID.randomUUID().toString();
         if ("PENDING".equals(result.status())) {
-            return TradeOutcomeEntity.pending(snapshotId, caseId, baselineType, result.horizon(), calculatedAt);
+            return TradeOutcomeEntity.pending(
+                    snapshotId, caseId, scoped.baselineType(), result.horizon(),
+                    scoped.sourceName(), scoped.marketTimestamp(), calculatedAt);
         }
         return TradeOutcomeEntity.matured(
-                snapshotId, caseId, baselineType, result.horizon(), result.baselinePrice(),
+                snapshotId, caseId, scoped.baselineType(), result.horizon(), result.baselinePrice(),
                 result.evaluationPrice(), result.evaluationDate(), result.returnPct(),
-                result.maxRunupPct(), result.maxDrawdownPct(), calculatedAt);
+                result.maxRunupPct(), result.maxDrawdownPct(), scoped.sourceName(),
+                scoped.marketTimestamp(), calculatedAt);
+    }
+
+    private List<FillFact> fillFacts(String caseId) {
+        return fillRepository.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(caseId).stream()
+                .map(fill -> new FillFact(
+                        fill.getFillId(), fill.getSide(), fill.getExecutedAt(), fill.getPrice(), fill.getQuantity(),
+                        fill.getCreatedAt(), fill.getUpdatedAt()))
+                .sorted(Comparator.comparing(FillFact::executedAt)
+                        .thenComparing(FillFact::createdAt)
+                        .thenComparing(FillFact::fillId))
+                .toList();
     }
 
     private TradeCaseEntity requireCase(String caseId) {
@@ -261,18 +350,44 @@ public class TradeOutcomeService {
             String symbol,
             BigDecimal recommendedPrice,
             Instant recommendedAt,
-            List<TradeFillEntity> fills
+            List<FillFact> fills,
+            boolean hadExecutionOutcomes,
+            FactsVersion version
     ) {
+    }
+
+    private record FillFact(
+            String fillId,
+            String side,
+            Instant executedAt,
+            BigDecimal price,
+            long quantity,
+            Instant createdAt,
+            Instant updatedAt
+    ) {
+    }
+
+    private record FactsVersion(Instant caseUpdatedAt, List<FillFact> orderedFills) {
+        private FactsVersion {
+            orderedFills = List.copyOf(orderedFills);
+        }
     }
 
     private record MarketFacts(
             List<MarketBar> rows,
             BigDecimal latestPrice,
             LocalDate evaluationDate,
+            String sourceName,
+            Instant marketTimestamp,
             List<String> warnings
     ) {
     }
 
-    private record ScopedOutcome(String baselineType, OutcomeResult result) {
+    private record ScopedOutcome(
+            String baselineType,
+            OutcomeResult result,
+            String sourceName,
+            Instant marketTimestamp
+    ) {
     }
 }

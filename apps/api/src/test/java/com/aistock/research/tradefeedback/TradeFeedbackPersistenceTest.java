@@ -33,10 +33,16 @@ class TradeFeedbackPersistenceTest {
         fills.save(TradeFillEntity.create("fill-1", "case-1", "BUY", now.plusSeconds(3600),
                 new BigDecimal("35.00"), 200L, now));
         outcomes.save(TradeOutcomeEntity.pending("outcome-1", "case-1", "RECOMMENDATION", "T5", now));
+        outcomes.save(TradeOutcomeEntity.matured(
+                "outcome-2", "case-1", "RECOMMENDATION", "CURRENT", new BigDecimal("36.20"),
+                new BigDecimal("38.00"), java.time.LocalDate.parse("2026-07-11"), new BigDecimal("4.9724"),
+                null, null, "EAST_MONEY_LIVE_QUOTE", Instant.parse("2026-07-11T07:00:00Z"), now));
 
         assertThat(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc("case-1"))
                 .extracting(TradeFillEntity::getSide).containsExactly("BUY", "SELL");
-        assertThat(outcomes.findByCaseIdOrderByHorizonAsc("case-1")).singleElement().satisfies(outcome -> {
+        assertThat(outcomes.findByCaseIdOrderByHorizonAsc("case-1")).hasSize(2);
+        assertThat(outcomes.findByCaseIdAndBaselineTypeAndHorizon("case-1", "RECOMMENDATION", "T5"))
+                .hasValueSatisfying(outcome -> {
             assertThat(outcome.getStatus()).isEqualTo("PENDING");
             assertThat(outcome.getBaselinePrice()).isNull();
             assertThat(outcome.getEvaluationPrice()).isNull();
@@ -45,5 +51,10 @@ class TradeFeedbackPersistenceTest {
             assertThat(outcome.getMaxRunupPct()).isNull();
             assertThat(outcome.getMaxDrawdownPct()).isNull();
         });
+        assertThat(outcomes.findByCaseIdAndBaselineTypeAndHorizon("case-1", "RECOMMENDATION", "CURRENT"))
+                .hasValueSatisfying(outcome -> {
+                    assertThat(outcome.getSourceName()).isEqualTo("EAST_MONEY_LIVE_QUOTE");
+                    assertThat(outcome.getMarketTimestamp()).isEqualTo(Instant.parse("2026-07-11T07:00:00Z"));
+                });
     }
 }

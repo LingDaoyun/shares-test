@@ -14,6 +14,8 @@ public record TradeOutcomeView(
         BigDecimal maxRunupPct,
         BigDecimal maxDrawdownPct,
         String status,
+        String sourceName,
+        Instant marketTimestamp,
         Instant calculatedAt
 ) {
 }
