@@ -2,8 +2,12 @@ package com.aistock.research.tradefeedback;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -23,22 +27,34 @@ public class TradeFeedbackService {
     private final TradeFillRepository fillRepository;
     private final ObjectMapper objectMapper;
     private final TradeLedgerCalculator ledgerCalculator;
+    private final TransactionTemplate createCaseTransaction;
 
     public TradeFeedbackService(
             TradeCaseRepository caseRepository,
             TradeFillRepository fillRepository,
             ObjectMapper objectMapper,
-            TradeLedgerCalculator ledgerCalculator
+            TradeLedgerCalculator ledgerCalculator,
+            PlatformTransactionManager transactionManager
     ) {
         this.caseRepository = caseRepository;
         this.fillRepository = fillRepository;
         this.objectMapper = objectMapper;
         this.ledgerCalculator = ledgerCalculator;
+        this.createCaseTransaction = new TransactionTemplate(transactionManager);
+        this.createCaseTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    @Transactional
     public TradeCaseEntity createCase(CreateTradeCaseRequest request) {
         ValidatedCaseRequest validated = validateCaseRequest(request);
+        try {
+            return createCaseTransaction.execute(status -> createOrFindCase(validated));
+        } catch (DataIntegrityViolationException exception) {
+            return caseRepository.findByRecommendationFingerprint(validated.fingerprint())
+                    .orElseThrow(() -> exception);
+        }
+    }
+
+    private TradeCaseEntity createOrFindCase(ValidatedCaseRequest validated) {
         Optional<TradeCaseEntity> existing = caseRepository.findByRecommendationFingerprint(validated.fingerprint());
         if (existing.isPresent()) {
             return existing.get();
@@ -60,12 +76,12 @@ public class TradeFeedbackService {
                 serializePayload(validated.recommendationPayload()),
                 now
         );
-        return caseRepository.save(entity);
+        return caseRepository.saveAndFlush(entity);
     }
 
     @Transactional
     public TradeCaseEntity addFill(String caseId, UpsertTradeFillRequest request) {
-        TradeCaseEntity tradeCase = requireCase(caseId);
+        TradeCaseEntity tradeCase = requireCaseForUpdate(caseId);
         ensureFillAllowed(tradeCase);
         validateFillRequest(tradeCase, request);
 
@@ -89,7 +105,7 @@ public class TradeFeedbackService {
 
     @Transactional
     public TradeCaseEntity updateFill(String caseId, String fillId, UpsertTradeFillRequest request) {
-        TradeCaseEntity tradeCase = requireCase(caseId);
+        TradeCaseEntity tradeCase = requireCaseForUpdate(caseId);
         ensureFillAllowed(tradeCase);
         validateFillRequest(tradeCase, request);
         TradeFillEntity existing = requireFill(tradeCase, fillId);
@@ -117,7 +133,7 @@ public class TradeFeedbackService {
 
     @Transactional
     public TradeCaseEntity deleteFill(String caseId, String fillId) {
-        TradeCaseEntity tradeCase = requireCase(caseId);
+        TradeCaseEntity tradeCase = requireCaseForUpdate(caseId);
         ensureFillAllowed(tradeCase);
         TradeFillEntity existing = requireFill(tradeCase, fillId);
 
@@ -135,7 +151,7 @@ public class TradeFeedbackService {
 
     @Transactional
     public TradeCaseEntity cancelCase(String caseId) {
-        TradeCaseEntity tradeCase = requireCase(caseId);
+        TradeCaseEntity tradeCase = requireCaseForUpdate(caseId);
         if (!TradeCaseStatus.PLANNED.name().equals(tradeCase.getStatus())
                 || !fillRepository.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(tradeCase.getCaseId()).isEmpty()) {
             throw new IllegalArgumentException("只有尚未成交的计划可以取消");
@@ -184,6 +200,12 @@ public class TradeFeedbackService {
     private TradeCaseEntity requireCase(String caseId) {
         String normalizedCaseId = requiredText(caseId, "复盘单 ID 不能为空");
         return caseRepository.findById(normalizedCaseId)
+                .orElseThrow(() -> new IllegalArgumentException("复盘单不存在"));
+    }
+
+    private TradeCaseEntity requireCaseForUpdate(String caseId) {
+        String normalizedCaseId = requiredText(caseId, "复盘单 ID 不能为空");
+        return caseRepository.findByIdForUpdate(normalizedCaseId)
                 .orElseThrow(() -> new IllegalArgumentException("复盘单不存在"));
     }
 

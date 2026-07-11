@@ -1,7 +1,11 @@
 package com.aistock.research.tradefeedback;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -23,12 +27,19 @@ class TradeFeedbackServiceTest {
 
     private final TradeCaseRepository cases = mock(TradeCaseRepository.class);
     private final TradeFillRepository fills = mock(TradeFillRepository.class);
+    private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final TradeFeedbackService service = new TradeFeedbackService(
             cases,
             fills,
             new ObjectMapper(),
-            new TradeLedgerCalculator()
+            new TradeLedgerCalculator(),
+            transactionManager
     );
+
+    @BeforeEach
+    void startsIndependentCreateTransactions() {
+        when(transactionManager.getTransaction(any())).thenAnswer(invocation -> new SimpleTransactionStatus());
+    }
 
     @Test
     void createsOneCasePerRecommendationAndTransitionsAsPositionChanges() {
@@ -36,9 +47,14 @@ class TradeFeedbackServiceTest {
         List<TradeFillEntity> storedFills = new ArrayList<>();
         when(cases.findByRecommendationFingerprint(anyString()))
                 .thenAnswer(invocation -> Optional.ofNullable(storedCase.get()));
-        when(cases.findById(anyString()))
+        when(cases.findByIdForUpdate(anyString()))
                 .thenAnswer(invocation -> Optional.ofNullable(storedCase.get()));
         when(cases.save(any(TradeCaseEntity.class))).thenAnswer(invocation -> {
+            TradeCaseEntity entity = invocation.getArgument(0);
+            storedCase.set(entity);
+            return entity;
+        });
+        when(cases.saveAndFlush(any(TradeCaseEntity.class))).thenAnswer(invocation -> {
             TradeCaseEntity entity = invocation.getArgument(0);
             storedCase.set(entity);
             return entity;
@@ -74,7 +90,7 @@ class TradeFeedbackServiceTest {
         AtomicReference<TradeCaseEntity> storedCase = new AtomicReference<>();
         when(cases.findByRecommendationFingerprint(anyString()))
                 .thenAnswer(invocation -> Optional.ofNullable(storedCase.get()));
-        when(cases.save(any(TradeCaseEntity.class))).thenAnswer(invocation -> {
+        when(cases.saveAndFlush(any(TradeCaseEntity.class))).thenAnswer(invocation -> {
             TradeCaseEntity entity = invocation.getArgument(0);
             storedCase.set(entity);
             return entity;
@@ -96,6 +112,20 @@ class TradeFeedbackServiceTest {
     }
 
     @Test
+    void reloadsTheExistingCaseAfterADuplicateCreateRollsBack() {
+        TradeCaseEntity existing = plannedCase("PLANNED");
+        when(cases.findByRecommendationFingerprint(anyString()))
+                .thenReturn(Optional.empty(), Optional.of(existing));
+        when(cases.saveAndFlush(any(TradeCaseEntity.class)))
+                .thenThrow(new DataIntegrityViolationException("duplicate recommendation fingerprint"));
+
+        TradeCaseEntity result = service.createCase(caseRequest());
+
+        assertThat(result).isSameAs(existing);
+        verify(cases).saveAndFlush(any(TradeCaseEntity.class));
+    }
+
+    @Test
     void rejectsAnEditThatWouldCreateAnOversoldPrefix() {
         TradeCaseEntity tradeCase = plannedCase("HOLDING");
         TradeFillEntity buy = TradeFillEntity.create(
@@ -104,7 +134,7 @@ class TradeFeedbackServiceTest {
         TradeFillEntity sell = TradeFillEntity.create(
                 "fill-sell", tradeCase.getCaseId(), "SELL", Instant.parse("2026-07-13T03:35:00Z"),
                 new BigDecimal("36"), 40, Instant.parse("2026-07-12T01:00:00Z"));
-        when(cases.findById(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
+        when(cases.findByIdForUpdate(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
         when(fills.findById("fill-buy")).thenReturn(Optional.of(buy));
         when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(tradeCase.getCaseId())).thenReturn(List.of(buy, sell));
 
@@ -120,7 +150,7 @@ class TradeFeedbackServiceTest {
     @Test
     void rejectsFillsBeforeTheRecommendationAndOnCancelledCases() {
         TradeCaseEntity planned = plannedCase("PLANNED");
-        when(cases.findById(planned.getCaseId())).thenReturn(Optional.of(planned));
+        when(cases.findByIdForUpdate(planned.getCaseId())).thenReturn(Optional.of(planned));
 
         assertThatThrownBy(() -> service.addFill(
                 planned.getCaseId(), fill(TradeSide.BUY, "2026-07-12T23:59:59Z", "35", 100)
@@ -140,7 +170,7 @@ class TradeFeedbackServiceTest {
         TradeFillEntity buy = TradeFillEntity.create(
                 "fill-buy", tradeCase.getCaseId(), "BUY", Instant.parse("2026-07-13T01:35:00Z"),
                 new BigDecimal("35"), 100, Instant.parse("2026-07-12T01:00:00Z"));
-        when(cases.findById(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
+        when(cases.findByIdForUpdate(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
         when(cases.save(any(TradeCaseEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(fills.findById(buy.getFillId())).thenReturn(Optional.of(buy));
         when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(tradeCase.getCaseId())).thenReturn(List.of(buy));
@@ -154,7 +184,7 @@ class TradeFeedbackServiceTest {
     @Test
     void cancelsOnlyAPlanWithoutFillsAndThenRejectsNewFills() {
         TradeCaseEntity tradeCase = plannedCase("PLANNED");
-        when(cases.findById(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
+        when(cases.findByIdForUpdate(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
         when(cases.save(any(TradeCaseEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(tradeCase.getCaseId())).thenReturn(List.of());
 
@@ -165,6 +195,20 @@ class TradeFeedbackServiceTest {
                 tradeCase.getCaseId(), fill(TradeSide.BUY, "2026-07-13T01:35:00Z", "35", 100)
         )).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("已取消");
+    }
+
+    @Test
+    void locksTheParentCaseBeforeReadingFillsForAMutation() {
+        TradeCaseEntity tradeCase = plannedCase("PLANNED");
+        when(cases.findByIdForUpdate(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
+        when(cases.save(any(TradeCaseEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(tradeCase.getCaseId())).thenReturn(List.of());
+        when(fills.save(any(TradeFillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.addFill(tradeCase.getCaseId(), fill(TradeSide.BUY, "2026-07-13T01:35:00Z", "35", 100));
+
+        verify(cases).findByIdForUpdate(tradeCase.getCaseId());
+        verify(cases, never()).findById(tradeCase.getCaseId());
     }
 
     private CreateTradeCaseRequest caseRequest() {
