@@ -1,8 +1,10 @@
 package com.aistock.research.common.error;
 
+import com.fasterxml.jackson.databind.JsonMappingException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -11,6 +13,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -21,6 +24,18 @@ public class GlobalExceptionHandler {
         exception.getBindingResult().getFieldErrors().forEach(error ->
                 fields.put(error.getField(), error.getDefaultMessage()));
         ApiError body = new ApiError("VALIDATION_ERROR", "请求参数校验失败", Instant.now(), fields);
+        return ResponseEntity.badRequest().body(body);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiError> handleMessageNotReadable(HttpMessageNotReadableException exception) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        findMappingException(exception).ifPresent(mappingException ->
+                mappingException.getPath().stream()
+                        .map(JsonMappingException.Reference::getFieldName)
+                        .filter(field -> field != null && !field.isBlank())
+                        .forEach(field -> fields.put(field, "请求参数格式错误")));
+        ApiError body = new ApiError("VALIDATION_ERROR", "请求参数格式错误", Instant.now(), fields);
         return ResponseEntity.badRequest().body(body);
     }
 
@@ -60,5 +75,16 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleUnexpected(Exception exception) {
         ApiError body = new ApiError("INTERNAL_ERROR", "服务暂时不可用", Instant.now(), Map.of());
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
+    }
+
+    private Optional<JsonMappingException> findMappingException(Throwable exception) {
+        Throwable current = exception;
+        while (current != null) {
+            if (current instanceof JsonMappingException mappingException) {
+                return Optional.of(mappingException);
+            }
+            current = current.getCause();
+        }
+        return Optional.empty();
     }
 }

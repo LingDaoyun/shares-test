@@ -140,6 +140,36 @@ class TradeFeedbackControllerTest {
     }
 
     @Test
+    void returnsFieldAwareBadRequestForUnknownTradeSide() throws Exception {
+        String caseId = createCase();
+
+        mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"side":"HOLD","executedAt":"2026-07-13T01:35:00Z","price":35.20,"quantity":1}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").value("请求参数格式错误"))
+                .andExpect(jsonPath("$.fields.side").isNotEmpty());
+    }
+
+    @Test
+    void returnsFieldAwareBadRequestForMalformedExecutedAt() throws Exception {
+        String caseId = createCase();
+
+        mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"side":"BUY","executedAt":"not-an-instant","price":35.20,"quantity":1}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").value("请求参数格式错误"))
+                .andExpect(jsonPath("$.fields.executedAt").isNotEmpty());
+    }
+
+    @Test
     void filtersCaseInsensitivelyAndMapsMissingAndInvalidTransitions() throws Exception {
         String caseId = createCase();
 
