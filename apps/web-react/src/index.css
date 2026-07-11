@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-canvas text-ink-900 font-sans antialiased;
+    font-feature-settings: 'tnum' 1;
+  }
+
+  /* 数字等宽，对齐表格数据 */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* 统一白卡片 */
+  .card {
+    @apply rounded-2xl border border-line bg-white shadow-card;
+  }
+
+  .card-pad {
+    @apply card p-5;
+  }
+
+  /* 段落小标题（eyebrow） */
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-wider text-brand-600;
+  }
+
+  /* 次级标题 */
+  .section-title {
+    @apply text-base font-semibold text-ink-900;
+  }
+
+  /* 胶囊导航 */
+  .nav-pill {
+    @apply flex flex-col items-start gap-0.5 rounded-xl border border-line bg-white px-4 py-2.5 text-left transition hover:border-brand-300 hover:bg-brand-50;
+  }
+  .nav-pill-active {
+    @apply border-brand-500 bg-brand-50;
+  }
+
+  /* 表格 */
+  .data-table {
+    @apply w-full text-sm;
+  }
+  .data-table thead th {
+    @apply border-b border-line bg-line-soft/60 px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-ink-600;
+  }
+  .data-table tbody td {
+    @apply border-b border-line-soft px-3 py-3 text-ink-900;
+  }
+  .data-table tbody tr {
+    @apply transition hover:bg-brand-50/40;
+  }
+  .data-table tbody tr.row-selected {
+    @apply bg-brand-50;
+  }
+
+  /* 标签 */
+  .tag {
+    @apply inline-flex items-center rounded-md border border-line bg-white px-2 py-0.5 text-xs font-medium text-ink-600;
+  }
+  .tag-brand {
+    @apply border-brand-200 bg-brand-50 text-brand-700;
+  }
+  .tag-success {
+    @apply border-emerald-200 bg-emerald-50 text-emerald-700;
+  }
+  .tag-warning {
+    @apply border-amber-200 bg-amber-50 text-amber-700;
+  }
+  .tag-danger {
+    @apply border-red-200 bg-red-50 text-red-700;
+  }
+  .tag-sky {
+    @apply border-sky-400/30 bg-sky-500/10 text-sky-600;
+  }
+
+  /* 输入控件 */
+  .field {
+    @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink-900 outline-none transition placeholder:text-ink-400 focus:border-brand-400 focus:ring-2 focus:ring-brand-100;
+  }
+  .field-label {
+    @apply mb-1 block text-xs font-medium text-ink-600;
+  }
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+  border: 2px solid #f8fafc;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* 涨跌色（A股惯例：红涨绿跌） */
+.price-up {
+  color: #dc2626;
+}
+.price-down {
+  color: #16a34a;
+}

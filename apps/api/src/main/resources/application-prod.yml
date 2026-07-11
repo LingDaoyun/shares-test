@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: ${JDBC_DATABASE_URL:jdbc:postgresql://localhost:5432/aistock}
+    username: ${JDBC_DATABASE_USERNAME:aistock}
+    password: ${JDBC_DATABASE_PASSWORD:aistock}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+

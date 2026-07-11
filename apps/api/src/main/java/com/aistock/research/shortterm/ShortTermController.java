@@ -1,0 +1,61 @@
+package com.aistock.research.shortterm;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.math.BigDecimal;
+
+@RestController
+@RequestMapping("/api/short-term")
+public class ShortTermController {
+
+    private final ShortTermService shortTermService;
+    private final ShortTermScanJobService scanJobService;
+
+    public ShortTermController(ShortTermService shortTermService, ShortTermScanJobService scanJobService) {
+        this.shortTermService = shortTermService;
+        this.scanJobService = scanJobService;
+    }
+
+    @GetMapping("/report")
+    public ShortTermReport report(
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) Integer scanLimit,
+            @RequestParam(required = false) Integer klineLimit,
+            @RequestParam(required = false) BigDecimal minAmount,
+            @RequestParam(required = false) BigDecimal maxPe,
+            @RequestParam(required = false) BigDecimal maxPb,
+            @RequestParam(required = false) BigDecimal minVolumeRatio,
+            @RequestParam(required = false) BigDecimal maxEntryRise,
+            @RequestParam(required = false) BigDecimal maxDistanceToMa20,
+            @RequestParam(required = false) BigDecimal minFinancialScore
+    ) {
+        return shortTermService.report(
+                limit,
+                scanLimit,
+                klineLimit,
+                minAmount,
+                maxPe,
+                maxPb,
+                minVolumeRatio,
+                maxEntryRise,
+                maxDistanceToMa20,
+                minFinancialScore
+        );
+    }
+
+    @PostMapping("/scan-jobs")
+    public ShortTermScanJobStatus startScanJob(@RequestBody(required = false) ShortTermScanRequest request) {
+        return scanJobService.start(request);
+    }
+
+    @GetMapping("/scan-jobs/{jobId}")
+    public ShortTermScanJobStatus scanJob(@PathVariable String jobId) {
+        return scanJobService.get(jobId);
+    }
+}

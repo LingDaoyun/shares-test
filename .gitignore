@@ -1,0 +1,26 @@
+.DS_Store
+.idea/
+.vscode/
+
+# Java
+target/
+*.class
+*.log
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Runtime
+.env
+.env.*
+!.env.example
+uploads/
+minio-data/
+postgres-data/
+redis-data/
+
+# Downloaded reference projects
+external/

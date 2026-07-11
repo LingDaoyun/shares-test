@@ -1,0 +1,11 @@
+research:
+  ai:
+    llm:
+      provider: moonshot
+      api-key: ${MOONSHOT_API_KEY:}
+      api-key-env: MOONSHOT_API_KEY
+      model: kimi-k2.6
+      base-url: https://api.moonshot.ai/v1
+      response-format: json_schema
+      strict-json-schema: true
+      max-completion-tokens: 2000

@@ -1,0 +1,919 @@
+// 当前 React 前端消费的后端数据契约。
+
+export type RuleAction = 'PASS' | 'REJECT' | 'SCORE' | 'ALERT' | 'DOWN_WEIGHT' | 'REVIEW'
+export type Operator = 'GT' | 'GTE' | 'LT' | 'LTE' | 'EQ'
+
+export interface RuleCondition {
+  factor: string
+  operator: Operator
+  value: number
+  weight: number | null
+}
+
+export interface RuleDefinition {
+  ruleCode: string
+  name: string
+  enabled: boolean
+  version: number
+  conditions: RuleCondition[]
+  action: RuleAction
+  description: string
+  updatedAt: string
+}
+
+export interface LlmConfigPreview {
+  provider: string
+  model: string
+  baseUrl: string
+  responseFormat: string
+  strictJsonSchema: boolean
+  apiKeyConfigured: boolean
+  apiKeySource: string
+  thinking: string | null
+  maxCompletionTokens: number | null
+  temperature: number | null
+}
+
+export interface PolicySourceConfig {
+  name: string
+  type: string
+  url: string
+  weight: number
+}
+
+export interface LlmRuntimeConfig {
+  provider: string
+  apiKey: string | null
+  apiKeyEnv: string
+  model: string
+  baseUrl: string
+  responseFormat: string
+  strictJsonSchema: boolean
+  thinking: string | null
+  maxCompletionTokens: number | null
+  temperature: number | null
+  apiKeyConfigured: boolean
+  apiKeySource: string
+}
+
+export interface RuntimeConfigSnapshot {
+  dataId: string
+  group: string
+  llm: LlmRuntimeConfig
+  policySources: PolicySourceConfig[]
+  updatedAt: string
+}
+
+export interface TechEvidenceItem {
+  title: string
+  summary: string
+  url: string | null
+  weight: number
+}
+
+export interface TechTrackingRuleSet {
+  coreMaxPe: number
+  coreMaxPb: number
+  hardMaxPe: number
+  hardMaxPb: number
+  pullbackWatchPercent: number
+  stopLossPercent: number
+  maxSinglePositionPercent: number
+}
+
+export interface TechScoreBreakdown {
+  policyScore: number
+  earningsScore: number
+  valuationScore: number
+  tradingDisciplineScore: number
+  finalScore: number
+}
+
+export type TradingAdviceAction = 'HOLD' | 'ADD' | 'LIGHT_TRIAL' | 'NEXT_WATCH' | 'WAIT_PULLBACK' | 'BATCH_SELL' | 'SELL_ALL' | 'WAIT'
+
+export interface TradingAdvice {
+  action: TradingAdviceAction
+  actionLabel: string
+  confidence: number
+  summary: string
+  reasons: string[]
+  riskControls: string[]
+}
+
+export interface EvidenceCompleteness {
+  score: number
+  status: string
+  statusLabel: string
+  allowsBuy: boolean
+  presentEvidence: string[]
+  missingEvidence: string[]
+  riskControls: string[]
+}
+
+export interface PeerValuationBriefPeer {
+  symbol: string
+  companyName: string
+  relationType: string
+  peTtm: number | null
+  pbRatio: number | null
+  latestPrice: number | null
+}
+
+export interface PeerValuationBrief {
+  available: boolean
+  scopeLabel: string
+  peerCount: number
+  currentPe: number | null
+  currentPb: number | null
+  medianPe: number | null
+  medianPb: number | null
+  pePeerPercentile: number | null
+  pbPeerPercentile: number | null
+  peers: PeerValuationBriefPeer[]
+  conclusions: string[]
+  dataGaps: string[]
+}
+
+export interface AgentConsensusBrief {
+  available: boolean
+  consensusLabel: string
+  consensusScore: number | null
+  supportCount: number
+  watchCount: number
+  reviewCount: number
+  vetoCount: number
+  contrarianSummary: string
+  requiredEvidence: string[]
+  objections: string[]
+  dataGaps: string[]
+}
+
+export interface RecommendationEvidenceBundle {
+  symbol: string
+  peerValuation: PeerValuationBrief
+  agentConsensus: AgentConsensusBrief
+  dataGaps: string[]
+}
+
+export interface WatchlistEntry {
+  symbol: string
+  companyName: string
+  note: string
+  lastActionLabel: string | null
+  lastDecisionScore: number | null
+  lastAnalyzedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface InvestmentDecisionGate {
+  gateCode: string
+  gateName: string
+  status: string
+  statusLabel: string
+  scoreImpact: number
+  conclusion: string
+  evidenceRefs: string[]
+}
+
+export interface ExitTrigger {
+  triggerCode: string
+  triggerName: string
+  severity: string
+  condition: string
+  action: string
+  evidenceRefs: string[]
+}
+
+export interface InvestmentDecisionReport {
+  symbol: string
+  companyName: string
+  actionStage: string
+  actionLabel: string
+  decisionScore: number
+  actionReason: string
+  complianceNote: string
+  passCount: number
+  watchCount: number
+  blockCount: number
+  failCount: number
+  gates: InvestmentDecisionGate[]
+  thesis: string[]
+  buyPreconditions: string[]
+  holdDisciplines: string[]
+  exitTriggers: ExitTrigger[]
+  requiredActions: string[]
+  generatedAt: string
+}
+
+export interface DecisionHistoryEntry {
+  decisionId: string
+  analysisId: string
+  symbol: string
+  sourceType: string
+  actionStage: string
+  actionLabel: string
+  decisionScore: number | null
+  ruleVersion: string
+  dataAsOf: string
+  recordedAt: string
+}
+
+export interface TradingSessionSnapshot {
+  phase: string
+  phaseLabel: string
+  regularAuctionOpen: boolean
+  closingDecisionWindow: boolean
+  postCloseFixedPrice: boolean
+  decisionTimeLabel: string
+  rules: string[]
+  warnings: string[]
+}
+
+export type ValuationContextState = 'CHEAP' | 'FAIR' | 'STRETCHED' | 'DISTORTED' | 'MISSING'
+export type ValuationModel = 'STANDARD' | 'FINANCIAL' | 'CYCLICAL' | 'EARLY_GROWTH'
+
+export interface ValuationContext {
+  score: number
+  state: ValuationContextState
+  applicableModel: ValuationModel
+  rawPe: number | null
+  rawPb: number | null
+  peReference: number
+  pbReference: number
+  industryPercentile: number | null
+  historyPercentile: number | null
+  normalizedEarningsUsed: boolean
+  warnings: string[]
+  evidence: string[]
+}
+
+export interface MarketScanRuleSet {
+  scanLimit: number
+  minAmount: number
+  maxPe: number
+  maxPb: number
+  maxRiseForEntry: number
+  maxSinglePositionPercent: number
+  minFinancialScore: number
+  excludeSideways: boolean
+  includeNorthExchange: boolean
+  mode: string
+}
+
+export interface MarketScanScoreBreakdown {
+  valuationScore: number
+  liquidityScore: number
+  priceActionScore: number
+  qualityProxyScore: number
+  riskScore: number
+  finalScore: number
+}
+
+export interface MarketScanTraceStep {
+  step: string
+  title: string
+  summary: string
+  findings: string[]
+  sourceName: string | null
+  sourceUrl: string | null
+}
+
+export interface MarketScanCandidate {
+  rank: number
+  symbol: string
+  name: string
+  market: string | null
+  industry: string | null
+  latestPrice: number | null
+  changePercent: number | null
+  peTtm: number | null
+  pbRatio: number | null
+  amount: number | null
+  valuationContext: ValuationContext
+  score: MarketScanScoreBreakdown
+  screeningAction: string
+  screeningActionLabel: string
+  reason: string
+  todayAdvice: TradingAdvice
+  tags: string[]
+  strengths: string[]
+  risks: string[]
+  dataGaps: string[]
+  evidenceCompleteness: EvidenceCompleteness
+  evidenceBundle: RecommendationEvidenceBundle
+  trace: MarketScanTraceStep[]
+}
+
+export interface UniversalScreenStageStats {
+  stage: string
+  label: string
+  inputCount: number
+  passedCount: number
+  excludedCount: number
+  deferredCount: number
+}
+
+export interface UniversalScreenCoverage {
+  requestedCount: number
+  expectedCount: number
+  fetchedCount: number
+  missingCount: number
+  complete: boolean
+  source: string
+  fetchedAt: string
+}
+
+export interface UniversalScreenExclusion {
+  symbol: string | null
+  name: string | null
+  stage: string
+  reason: string
+  evidence: string[]
+}
+
+export interface MarketScanReport {
+  scope: string
+  universeCount: number
+  reviewedCount: number
+  candidateCount: number
+  quoteNote: string
+  coverage: UniversalScreenCoverage
+  methodology: string[]
+  ruleSet: MarketScanRuleSet
+  stageStats: UniversalScreenStageStats[]
+  candidates: MarketScanCandidate[]
+  exclusionsSample: UniversalScreenExclusion[]
+  generatedAt: string
+}
+
+export interface ShortTermRuleSet {
+  scanLimit: number
+  klineLimit: number
+  minAmount: number
+  maxPe: number
+  maxPb: number
+  minVolumeRatio: number
+  maxEntryRisePercent: number
+  maxDistanceToMa20Percent: number
+  minFinancialScore: number
+}
+
+export interface ShortTermTechnicalSnapshot {
+  tradeDate: string | null
+  ma5: number | null
+  ma10: number | null
+  ma20: number | null
+  ma60: number | null
+  ma20SlopePercent: number | null
+  ma60SlopePercent: number | null
+  previousHigh20: number | null
+  previousHigh60: number | null
+  breakoutFromPreviousHigh20Percent: number | null
+  previousRange20Percent: number | null
+  high120: number | null
+  low120: number | null
+  volumeRatio5: number | null
+  volumeRatio20: number | null
+  rangePosition60: number | null
+  rangePosition120: number | null
+  distanceToMa20Percent: number | null
+  drawdownFrom120HighPercent: number | null
+  todayAmplitudePercent: number | null
+  consecutiveAboveMa20Days: number
+  rightSideSignal: string
+}
+
+export interface ShortTermFinancialSnapshot {
+  reportDate: string | null
+  dataType: string | null
+  roe: number | null
+  operatingCashFlowPerShare: number | null
+  grossMargin: number | null
+  revenueGrowth: number | null
+  netProfitGrowth: number | null
+  averageRoe: number | null
+  positiveCashFlowYears: number
+  qualityScore: number
+  statusLabel: string
+  dataGaps: string[]
+}
+
+export interface ShortTermScoreBreakdown {
+  technicalScore: number
+  volumeScore: number
+  marketHeatScore: number
+  valuationScore: number
+  financialScore: number
+  riskPenalty: number
+  finalScore: number
+}
+
+export interface ShortTermWeightProfile {
+  preliminaryValuation: number
+  preliminaryLiquidity: number
+  preliminaryNonChase: number
+  preliminaryHeat: number
+  finalTechnical: number
+  finalVolume: number
+  finalHeat: number
+  finalFinancial: number
+  finalValuation: number
+}
+
+export interface ShortTermEvidence {
+  title: string
+  summary: string
+  url: string | null
+  weight: number
+}
+
+export interface ShortTermTailSignal {
+  status: string
+  statusLabel: string
+  afterTailConfirm: boolean
+  tradeDate: string | null
+  latestMinute: string | null
+  latestPrice: number | null
+  tailStartPrice: number | null
+  changeFromTailConfirmPercent: number | null
+  drawdownFromTailHighPercent: number | null
+  closeVsAveragePricePercent: number | null
+  tailAmount: number | null
+  tailAmountRatioPercent: number | null
+  score: number | null
+  reasons: string[]
+  riskControls: string[]
+}
+
+export interface QuoteFreshnessSnapshot {
+  status: string
+  statusLabel: string
+  realtimeSession: boolean
+  blocksRealtimeDecision: boolean
+  tradeDate: string | null
+  marketTimestamp: string | null
+  ageSeconds: number | null
+  reason: string
+}
+
+export interface ShortTermCandidate {
+  rank: number
+  symbol: string
+  name: string
+  market: string | null
+  industry: string | null
+  latestPrice: number | null
+  changePercent: number | null
+  peTtm: number | null
+  pbRatio: number | null
+  amount: number | null
+  quoteFreshness: QuoteFreshnessSnapshot
+  valuationContext: ValuationContext
+  phase: string
+  phaseLabel: string
+  action: string
+  actionLabel: string
+  reason: string
+  todayAdvice: TradingAdvice
+  tailSignal: ShortTermTailSignal
+  score: ShortTermScoreBreakdown
+  technical: ShortTermTechnicalSnapshot
+  financial: ShortTermFinancialSnapshot
+  buyZoneLow: number | null
+  buyZoneHigh: number | null
+  stopPrice: number | null
+  strengths: string[]
+  risks: string[]
+  entryRules: string[]
+  exitRules: string[]
+  evidenceCompleteness: EvidenceCompleteness
+  evidence: ShortTermEvidence[]
+}
+
+export interface ShortTermReport {
+  scope: string
+  universeCount: number
+  reviewedCount: number
+  klineReviewedCount: number
+  candidateCount: number
+  quoteNote: string
+  tradingSession: TradingSessionSnapshot
+  methodology: string[]
+  ruleSet: ShortTermRuleSet
+  weightProfile: ShortTermWeightProfile
+  candidates: ShortTermCandidate[]
+  hotDirections: ShortTermHotDirection[]
+  marketSentiment: ShortTermMarketSentiment
+  exclusions: ShortTermRiskExclusion[]
+  generatedAt: string
+}
+
+export interface ShortTermMarketSentiment {
+  phase: string
+  score: number
+  advancing: number
+  declining: number
+  limitUpLike: number
+  limitDownLike: number
+  breadthPercent: number
+  explanation: string
+}
+
+export type ShortTermScanJobState = 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+
+export interface ShortTermScanJobStatus {
+  jobId: string
+  status: ShortTermScanJobState
+  createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  message: string
+  report: ShortTermReport | null
+}
+
+export interface ShortTermHotDirection {
+  code: string
+  label: string
+  heatScore: number
+  averageChangePercent: number | null
+  positiveRatioPercent: number | null
+  totalAmount: number | null
+  sampleCount: number
+  leaders: string[]
+  evidence: string
+}
+
+export interface ShortTermRiskExclusion {
+  symbol: string
+  name: string
+  market: string | null
+  industry: string | null
+  latestPrice: number | null
+  changePercent: number | null
+  amount: number | null
+  peTtm: number | null
+  pbRatio: number | null
+  category: string
+  reason: string
+  evidence: string
+  sourceUrl: string | null
+}
+
+export interface BacktestRuleSet {
+  lookbackDays: number
+  holdingDays: number
+  minVolumeRatio: number
+  maxVolumeRatio: number
+  maxDistanceToMa20Percent: number
+  minMa20SlopePercent: number
+  stopLossPercent: number
+  takeProfitPercent: number
+  commissionPercent: number
+  stampDutyPercent: number
+  slippagePercent: number
+  limitMovePercent: number
+  minRange60Percent: number
+  maxRange60Percent: number
+}
+
+export interface BacktestTrade {
+  symbol: string
+  signalDate: string
+  entryDate: string
+  exitDate: string
+  entryPrice: number | null
+  exitPrice: number | null
+  grossReturnPercent: number
+  returnPercent: number
+  maxDrawdownPercent: number
+  totalCostPercent: number
+  holdingDays: number
+  exitReason: string
+  signalEvidence: string[]
+}
+
+export interface BacktestSummary {
+  symbolCount: number
+  tradeCount: number
+  winCount: number
+  winRatePercent: number
+  averageReturnPercent: number
+  averageMaxDrawdownPercent: number
+  bestReturnPercent: number | null
+  worstReturnPercent: number | null
+  profitFactor: number | null
+  conclusion: string
+}
+
+export interface BacktestSymbolResult {
+  symbol: string
+  klineCount: number
+  tradeCount: number
+  summary: BacktestSummary
+  trades: BacktestTrade[]
+  dataGaps: string[]
+}
+
+export interface BacktestReport {
+  scope: string
+  methodology: string[]
+  ruleSet: BacktestRuleSet
+  symbols: string[]
+  summary: BacktestSummary
+  results: BacktestSymbolResult[]
+  generatedAt: string
+}
+
+export interface TechTrackedStock {
+  rank: number
+  symbol: string
+  name: string
+  themeCode: string
+  themeName: string
+  industry: string | null
+  latestPrice: number | null
+  changePercent: number | null
+  peTtm: number | null
+  pbRatio: number | null
+  amount: number | null
+  score: TechScoreBreakdown
+  action: string
+  actionLabel: string
+  reason: string
+  todayAdvice: TradingAdvice
+  strengths: string[]
+  risks: string[]
+  entryRules: string[]
+  exitRules: string[]
+  evidence: TechEvidenceItem[]
+}
+
+export interface TechTrackingReport {
+  scope: string
+  universeCount: number
+  candidateCount: number
+  quoteNote: string
+  methodology: string[]
+  policySignals: TechEvidenceItem[]
+  ruleSet: TechTrackingRuleSet
+  candidates: TechTrackedStock[]
+  generatedAt: string
+}
+
+export interface MispricingEvidenceItem {
+  title: string
+  summary: string
+  url: string | null
+  weight: number
+}
+
+export interface MispricingRuleSet {
+  hotOverheatThreshold: number
+  maxPeForValue: number
+  maxPbForValue: number
+  minQualityScore: number
+  preferredPullbackPercent: number
+  stopLossPercent: number
+  scanLimit: number
+}
+
+export interface StyleHeatSnapshot {
+  hotThemeName: string
+  heatScore: number
+  valuationPressure: number
+  crowdingPressure: number
+  riskLabel: string
+  signals: string[]
+}
+
+export interface MispricingScoreBreakdown {
+  hotOverheatScore: number
+  qualityScore: number
+  valuationDiscountScore: number
+  cashflowDefenseScore: number
+  rotationTimingScore: number
+  finalScore: number
+}
+
+export interface MispricingReviewResult {
+  status: string
+  statusLabel: string
+  conclusion: string
+  verifiedFindings: string[]
+  blockers: string[]
+  sources: MispricingEvidenceItem[]
+}
+
+export interface MispricedAsset {
+  rank: number
+  symbol: string
+  name: string
+  assetGroup: string
+  industry: string | null
+  latestPrice: number | null
+  changePercent: number | null
+  peTtm: number | null
+  pbRatio: number | null
+  amount: number | null
+  score: MispricingScoreBreakdown
+  action: string
+  actionLabel: string
+  reason: string
+  todayAdvice: TradingAdvice
+  strengths: string[]
+  risks: string[]
+  entryRules: string[]
+  exitRules: string[]
+  evidence: MispricingEvidenceItem[]
+  evidenceCompleteness: EvidenceCompleteness
+  evidenceBundle: RecommendationEvidenceBundle
+  review: MispricingReviewResult
+}
+
+export interface MispricingReport {
+  scope: string
+  universeCount: number
+  candidateCount: number
+  quoteNote: string
+  methodology: string[]
+  styleHeat: StyleHeatSnapshot
+  ruleSet: MispricingRuleSet
+  policySignals: MispricingEvidenceItem[]
+  candidates: MispricedAsset[]
+  generatedAt: string
+}
+
+export interface CycleTrialEvidence {
+  title: string
+  summary: string
+  url: string | null
+  weight: number
+}
+
+export interface CycleTrialRuleSet {
+  leftTrialScoreThreshold: number
+  rightAddScoreThreshold: number
+  maxChaseRisePercent: number
+  minVolumeRatioForBreakout: number
+  stopLossPercent: number
+  pullbackZonePercent: number
+}
+
+export interface CycleTechnicalSnapshot {
+  tradeDate: string | null
+  ma5: number | null
+  ma10: number | null
+  ma20: number | null
+  ma60: number | null
+  previousHigh20: number | null
+  previousHigh60: number | null
+  low20: number | null
+  low60: number | null
+  volumeRatio5: number | null
+  volumeRatio20: number | null
+  rangePosition60: number | null
+  closeNearHigh: number | null
+  reboundFrom20LowPercent: number | null
+  distanceToMa20Percent: number | null
+}
+
+export interface CycleTrialScoreBreakdown {
+  catalystScore: number
+  priceLocationScore: number
+  reversalScore: number
+  volumeScore: number
+  valuationScore: number
+  finalScore: number
+}
+
+export interface CyclePeerValuationCompany {
+  symbol: string
+  name: string
+  industry: string | null
+  peTtm: number | null
+  pbRatio: number | null
+  amount: number | null
+  quoteUrl: string | null
+}
+
+export interface CyclePeerValuationSnapshot {
+  industry: string | null
+  averagePeTtm: number | null
+  averagePbRatio: number | null
+  candidatePeDiscountPercent: number | null
+  candidatePbDiscountPercent: number | null
+  valuationAdvantage: boolean
+  conclusion: string
+  peers: CyclePeerValuationCompany[]
+}
+
+export interface CycleTrialCandidate {
+  rank: number
+  symbol: string
+  name: string
+  assetGroup: string
+  cycleDriver: string
+  industry: string | null
+  latestPrice: number | null
+  changePercent: number | null
+  peTtm: number | null
+  pbRatio: number | null
+  peerValuation: CyclePeerValuationSnapshot | null
+  amount: number | null
+  phase: string
+  phaseLabel: string
+  action: string
+  actionLabel: string
+  reason: string
+  todayAdvice: TradingAdvice
+  score: CycleTrialScoreBreakdown
+  technical: CycleTechnicalSnapshot
+  trialBuyZoneLow: number | null
+  trialBuyZoneHigh: number | null
+  stopPrice: number | null
+  catalysts: string[]
+  risks: string[]
+  entryRules: string[]
+  exitRules: string[]
+  evidence: CycleTrialEvidence[]
+}
+
+export interface CycleTrialReport {
+  scope: string
+  universeCount: number
+  candidateCount: number
+  quoteNote: string
+  methodology: string[]
+  ruleSet: CycleTrialRuleSet
+  candidates: CycleTrialCandidate[]
+  generatedAt: string
+}
+
+export interface DailySignalEvidence {
+  title: string
+  summary: string
+  url: string | null
+  weight: number
+}
+
+export interface DailyMarketContext {
+  region: string
+  tradeDate: string
+  summary: string
+  riskTags: string[]
+  positionCap: string
+  source: string
+}
+
+export interface StrategyPlaybook {
+  name: string
+  displayName: string
+  category: string
+  description: string
+  coreRules: number[]
+  requiredTools: string[]
+  triggerRules: string[]
+  exitRules: string[]
+  scoringImpact: string
+}
+
+export interface DailyDecisionSignal {
+  rank: number
+  symbol: string
+  name: string
+  market: string
+  sourceType: string
+  sourceLabel: string
+  action: string
+  actionLabel: string
+  confidence: number
+  score: number | null
+  horizon: string
+  marketPhase: string
+  todayAdvice: TradingAdvice
+  strategyTags: string[]
+  reason: string
+  riskSummary: string
+  catalystSummary: string
+  watchConditions: string[]
+  evidence: DailySignalEvidence[]
+}
+
+export interface DailySignalReport {
+  scope: string
+  sourceProject: string
+  sourceCommit: string
+  marketContext: DailyMarketContext
+  actionCounts: Record<string, number>
+  strategyPlaybooks: StrategyPlaybook[]
+  signals: DailyDecisionSignal[]
+  generatedAt: string
+}
+
+export interface ApiErrorBody {
+  code: string
+  message: string
+  timestamp: string
+  fields: Record<string, string>
+}

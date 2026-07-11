@@ -1,0 +1,13 @@
+.git
+.codex-run
+**/.DS_Store
+**/node_modules
+**/dist
+!apps/web-react/dist
+!apps/web-react/dist/**
+**/target
+!apps/api/target
+!apps/api/target/ai-stock-api-0.1.0-SNAPSHOT.jar
+**/*.log
+**/tsconfig.tsbuildinfo
+external
