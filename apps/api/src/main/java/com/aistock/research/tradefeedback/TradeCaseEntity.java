@@ -181,6 +181,11 @@ public class TradeCaseEntity {
         return status;
     }
 
+    public void updateStatus(String status, Instant updatedAt) {
+        this.status = status;
+        this.updatedAt = updatedAt;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }

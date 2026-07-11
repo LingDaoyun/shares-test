@@ -84,6 +84,14 @@ public class TradeFillEntity {
         return side;
     }
 
+    public void revise(String side, Instant executedAt, BigDecimal price, long quantity, Instant updatedAt) {
+        this.side = side;
+        this.executedAt = executedAt;
+        this.price = price;
+        this.quantity = quantity;
+        this.updatedAt = updatedAt;
+    }
+
     public Instant getExecutedAt() {
         return executedAt;
     }
