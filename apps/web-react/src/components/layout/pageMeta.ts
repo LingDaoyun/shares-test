@@ -1,4 +1,4 @@
-export type PageKey = 'market' | 'shortTerm' | 'tech' | 'mispricing' | 'cycle' | 'signals' | 'watchlist' | 'rules' | 'settings'
+export type PageKey = 'market' | 'shortTerm' | 'tech' | 'mispricing' | 'cycle' | 'signals' | 'watchlist' | 'tradeReview' | 'rules' | 'settings'
 
 export interface PageMeta {
   eyebrow: string
@@ -42,6 +42,11 @@ export const pageMeta: Record<PageKey, PageMeta> = {
     title: '特别关注',
     description: '独立管理主动关注的股票，并按需运行完整证据分析。'
   },
+  tradeReview: {
+    eyebrow: 'TRADE REVIEW',
+    title: '交易复盘',
+    description: '连接推荐现场、真实分批成交与后续策略表现。'
+  },
   rules: {
     eyebrow: 'RULE ENGINE',
     title: '规则目录',
@@ -62,6 +67,7 @@ export const navItems: { key: PageKey; label: string }[] = [
   { key: 'cycle', label: '周期试仓' },
   { key: 'signals', label: '每日信号' },
   { key: 'watchlist', label: '特别关注' },
+  { key: 'tradeReview', label: '交易复盘' },
   { key: 'rules', label: '规则目录' },
   { key: 'settings', label: '配置' }
 ]
@@ -76,6 +82,7 @@ export const pathToPage: Record<string, PageKey> = {
   cycle: 'cycle',
   signals: 'signals',
   watchlist: 'watchlist',
+  'trade-review': 'tradeReview',
   rules: 'rules',
   settings: 'settings'
 }

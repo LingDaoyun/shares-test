@@ -76,6 +76,7 @@ const MispricingPage = lazyPage(() => import('./pages/MispricingPage').then((m) 
 const CycleTrialPage = lazyPage(() => import('./pages/CycleTrialPage').then((m) => m.CycleTrialPage))
 const DailySignalsPage = lazyPage(() => import('./pages/DailySignalsPage').then((m) => m.DailySignalsPage))
 const WatchlistPage = lazyPage(() => import('./pages/WatchlistPage').then((m) => m.WatchlistPage))
+const TradeReviewPage = lazyPage(() => import('./pages/TradeReviewPage').then((m) => m.TradeReviewPage))
 const RulesPage = lazyPage(() => import('./pages/RulesPage').then((m) => m.RulesPage))
 const SettingsPage = lazyPage(() => import('./pages/SettingsPage').then((m) => m.SettingsPage))
 
@@ -95,6 +96,7 @@ export default function App() {
               <Route path="cycle" element={<CycleTrialPage />} />
               <Route path="signals" element={<DailySignalsPage />} />
               <Route path="watchlist" element={<WatchlistPage />} />
+              <Route path="trade-review" element={<TradeReviewPage />} />
               <Route path="rules" element={<RulesPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/short-term" replace />} />

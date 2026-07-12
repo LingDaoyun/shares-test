@@ -92,6 +92,16 @@
   .field-label {
     @apply mb-1 block text-xs font-medium text-ink-600;
   }
+
+  .trade-review-tabs {
+    @apply flex max-w-full items-center gap-1 overflow-x-auto rounded-lg border border-line bg-line-soft/50 p-1;
+  }
+  .trade-review-tab {
+    @apply min-h-9 shrink-0 rounded-md px-3 py-1.5 text-sm font-medium text-ink-600 outline-none transition hover:bg-white hover:text-ink-900 focus-visible:ring-2 focus-visible:ring-brand-300;
+  }
+  .trade-review-tab-active {
+    @apply bg-white text-brand-600 shadow-sm;
+  }
 }
 
 /* 滚动条 */

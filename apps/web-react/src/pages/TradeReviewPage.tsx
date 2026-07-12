@@ -1,0 +1,750 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { Edit3, Plus, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react'
+import {
+  addTradeFill,
+  cancelTradeCase,
+  deleteTradeFill,
+  refreshTradeCase,
+  updateTradeFill
+} from '../api/client'
+import { Tag } from '../components/ui/Badge'
+import { Button } from '../components/ui/Button'
+import { DataTable, type Column } from '../components/ui/DataTable'
+import { Empty } from '../components/ui/Empty'
+import { Loader } from '../components/ui/Loader'
+import { toast } from '../components/ui/Toast'
+import { changeClass, extractErrorMessage, formatDateTime, formatNumber, formatSignedPercent } from '../lib/format'
+import { useTradeFeedbackStore } from '../store/tradeFeedbackStore'
+import type {
+  TradeCaseDetail,
+  TradeCaseStatus,
+  TradeCaseSummary,
+  TradeFillView,
+  TradeOutcomeView,
+  TradeSide,
+  UpsertTradeFillRequest
+} from '../types'
+
+type StatusFilter = 'ALL' | TradeCaseStatus
+type TradeCase = TradeCaseSummary | TradeCaseDetail
+
+const detailLoadPromises = new Map<string, Promise<TradeCaseDetail>>()
+
+const statusTabs: { value: StatusFilter; label: string }[] = [
+  { value: 'ALL', label: '全部' },
+  { value: 'PLANNED', label: '计划中' },
+  { value: 'HOLDING', label: '持仓中' },
+  { value: 'CLOSED', label: '已了结' },
+  { value: 'CANCELLED', label: '已取消' }
+]
+
+const statusMeta: Record<TradeCaseStatus, { label: string; tone: 'brand' | 'success' | 'neutral' | 'danger' }> = {
+  PLANNED: { label: '计划中', tone: 'brand' },
+  HOLDING: { label: '持仓中', tone: 'success' },
+  CLOSED: { label: '已了结', tone: 'neutral' },
+  CANCELLED: { label: '已取消', tone: 'danger' }
+}
+
+const outcomeMeta: Record<string, { label: string; tone: 'sky' | 'success' | 'danger' | 'neutral' }> = {
+  PENDING: { label: 'PENDING', tone: 'sky' },
+  MATURED: { label: 'MATURED', tone: 'success' },
+  UNAVAILABLE: { label: 'UNAVAILABLE', tone: 'danger' }
+}
+
+export function TradeReviewPage() {
+  const casesById = useTradeFeedbackStore((state) => state.casesById)
+  const loaded = useTradeFeedbackStore((state) => state.loaded)
+  const loading = useTradeFeedbackStore((state) => state.loading)
+  const loadCases = useTradeFeedbackStore((state) => state.loadCases)
+  const refreshCases = useTradeFeedbackStore((state) => state.refreshCases)
+  const getCase = useTradeFeedbackStore((state) => state.getCase)
+  const upsertCase = useTradeFeedbackStore((state) => state.upsertCase)
+  const [filter, setFilter] = useState<StatusFilter>('ALL')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [listError, setListError] = useState('')
+  const [detailError, setDetailError] = useState('')
+  const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null)
+  const [action, setAction] = useState<'refresh' | 'cancel' | 'delete' | null>(null)
+  const [fillModal, setFillModal] = useState<{ fill?: TradeFillView; returnFocus: HTMLElement | null } | null>(null)
+  const detailPaneRef = useRef<HTMLElement>(null)
+
+  const allCases = useMemo(
+    () => Object.values(casesById).sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
+    [casesById]
+  )
+  const filteredCases = useMemo(
+    () => filter === 'ALL' ? allCases : allCases.filter((tradeCase) => tradeCase.status === filter),
+    [allCases, filter]
+  )
+  const selected = selectedId ? casesById[selectedId] : undefined
+  const loadDetail = useCallback((caseId: string) => {
+    const inFlight = detailLoadPromises.get(caseId)
+    if (inFlight) return inFlight
+    const request = getCase(caseId).finally(() => detailLoadPromises.delete(caseId))
+    detailLoadPromises.set(caseId, request)
+    return request
+  }, [getCase])
+
+  useEffect(() => {
+    void loadCases().catch((error) => {
+      const message = extractErrorMessage(error)
+      setListError(message)
+      toast.error(`复盘单加载失败：${message}`)
+    })
+  }, [loadCases])
+
+  useEffect(() => {
+    setSelectedId((current) => {
+      if (current && filteredCases.some((tradeCase) => tradeCase.caseId === current)) return current
+      return filteredCases[0]?.caseId ?? null
+    })
+  }, [filteredCases])
+
+  useEffect(() => {
+    if (!selectedId || isTradeCaseDetail(casesById[selectedId])) return
+    let alive = true
+    setDetailLoadingId(selectedId)
+    setDetailError('')
+    void loadDetail(selectedId)
+      .catch((error) => {
+        if (!alive) return
+        const message = extractErrorMessage(error)
+        setDetailError(message)
+        toast.error(`复盘详情加载失败：${message}`)
+      })
+      .finally(() => {
+        if (alive) setDetailLoadingId((current) => current === selectedId ? null : current)
+      })
+    return () => {
+      alive = false
+    }
+  }, [casesById, loadDetail, selectedId])
+
+  useEffect(() => {
+    let cancelled = false
+    const summaries = allCases.filter((tradeCase) => !isTradeCaseDetail(tradeCase))
+    const hydrateOutcomes = async () => {
+      for (const tradeCase of summaries) {
+        if (cancelled) return
+        await loadDetail(tradeCase.caseId).catch(() => {
+          // Selected-detail loading owns user-facing errors; background hydration remains quiet.
+        })
+      }
+    }
+    void hydrateOutcomes()
+    return () => {
+      cancelled = true
+    }
+  }, [allCases, loadDetail])
+
+  const counts = useMemo(() => {
+    const next: Record<StatusFilter, number> = { ALL: allCases.length, PLANNED: 0, HOLDING: 0, CLOSED: 0, CANCELLED: 0 }
+    allCases.forEach((tradeCase) => { next[tradeCase.status] += 1 })
+    return next
+  }, [allCases])
+
+  const selectCase = useCallback((caseId: string) => {
+    setSelectedId(caseId)
+    if (window.matchMedia('(max-width: 1279px)').matches) {
+      window.requestAnimationFrame(() => detailPaneRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+    }
+  }, [])
+
+  const columns = useMemo<Column<TradeCase>[]>(() => [
+    {
+      key: 'identity',
+      title: '股票 / 状态',
+      width: '170px',
+      render: (tradeCase) => (
+        <button
+          type="button"
+          aria-pressed={tradeCase.caseId === selectedId}
+          className="group min-w-[145px] rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-brand-300"
+          onClick={(event) => {
+            event.stopPropagation()
+            selectCase(tradeCase.caseId)
+          }}
+        >
+          <span className="block font-semibold text-ink-900 group-hover:text-brand-600">{tradeCase.symbol}</span>
+          <span className="mt-0.5 block max-w-[145px] truncate text-xs text-ink-500">{tradeCase.companyName}</span>
+          <StatusTag status={tradeCase.status} className="mt-1.5" />
+        </button>
+      )
+    },
+    {
+      key: 'source',
+      title: '来源',
+      width: '130px',
+      render: (tradeCase) => (
+        <div className="min-w-[110px]">
+          <div className="font-medium text-ink-900">{tradeCase.sourceModule}</div>
+          <div className="mt-1 text-xs text-ink-400">{tradeCase.ruleVersion}</div>
+        </div>
+      )
+    },
+    {
+      key: 'recommendation',
+      title: '推荐',
+      width: '170px',
+      render: (tradeCase) => (
+        <div className="min-w-[150px]">
+          <div className="font-medium text-ink-900">{tradeCase.recommendationAction}</div>
+          <div className="mt-1 text-xs text-ink-500">{formatDateTime(tradeCase.recommendedAt)}</div>
+          <div className="mt-1 tabular text-xs text-ink-500">{formatMoney(tradeCase.recommendedPrice)}</div>
+        </div>
+      )
+    },
+    { key: 'position', title: '持仓', align: 'right', render: (tradeCase) => <NumberCell value={tradeCase.ledger.positionQuantity} suffix=" 股" /> },
+    { key: 'cost', title: '加权成本', align: 'right', render: (tradeCase) => <NumberCell value={tradeCase.ledger.averageCost} /> },
+    { key: 'latest', title: '最新价', align: 'right', render: (tradeCase) => <NumberCell value={tradeCase.ledger.latestPrice} /> },
+    {
+      key: 'profit',
+      title: '总毛收益',
+      align: 'right',
+      render: (tradeCase) => <ProfitText value={tradeCase.ledger.totalProfit} />
+    },
+    ...(['T1', 'T5', 'T20'] as const).map<Column<TradeCase>>((horizon) => ({
+      key: horizon,
+      title: horizon,
+      align: 'right',
+      render: (tradeCase) => <OutcomeCell outcome={getRecommendationOutcome(tradeCase, horizon)} />
+    }))
+  ], [selectCase, selectedId])
+
+  const refreshList = async () => {
+    setListError('')
+    try {
+      await refreshCases()
+      toast.success('复盘列表已刷新')
+    } catch (error) {
+      const message = extractErrorMessage(error)
+      setListError(message)
+      toast.error(`复盘列表刷新失败：${message}`)
+    }
+  }
+
+  const runCaseAction = async (kind: 'refresh' | 'cancel') => {
+    if (!selected) return
+    setAction(kind)
+    setDetailError('')
+    try {
+      const response = kind === 'refresh'
+        ? await refreshTradeCase(selected.caseId)
+        : await cancelTradeCase(selected.caseId)
+      upsertCase(response)
+      toast.success(kind === 'refresh' ? '后续表现已刷新' : '复盘计划已取消')
+    } catch (error) {
+      const message = extractErrorMessage(error)
+      setDetailError(message)
+      toast.error(`${kind === 'refresh' ? '刷新' : '取消'}失败：${message}`)
+    } finally {
+      setAction(null)
+    }
+  }
+
+  const removeFill = async (fill: TradeFillView) => {
+    if (!selected || !window.confirm(`确认删除这笔${fill.side === 'BUY' ? '买入' : '卖出'} ${fill.quantity} 股的成交记录？`)) return
+    setAction('delete')
+    setDetailError('')
+    try {
+      const response = await deleteTradeFill(selected.caseId, fill.fillId)
+      upsertCase(response)
+      toast.success('成交记录已删除')
+    } catch (error) {
+      const message = extractErrorMessage(error)
+      setDetailError(message)
+      toast.error(`删除失败：${message}`)
+    } finally {
+      setAction(null)
+    }
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      <header className="border-b border-line pb-4">
+        <div className="eyebrow">TRADE REVIEW</div>
+        <div className="mt-1 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold text-ink-900">交易复盘</h1>
+            <p className="mt-1 text-sm text-ink-500">连接推荐现场、真实分批成交与后续策略表现。</p>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            loading={loading}
+            icon={<RefreshCw className="h-4 w-4" />}
+            onClick={() => void refreshList()}
+          >
+            刷新列表
+          </Button>
+          {loaded && loading ? <span role="status" className="sr-only">复盘列表刷新中</span> : null}
+        </div>
+      </header>
+
+      <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(380px,460px)]">
+        <section aria-labelledby="trade-cases-heading" className="min-w-0 border-y border-line">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft py-3">
+            <h2 id="trade-cases-heading" className="section-title">复盘单</h2>
+            <div className="trade-review-tabs" role="group" aria-label="按复盘状态筛选">
+              {statusTabs.map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  aria-pressed={filter === tab.value}
+                  className={filter === tab.value ? 'trade-review-tab trade-review-tab-active' : 'trade-review-tab'}
+                  onClick={() => setFilter(tab.value)}
+                >
+                  {tab.label} <span className="tabular text-xs">{counts[tab.value]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          {listError ? <div role="alert" className="border-b border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{listError}</div> : null}
+          {!loaded && loading ? (
+            <div role="status"><Loader text="复盘单加载中" className="py-14" /></div>
+          ) : (
+            <DataTable
+              columns={columns}
+              data={filteredCases}
+              rowKey={(tradeCase) => tradeCase.caseId}
+              isSelected={(tradeCase) => tradeCase.caseId === selectedId}
+              onRowClick={(tradeCase) => selectCase(tradeCase.caseId)}
+              emptyText={filter === 'ALL' ? '暂无复盘单' : '当前状态下暂无复盘单'}
+            />
+          )}
+        </section>
+        <aside ref={detailPaneRef} aria-labelledby="trade-case-detail-heading" className="min-w-0 scroll-mt-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:self-start xl:overflow-y-auto">
+          {!selected ? (
+            <Empty text="选择一张复盘单查看详情" />
+          ) : detailLoadingId === selected.caseId && !isTradeCaseDetail(selected) ? (
+            <div role="status"><Loader text="详情加载中" className="py-12" /></div>
+          ) : isTradeCaseDetail(selected) ? (
+            <CaseDetail
+              tradeCase={selected}
+              error={detailError}
+              action={action}
+              onAddFill={(returnFocus) => setFillModal({ returnFocus })}
+              onEditFill={(fill, returnFocus) => setFillModal({ fill, returnFocus })}
+              onDeleteFill={(fill) => void removeFill(fill)}
+              onRefresh={() => void runCaseAction('refresh')}
+              onCancel={() => void runCaseAction('cancel')}
+            />
+          ) : (
+            <div role="alert" className="border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+              {detailError || '复盘详情暂时不可用'}
+            </div>
+          )}
+        </aside>
+      </div>
+
+      {fillModal && selected && isTradeCaseDetail(selected) ? (
+        <FillModal
+          tradeCase={selected}
+          fill={fillModal.fill}
+          returnFocus={fillModal.returnFocus}
+          onClose={() => setFillModal(null)}
+          onSaved={(response) => {
+            upsertCase(response)
+            setFillModal(null)
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function CaseDetail({
+  tradeCase,
+  error,
+  action,
+  onAddFill,
+  onEditFill,
+  onDeleteFill,
+  onRefresh,
+  onCancel
+}: {
+  tradeCase: TradeCaseDetail
+  error: string
+  action: 'refresh' | 'cancel' | 'delete' | null
+  onAddFill: (returnFocus: HTMLElement | null) => void
+  onEditFill: (fill: TradeFillView, returnFocus: HTMLElement | null) => void
+  onDeleteFill: (fill: TradeFillView) => void
+  onRefresh: () => void
+  onCancel: () => void
+}) {
+  const recommendationOutcomes = ['T1', 'T5', 'T20'].map((horizon) => getRecommendationOutcome(tradeCase, horizon))
+  const executionOutcomes = tradeCase.outcomes.filter((outcome) => outcome.baselineType === 'EXECUTION')
+  const firstBuy = [...tradeCase.fills]
+    .filter((fill) => fill.side === 'BUY')
+    .sort((left, right) => Date.parse(left.executedAt) - Date.parse(right.executedAt))[0]
+  const executionDeviation = firstBuy && tradeCase.recommendedPrice > 0
+    ? ((firstBuy.price / tradeCase.recommendedPrice) - 1) * 100
+    : null
+
+  return (
+    <div className="border-y border-line bg-white">
+      <div className="border-b border-line px-4 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 id="trade-case-detail-heading" className="text-lg font-semibold text-ink-900">{tradeCase.symbol} {tradeCase.companyName}</h2>
+              <StatusTag status={tradeCase.status} />
+            </div>
+            <p className="mt-1 break-words text-xs text-ink-500">{tradeCase.sourceModule} · {tradeCase.ruleVersion}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <IconButton label="刷新后续表现" loading={action === 'refresh'} onClick={onRefresh} icon={<RotateCcw className="h-4 w-4" />} />
+            {tradeCase.status === 'PLANNED' ? (
+              <Button type="button" variant="ghost" loading={action === 'cancel'} onClick={onCancel}>取消计划</Button>
+            ) : null}
+          </div>
+        </div>
+        {error ? <div role="alert" className="mt-3 border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
+      </div>
+
+      <DetailSection title="推荐现场">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 xl:grid-cols-2">
+          <Metric label="推荐动作" value={tradeCase.recommendationAction} />
+          <Metric label="推荐时间" value={formatDateTime(tradeCase.recommendedAt)} />
+          <Metric label="推荐价" value={formatMoney(tradeCase.recommendedPrice)} />
+          <Metric label="推荐分" value={tradeCase.recommendationScore === null ? '待补充' : tradeCase.recommendationScore.toFixed(1)} />
+        </div>
+        <details className="mt-4 border-t border-line-soft pt-3">
+          <summary className="cursor-pointer text-sm font-medium text-ink-700 outline-none focus-visible:ring-2 focus-visible:ring-brand-300">查看推荐证据 JSON</summary>
+          <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words bg-line-soft/60 p-3 text-xs leading-relaxed text-ink-600">{JSON.stringify(tradeCase.recommendationPayload, null, 2)}</pre>
+        </details>
+      </DetailSection>
+
+      <DetailSection title="仓位与毛收益">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+          <Metric label="当前持仓" value={`${tradeCase.ledger.positionQuantity} 股`} />
+          <Metric label="加权成本" value={formatMoney(tradeCase.ledger.averageCost)} />
+          <Metric label="最新价" value={formatMoney(tradeCase.ledger.latestPrice)} />
+          <Metric label="执行偏差" value={<span className={changeClass(executionDeviation)}>{formatSignedPercent(executionDeviation)}</span>} />
+          <Metric label="已实现" value={<ProfitText value={tradeCase.ledger.realizedProfit} />} />
+          <Metric label="浮动收益" value={<ProfitText value={tradeCase.ledger.unrealizedProfit} />} />
+          <Metric label="累计毛收益" value={<ProfitText value={tradeCase.ledger.totalProfit} />} />
+        </div>
+        <p className="mt-3 border-l-2 border-amber-400 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">收益未计佣金、印花税、分红和送转股</p>
+      </DetailSection>
+
+      <DetailSection title="策略表现">
+        <div className="grid grid-cols-1 divide-y divide-line-soft border-y border-line-soft">
+          {recommendationOutcomes.map((outcome, index) => (
+            <OutcomeRow key={outcome?.horizon ?? `missing-${index}`} horizon={['T1', 'T5', 'T20'][index]} outcome={outcome} />
+          ))}
+        </div>
+        {executionOutcomes.length ? (
+          <div className="mt-4">
+            <h4 className="text-xs font-semibold text-ink-600">执行后表现</h4>
+            <div className="mt-2 grid grid-cols-1 divide-y divide-line-soft border-y border-line-soft">
+              {executionOutcomes.map((outcome) => <OutcomeRow key={`${outcome.baselineType}-${outcome.horizon}`} horizon={outcome.horizon} outcome={outcome} />)}
+            </div>
+          </div>
+        ) : null}
+        {tradeCase.outcomeWarnings.length ? (
+          <div role="alert" className="mt-3 border-l-2 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {tradeCase.outcomeWarnings.map((warning) => <p key={warning}>{warning}</p>)}
+          </div>
+        ) : null}
+      </DetailSection>
+
+      <DetailSection
+        title="成交时间线"
+        action={(
+          <Button
+            type="button"
+            variant="primary"
+            icon={<Plus className="h-4 w-4" />}
+            onClick={(event) => onAddFill(event.currentTarget)}
+            disabled={tradeCase.status === 'CANCELLED'}
+          >
+            新增成交
+          </Button>
+        )}
+      >
+        {tradeCase.fills.length ? (
+          <ol className="relative ml-2 border-l border-line">
+            {[...tradeCase.fills]
+              .sort((left, right) => Date.parse(left.executedAt) - Date.parse(right.executedAt))
+              .map((fill) => (
+                <li key={fill.fillId} className="relative pb-4 pl-5 last:pb-0">
+                  <span className={`absolute -left-1.5 top-1.5 h-3 w-3 rounded-full border-2 border-white ${fill.side === 'BUY' ? 'bg-red-500' : 'bg-emerald-500'}`} />
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Tag tone={fill.side === 'BUY' ? 'danger' : 'success'}>{fill.side}</Tag>
+                        <span className="tabular text-sm font-semibold text-ink-900">{formatMoney(fill.price)} × {fill.quantity} 股</span>
+                      </div>
+                      <div className="mt-1 text-xs text-ink-500">{formatDateTime(fill.executedAt)}</div>
+                    </div>
+                    <div className="flex gap-1">
+                      <IconButton label="编辑成交" onClick={(event) => onEditFill(fill, event.currentTarget)} icon={<Edit3 className="h-4 w-4" />} />
+                      <IconButton label="删除成交" disabled={action === 'delete'} danger onClick={() => onDeleteFill(fill)} icon={<Trash2 className="h-4 w-4" />} />
+                    </div>
+                  </div>
+                </li>
+              ))}
+          </ol>
+        ) : (
+          <p className="text-sm text-ink-500">尚未录入真实成交。</p>
+        )}
+      </DetailSection>
+    </div>
+  )
+}
+
+function FillModal({ tradeCase, fill, returnFocus, onClose, onSaved }: {
+  tradeCase: TradeCaseDetail
+  fill?: TradeFillView
+  returnFocus: HTMLElement | null
+  onClose: () => void
+  onSaved: (tradeCase: TradeCaseDetail) => void
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const firstFieldRef = useRef<HTMLButtonElement>(null)
+  const [side, setSide] = useState<TradeSide>(fill?.side ?? 'BUY')
+  const [executedAt, setExecutedAt] = useState(() => toDateTimeLocal(fill?.executedAt ?? new Date().toISOString()))
+  const [price, setPrice] = useState(fill ? String(fill.price) : '')
+  const [quantity, setQuantity] = useState(fill ? String(fill.quantity) : '100')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    firstFieldRef.current?.focus()
+    return () => {
+      document.body.style.overflow = previousOverflow
+      returnFocus?.focus()
+    }
+  }, [returnFocus])
+
+  const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape' && !saving) {
+      event.preventDefault()
+      onClose()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+    if (!focusable?.length) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    setError('')
+    const numericPrice = Number(price)
+    const numericQuantity = Number(quantity)
+    const timestamp = new Date(executedAt)
+    if (!executedAt || Number.isNaN(timestamp.getTime())) {
+      setError('请输入有效的成交时间')
+      return
+    }
+    if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+      setError('成交价必须大于 0')
+      return
+    }
+    if (!Number.isInteger(numericQuantity) || numericQuantity <= 0 || numericQuantity % 100 !== 0) {
+      setError('成交股数必须为 100 的正整数倍')
+      return
+    }
+    const request: UpsertTradeFillRequest = {
+      side,
+      executedAt: timestamp.toISOString(),
+      price: numericPrice,
+      quantity: numericQuantity
+    }
+    setSaving(true)
+    try {
+      const response = fill
+        ? await updateTradeFill(tradeCase.caseId, fill.fillId, request)
+        : await addTradeFill(tradeCase.caseId, request)
+      onSaved(response)
+      toast.success(fill ? '成交记录已更新' : '成交记录已添加')
+    } catch (submitError) {
+      const message = extractErrorMessage(submitError)
+      setError(message)
+      toast.error(`${fill ? '更新' : '添加'}失败：${message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-ink-900/40 p-0 sm:items-center sm:p-4" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !saving) onClose()
+    }}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="fill-dialog-title"
+        className="max-h-[92dvh] w-full overflow-y-auto rounded-t-xl border border-line bg-white shadow-float sm:max-w-lg sm:rounded-xl"
+        onKeyDown={handleDialogKeyDown}
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-white px-4 py-3">
+          <div>
+            <h2 id="fill-dialog-title" className="text-base font-semibold text-ink-900">{fill ? '编辑成交' : '新增成交'}</h2>
+            <p className="mt-0.5 text-xs text-ink-500">{tradeCase.symbol} {tradeCase.companyName}</p>
+          </div>
+          <IconButton label="关闭弹窗" disabled={saving} onClick={onClose} icon={<X className="h-4 w-4" />} />
+        </div>
+        <form onSubmit={(event) => void submit(event)} className="space-y-4 px-4 py-5">
+          <fieldset>
+            <legend className="field-label">成交方向</legend>
+            <div className="grid grid-cols-2 rounded-lg border border-line p-1">
+              {(['BUY', 'SELL'] as TradeSide[]).map((value) => (
+                <button
+                  key={value}
+                  ref={value === 'BUY' ? firstFieldRef : undefined}
+                  type="button"
+                  aria-pressed={side === value}
+                  className={`rounded-md px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${side === value ? (value === 'BUY' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700') : 'text-ink-500 hover:bg-line-soft'}`}
+                  onClick={() => setSide(value)}
+                >
+                  {value === 'BUY' ? '买入 BUY' : '卖出 SELL'}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <label className="block">
+            <span className="field-label">成交时间</span>
+            <input className="field" type="datetime-local" required value={executedAt} onChange={(event) => setExecutedAt(event.target.value)} />
+          </label>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="block">
+              <span className="field-label">每股成交价</span>
+              <input className="field tabular" type="number" min="0.01" step="0.01" inputMode="decimal" required value={price} onChange={(event) => setPrice(event.target.value)} />
+            </label>
+            <label className="block">
+              <span className="field-label">成交股数</span>
+              <input className="field tabular" type="number" min="100" step="100" inputMode="numeric" required value={quantity} onChange={(event) => setQuantity(event.target.value)} />
+            </label>
+          </div>
+          {error ? <div role="alert" className="border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
+          <div className="flex flex-col-reverse gap-2 border-t border-line-soft pt-4 sm:flex-row sm:justify-end">
+            <Button type="button" variant="ghost" disabled={saving} onClick={onClose}>取消</Button>
+            <Button type="submit" variant="primary" loading={saving}>{fill ? '保存修改' : '添加成交'}</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function DetailSection({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="border-b border-line px-4 py-4 last:border-b-0">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
+        {action}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function Metric({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-xs text-ink-400">{label}</div>
+      <div className="mt-1 break-words tabular text-sm font-semibold text-ink-900">{value}</div>
+    </div>
+  )
+}
+
+function OutcomeRow({ horizon, outcome }: { horizon: string; outcome?: TradeOutcomeView }) {
+  const meta = outcome ? (outcomeMeta[outcome.status] ?? { label: outcome.status, tone: 'neutral' as const }) : null
+  return (
+    <div className="grid grid-cols-[48px_minmax(0,1fr)] gap-3 py-3">
+      <div className="tabular text-sm font-semibold text-ink-900">{horizon}</div>
+      {outcome ? (
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Tag tone={meta?.tone}>{meta?.label}</Tag>
+            <span className={`tabular text-sm font-semibold ${changeClass(outcome.returnPct)}`}>{formatSignedPercent(outcome.returnPct)}</span>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-ink-500">
+            <span>评估价 {formatNumber(outcome.evaluationPrice)}</span>
+            <span>日期 {outcome.evaluationDate ?? '—'}</span>
+            <span>区间高点 <span className={changeClass(outcome.maxRunupPct)}>{formatSignedPercent(outcome.maxRunupPct)}</span></span>
+            <span>区间回撤 <span className={changeClass(outcome.maxDrawdownPct)}>{formatSignedPercent(outcome.maxDrawdownPct)}</span></span>
+          </div>
+          <div className="mt-1 break-words text-xs text-ink-400">来源 {outcome.sourceName ?? '待补充'} · 行情时间 {formatDateTime(outcome.marketTimestamp)}</div>
+        </div>
+      ) : (
+        <div className="text-sm text-ink-400">待载入</div>
+      )}
+    </div>
+  )
+}
+
+function OutcomeCell({ outcome }: { outcome?: TradeOutcomeView }) {
+  if (!outcome) return <span className="whitespace-nowrap text-xs text-ink-400">待载入</span>
+  return <span className={`whitespace-nowrap tabular font-medium ${changeClass(outcome.returnPct)}`}>{formatSignedPercent(outcome.returnPct)}</span>
+}
+
+function NumberCell({ value, suffix = '' }: { value: number | null; suffix?: string }) {
+  return <span className="whitespace-nowrap tabular font-medium text-ink-900">{value === null ? '待补充' : `${formatNumber(value)}${suffix}`}</span>
+}
+
+function ProfitText({ value }: { value: number | null }) {
+  if (value === null) return <span className="text-ink-400">待补充</span>
+  return <span className={`whitespace-nowrap tabular font-semibold ${changeClass(value)}`}>{value > 0 ? '+' : ''}{formatNumber(value)} 元</span>
+}
+
+function StatusTag({ status, className = '' }: { status: TradeCaseStatus; className?: string }) {
+  const meta = statusMeta[status]
+  return <Tag tone={meta.tone} className={className}>{meta.label}</Tag>
+}
+
+function IconButton({ label, icon, danger = false, loading = false, ...props }: {
+  label: string
+  icon: ReactNode
+  danger?: boolean
+  loading?: boolean
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'>) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      {...props}
+      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-transparent outline-none transition focus-visible:ring-2 focus-visible:ring-brand-300 disabled:cursor-not-allowed disabled:opacity-50 ${danger ? 'text-red-600 hover:bg-red-50' : 'text-ink-500 hover:bg-line-soft hover:text-ink-900'} ${props.className ?? ''}`}
+    >
+      {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : icon}
+    </button>
+  )
+}
+
+function isTradeCaseDetail(tradeCase: TradeCase | undefined): tradeCase is TradeCaseDetail {
+  return Boolean(tradeCase && 'fills' in tradeCase)
+}
+
+function getRecommendationOutcome(tradeCase: TradeCase, horizon: string) {
+  if (!isTradeCaseDetail(tradeCase)) return undefined
+  return tradeCase.outcomes.find((outcome) => outcome.baselineType === 'RECOMMENDATION' && outcome.horizon === horizon)
+}
+
+function formatMoney(value: number | null | undefined) {
+  return value === null || value === undefined ? '待补充' : `${formatNumber(value)} 元`
+}
+
+function toDateTimeLocal(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const offset = date.getTimezoneOffset() * 60_000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
+}
