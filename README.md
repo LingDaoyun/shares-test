@@ -18,7 +18,7 @@ AI：可配置 LLM Provider，先支持 OpenAI 兼容协议，DeepSeek/OpenAI/Mo
 
 ## 本地启动
 
-命令行直接启动时默认使用 H2 内存库，方便开发测试。Docker 常驻模式使用 `/data/aistock` 文件库和命名卷，容器重启后保留特别关注、K 线、分析与决策历史。
+命令行直接启动时默认使用 H2 内存库，方便开发测试。Docker 常驻模式使用 `/data/aistock` 文件库和命名卷，容器重启后保留特别关注、K 线、分析、决策与交易复盘历史。
 
 ```bash
 mvn -pl apps/api spring-boot:run
@@ -80,14 +80,20 @@ ai-stock-api  -> http://127.0.0.1:19080
 ai-stock-web  -> http://127.0.0.1:5176
 ```
 
-前端使用 HashRouter，常用页面地址：
+前端使用 HashRouter，当前页面地址：
 
 ```text
 全市场扫描 -> http://127.0.0.1:5176/#/market
 短线右侧   -> http://127.0.0.1:5176/#/short-term
+回测兼容入口 -> http://127.0.0.1:5176/#/backtest（重定向至短线右侧）
+技术跟踪   -> http://127.0.0.1:5176/#/tech
 错杀估值   -> http://127.0.0.1:5176/#/mispricing
+周期试错   -> http://127.0.0.1:5176/#/cycle
 每日信号   -> http://127.0.0.1:5176/#/signals
 特别关注   -> http://127.0.0.1:5176/#/watchlist
+交易复盘   -> http://127.0.0.1:5176/#/trade-review
+规则管理   -> http://127.0.0.1:5176/#/rules
+运行设置   -> http://127.0.0.1:5176/#/settings
 ```
 
 后端容器默认连接宿主机已有 Nacos：
@@ -139,6 +145,15 @@ POST /api/watchlist
 DELETE /api/watchlist/{symbol}
 POST /api/watchlist/{symbol}/analyze
 GET  /api/watchlist/{symbol}/history
+GET  /api/trade-cases?status=&symbol=
+POST /api/trade-cases
+GET  /api/trade-cases/{caseId}
+POST /api/trade-cases/{caseId}/fills
+PUT  /api/trade-cases/{caseId}/fills/{fillId}
+DELETE /api/trade-cases/{caseId}/fills/{fillId}
+POST /api/trade-cases/{caseId}/cancel
+POST /api/trade-cases/{caseId}/refresh
+GET  /api/strategy-feedback
 GET  /api/ai/trend-prompts/sample
 POST /api/ai/trend-prompts/preview
 POST /api/ai/trend-analysis
@@ -148,9 +163,19 @@ GET  /actuator/health
 
 本地 API 端口默认是 `19080`，避免和常见本地服务的 `8080` 冲突。
 
+## 推荐复盘与策略反馈
+
+在短线右侧、技术跟踪、错杀估值、周期试错和每日信号的推荐卡上，点击“加入复盘”即可创建复盘案例；缺少推荐价格或推荐时间时不会创建。相同推荐会幂等地返回同一案例，不会重复入库。复盘操作、成交录入和结果查看在独立页面 `#/trade-review` 完成，不改变推荐排序、全 A 股票池或特别关注列表。
+
+创建时会冻结推荐快照：股票、公司、来源模块、推荐动作、规则版本、推荐价格、推荐时间及原始 payload；评分和决策 ID 可选。一个案例可以录入多笔 `BUY`/`SELL`，支持分批成交。每笔成交必填方向、成交时间、成交价格和正整数股数；买入会移动加权平均成本，卖出超过当前持仓会被拒绝。账本显示已实现、未实现和累计**毛收益**，未计佣金、印花税、分红和送转股，不能作为净盈亏使用。
+
+复盘页面同时保留推荐基线和实际执行基线：推荐侧为 `CURRENT`、`T1`、`T5`、`T20`，执行侧为 `CURRENT` 或平仓后的 `CLOSED`。`T1/T5/T20` 按推荐日之后的实际交易日行计算，不以自然日代替；未成熟显示 `PENDING`，数据不可用显示 `UNAVAILABLE`，不会伪造收益。每条结果展示数据源、行情时间和计算时间；可通过“刷新”或 `POST /api/trade-cases/{caseId}/refresh` 手动刷新，系统也会在每个工作日 `Asia/Shanghai 18:10` 自动刷新未完成案例。
+
+策略反馈只按“来源模块 + 规则版本”聚合已成熟的推荐 `T20` 样本：同一队列达到 5 个样本才允许注入 Agent 提示词，达到 20 个样本才计算可靠性调整，且调整被限制在 `-5..+5`。反馈是历史证据，不会自动写入 Nacos，不会改变确定性共识分，也不会绕过硬风控规则。
+
 ## 历史数据
 
-Docker 默认把数据保存到 `shares-test_api-data` 卷。三类决策依据分别落在：
+Docker 默认把数据保存到 `shares-test_api-data` 卷。开发和单机常驻使用 H2 文件库；生产或联调可通过 `SPRING_PROFILES_ACTIVE=prod` 和 `JDBC_DATABASE_*` 切换至 PostgreSQL，两者使用同一份业务 schema。三类决策依据分别落在：
 
 ```text
 market_kline_history          K 线观察版本，同一交易日数据修订会保留新版本
