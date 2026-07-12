@@ -214,12 +214,15 @@ public class UniversalAshareScreener {
         if (realtime == null) {
             return base;
         }
+        EastMoneyQuote priceSource = firstPositive(realtime.latestPrice()) != null
+                ? realtime
+                : firstPositive(base.latestPrice()) != null ? base : null;
         return new EastMoneyQuote(
                 firstText(base.symbol(), realtime.symbol()),
                 firstText(realtime.name(), base.name()),
                 firstText(base.market(), realtime.market()),
                 firstText(base.industry(), realtime.industry()),
-                firstPositive(realtime.latestPrice(), base.latestPrice()),
+                priceSource == null ? null : priceSource.latestPrice(),
                 firstPresent(realtime.changePercent(), base.changePercent()),
                 firstPresent(realtime.turnoverRate(), base.turnoverRate()),
                 firstPresent(realtime.volume(), base.volume()),
@@ -227,11 +230,11 @@ public class UniversalAshareScreener {
                 firstNonNull(base.peRatio(), realtime.peRatio()),
                 firstNonNull(base.pbRatio(), realtime.pbRatio()),
                 firstNonNull(base.peTtm(), base.peRatio(), realtime.peTtm(), realtime.peRatio()),
-                firstText(base.sourceName(), realtime.sourceName()),
-                firstText(base.quoteUrl(), realtime.quoteUrl()),
-                realtime.fetchedAt() == null ? base.fetchedAt() : realtime.fetchedAt(),
-                realtime.tradeDate() == null ? base.tradeDate() : realtime.tradeDate(),
-                realtime.marketTimestamp() == null ? base.marketTimestamp() : realtime.marketTimestamp()
+                priceSource == null ? firstText(base.sourceName(), realtime.sourceName()) : priceSource.sourceName(),
+                priceSource == null ? firstText(base.quoteUrl(), realtime.quoteUrl()) : priceSource.quoteUrl(),
+                priceSource == null ? null : priceSource.fetchedAt(),
+                priceSource == null ? null : priceSource.tradeDate(),
+                priceSource == null ? null : priceSource.marketTimestamp()
         );
     }
 
@@ -307,9 +310,11 @@ public class UniversalAshareScreener {
                 candidate.peTtm(),
                 candidate.pbRatio(),
                 candidate.peTtm(),
-                "统一全 A 候选漏斗",
-                null,
-                Instant.now()
+                candidate.sourceName(),
+                candidate.quoteUrl(),
+                candidate.fetchedAt(),
+                candidate.tradeDate(),
+                candidate.marketTimestamp()
         );
     }
 
@@ -403,6 +408,11 @@ public class UniversalAshareScreener {
                 quote.market(),
                 quote.industry(),
                 quote.latestPrice(),
+                quote.sourceName(),
+                quote.quoteUrl(),
+                quote.fetchedAt(),
+                quote.tradeDate(),
+                quote.marketTimestamp(),
                 quote.changePercent(),
                 pe,
                 pb,
@@ -601,6 +611,11 @@ public class UniversalAshareScreener {
                 candidate.market(),
                 candidate.industry(),
                 candidate.latestPrice(),
+                candidate.sourceName(),
+                candidate.quoteUrl(),
+                candidate.fetchedAt(),
+                candidate.tradeDate(),
+                candidate.marketTimestamp(),
                 candidate.changePercent(),
                 candidate.peTtm(),
                 candidate.pbRatio(),

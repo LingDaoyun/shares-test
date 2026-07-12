@@ -157,16 +157,21 @@ class MispricingServiceTest {
     @Test
     void shouldUseTencentPerSharePriceWhenEastMoneyReturnsInvalidTotalAmountAsPrice() {
         eastMoneyClient.quotes = List.of(
-                quote("600036", "招商银行", "5.90", "0.80", "-0.50", "653770000")
+                withPriceAndTimestamp(
+                        quote("600036", "招商银行", "5.90", "0.80", "-0.50", "653770000"),
+                        "653770000", "2026-07-01T07:31:00Z")
         );
         eastMoneyClient.tencentQuotes = List.of(
-                quote("600036", "招商银行", "5.90", "0.80", "-0.50", "36.83")
+                withPriceAndTimestamp(
+                        quote("600036", "招商银行", "5.90", "0.80", "-0.50", "36.83"),
+                        "36.83", "2026-07-01T07:30:00Z")
         );
 
         MispricingReport report = service.report(3, new BigDecimal("82"), null, null, null);
 
         MispricedAsset cmb = find(report, "600036");
         assertThat(cmb.latestPrice()).isEqualByComparingTo("36.83");
+        assertThat(cmb.marketTimestamp()).isEqualTo(Instant.parse("2026-07-01T07:30:00Z"));
         assertThat(report.quoteNote()).contains("不注入任何静态股票白名单");
     }
 
@@ -200,7 +205,24 @@ class MispricingServiceTest {
         MispricedAsset asset = find(report, "601998");
         assertThat(report.quoteNote()).contains("统一全 A 候选漏斗");
         assertThat(asset.assetGroup()).isEqualTo("低估金融");
+        assertThat(asset.marketTimestamp()).isEqualTo(Instant.parse("2026-07-01T07:30:00Z"));
         assertThat(asset.strengths()).anySatisfy(strength -> assertThat(strength).contains("全 A 股动态初筛"));
+    }
+
+    @Test
+    void shouldKeepUniversalPriceSourceMetadataInMispricingReview() {
+        EastMoneyQuote cycleCandidate = quoteWithIndustry(
+                "002714", "周期样本", "生猪养殖", "12.00", "1.20", "-0.30");
+        eastMoneyClient.marketQuotes = List.of(cycleCandidate);
+        eastMoneyClient.tencentQuotes = List.of(cycleCandidate);
+
+        MispricingReport report = service.report(5, new BigDecimal("82"), null, null, null, 100);
+
+        MispricedAsset asset = find(report, "002714");
+        assertThat(asset.review().sources()).singleElement().satisfies(source -> {
+            assertThat(source.title()).isEqualTo("测试行情与估值");
+            assertThat(source.url()).isEqualTo("https://quote.example.com/002714");
+        });
     }
 
     private MispricedAsset find(MispricingReport report, String symbol) {
@@ -242,8 +264,23 @@ class MispricingServiceTest {
                 new BigDecimal(pe),
                 "测试行情",
                 "https://quote.example.com/" + symbol,
-                Instant.parse("2026-07-01T00:00:00Z")
+                Instant.parse("2026-07-01T07:30:01Z"),
+                LocalDate.parse("2026-07-01"),
+                Instant.parse("2026-07-01T07:30:00Z")
         );
+    }
+
+    private EastMoneyQuote withPriceAndTimestamp(
+            EastMoneyQuote quote,
+            String latestPrice,
+            String marketTimestamp
+    ) {
+        Instant timestamp = Instant.parse(marketTimestamp);
+        return new EastMoneyQuote(
+                quote.symbol(), quote.name(), quote.market(), quote.industry(), new BigDecimal(latestPrice),
+                quote.changePercent(), quote.turnoverRate(), quote.volume(), quote.amount(), quote.peRatio(),
+                quote.pbRatio(), quote.peTtm(), quote.sourceName(), quote.quoteUrl(), timestamp.plusSeconds(1),
+                timestamp.atZone(java.time.ZoneId.of("Asia/Shanghai")).toLocalDate(), timestamp);
     }
 
     private RecommendationEvidenceBundle completeBundle(String symbol) {

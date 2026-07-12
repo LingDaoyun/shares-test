@@ -6,6 +6,7 @@ import com.aistock.research.quality.RecommendationEvidenceBundle;
 import com.aistock.research.valuation.ValuationContext;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 public record MarketScanCandidate(
@@ -15,6 +16,7 @@ public record MarketScanCandidate(
         String market,
         String industry,
         BigDecimal latestPrice,
+        Instant marketTimestamp,
         BigDecimal changePercent,
         BigDecimal peTtm,
         BigDecimal pbRatio,

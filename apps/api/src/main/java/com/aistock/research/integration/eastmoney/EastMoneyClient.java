@@ -634,35 +634,39 @@ public class EastMoneyClient {
             tencent = fetchTencentDailyKLines(symbol, begin, end);
             if (tencent.complete() && !tencent.rows().isEmpty()) {
                 recordKlineHistory(tencent.rows(), "腾讯前复权日线");
-                return new EastMoneyKLineSeries(tencent.rows(), "TENCENT_QFQ_DAILY", true, null);
+                return new EastMoneyKLineSeries(
+                        tencent.rows(), "TENCENT_QFQ_DAILY", true, tencent.detail());
             }
         } catch (Exception exception) {
             tencentFailure = exception;
         }
 
+        EastMoneyKLineFetch eastMoney = null;
         Exception eastMoneyFailure = null;
         try {
-            List<EastMoneyKLine> eastMoneyKLines = fetchEastMoneyDailyKLines(symbol, begin, end);
-            if (!eastMoneyKLines.isEmpty()) {
-                recordKlineHistory(eastMoneyKLines, "东方财富前复权日线");
-                return new EastMoneyKLineSeries(eastMoneyKLines, "EAST_MONEY_QFQ_DAILY", true, null);
-            }
-            if (tencent != null && tencent.complete()) {
+            eastMoney = fetchEastMoneyDailyKLines(symbol, begin, end);
+            if (eastMoney.complete() && !eastMoney.rows().isEmpty()) {
+                recordKlineHistory(eastMoney.rows(), "东方财富前复权日线");
                 return new EastMoneyKLineSeries(
-                        List.of(), "TENCENT_QFQ_DAILY+EAST_MONEY_QFQ_DAILY", true,
-                        "两个历史行情源均返回空数据");
+                        eastMoney.rows(), "EAST_MONEY_QFQ_DAILY", true, eastMoney.detail());
             }
         } catch (Exception exception) {
             eastMoneyFailure = exception;
         }
 
-        if (tencent != null && !tencent.complete()) {
-            String detail = "腾讯历史行情分片仅完成 " + tencent.successfulSlices() + "/"
-                    + tencent.requestedSlices() + "，拒绝使用部分数据";
-            if (eastMoneyFailure != null) {
-                detail += "；东方财富回退失败：" + rootMessage(eastMoneyFailure);
-            }
-            return new EastMoneyKLineSeries(tencent.rows(), "TENCENT_QFQ_DAILY_PARTIAL", false, detail);
+        if (tencent != null || eastMoney != null) {
+            List<EastMoneyKLine> partialRows = tencent != null && !tencent.rows().isEmpty()
+                    ? tencent.rows()
+                    : eastMoney == null ? List.of() : eastMoney.rows();
+            String tencentDetail = tencent == null
+                    ? "腾讯历史行情不可用"
+                    : "腾讯：" + tencent.detail();
+            String eastMoneyDetail = eastMoney == null
+                    ? "东方财富：" + (eastMoneyFailure == null ? "不可用" : rootMessage(eastMoneyFailure))
+                    : "东方财富：" + eastMoney.detail();
+            return new EastMoneyKLineSeries(
+                    partialRows, "HISTORICAL_KLINE_PARTIAL", false,
+                    tencentDetail + "；" + eastMoneyDetail + "；拒绝使用部分数据");
         }
 
         Throwable failure = eastMoneyFailure != null ? eastMoneyFailure : tencentFailure;
@@ -680,10 +684,10 @@ public class EastMoneyClient {
         }
     }
 
-    private List<EastMoneyKLine> fetchEastMoneyDailyKLines(String symbol, LocalDate begin, LocalDate end) {
+    private EastMoneyKLineFetch fetchEastMoneyDailyKLines(String symbol, LocalDate begin, LocalDate end) {
         String secId = secId(symbol);
         if (secId == null) {
-            return List.of();
+            return new EastMoneyKLineFetch(List.of(), false, "股票代码无法映射到行情市场");
         }
         String url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
                 + "?secid=" + secId
@@ -698,13 +702,27 @@ public class EastMoneyClient {
                     .path("data")
                     .path("klines");
             if (!klines.isArray() || klines.isEmpty()) {
-                return List.of();
+                return new EastMoneyKLineFetch(List.of(), false, "响应没有历史行情行");
             }
-            List<EastMoneyKLine> items = new ArrayList<>();
+            Map<LocalDate, EastMoneyKLine> byDate = new HashMap<>();
+            int parsedRows = 0;
+            int duplicateRows = 0;
             for (JsonNode item : klines) {
-                readKLine(symbol, item.asText()).ifPresent(items::add);
+                Optional<EastMoneyKLine> parsed = readKLine(symbol, item.asText());
+                if (parsed.isEmpty()) {
+                    continue;
+                }
+                parsedRows++;
+                if (byDate.put(parsed.get().tradeDate(), parsed.get()) != null) {
+                    duplicateRows++;
+                }
             }
-            return items;
+            List<EastMoneyKLine> items = byDate.values().stream()
+                    .sorted(java.util.Comparator.comparing(EastMoneyKLine::tradeDate))
+                    .toList();
+            KLineSeriesIntegrity.Result integrity = KLineSeriesIntegrity.assess(
+                    items, klines.size(), parsedRows, duplicateRows, 1, 1, begin, end);
+            return new EastMoneyKLineFetch(items, integrity.complete(), integrity.detail());
         } catch (Exception exception) {
             throw new IllegalStateException("东方财富历史 K 线数据获取失败：" + symbol, exception);
         }
@@ -769,11 +787,14 @@ public class EastMoneyClient {
     private TencentKLineFetch fetchTencentDailyKLines(String symbol, LocalDate begin, LocalDate end) {
         String code = tencentCode(symbol);
         if (code == null) {
-            return new TencentKLineFetch(List.of(), 0, 0, true);
+            return new TencentKLineFetch(List.of(), 0, 0, false, "股票代码无法映射到行情市场");
         }
         Map<LocalDate, EastMoneyKLine> byDate = new HashMap<>();
         int requestedSlices = 0;
         int successfulSlices = 0;
+        int responseRows = 0;
+        int parsedRows = 0;
+        int duplicateRows = 0;
         LocalDate cursor = begin;
         while (!cursor.isAfter(end)) {
             requestedSlices++;
@@ -796,32 +817,70 @@ public class EastMoneyClient {
                 if (!dailyRows.isArray() || dailyRows.isEmpty()) {
                     dailyRows = rows.path("day");
                 }
-                if (dailyRows.isArray()) {
+                if (dailyRows.isArray() && !dailyRows.isEmpty()) {
+                    int parsedInSlice = 0;
+                    int duplicateRowsInSlice = 0;
+                    Map<LocalDate, EastMoneyKLine> sliceByDate = new HashMap<>();
+                    responseRows += dailyRows.size();
                     for (JsonNode row : dailyRows) {
-                        readTencentKLine(symbol, row).ifPresent(kline -> byDate.put(kline.tradeDate(), kline));
+                        Optional<EastMoneyKLine> parsed = readTencentKLine(symbol, row);
+                        if (parsed.isEmpty()) {
+                            continue;
+                        }
+                        parsedRows++;
+                        parsedInSlice++;
+                        if (sliceByDate.put(parsed.get().tradeDate(), parsed.get()) != null) {
+                            duplicateRowsInSlice++;
+                        }
+                        if (byDate.put(parsed.get().tradeDate(), parsed.get()) != null) {
+                            duplicateRows++;
+                        }
+                    }
+                    List<EastMoneyKLine> sliceItems = sliceByDate.values().stream()
+                            .sorted(java.util.Comparator.comparing(EastMoneyKLine::tradeDate))
+                            .toList();
+                    KLineSeriesIntegrity.Result sliceIntegrity = KLineSeriesIntegrity.assess(
+                            sliceItems,
+                            dailyRows.size(),
+                            parsedInSlice,
+                            duplicateRowsInSlice,
+                            1,
+                            1,
+                            cursor,
+                            sliceEnd);
+                    if (sliceIntegrity.complete()) {
+                        successfulSlices++;
                     }
                 }
-                successfulSlices++;
             } catch (Exception exception) {
                 logger.warn("腾讯历史 K 线分片获取失败：{} {}~{}，原因：{}",
                         symbol, cursor, sliceEnd, rootMessage(exception));
             }
             cursor = sliceEnd.plusDays(1);
         }
+        List<EastMoneyKLine> items = byDate.values().stream()
+                .sorted(java.util.Comparator.comparing(EastMoneyKLine::tradeDate))
+                .toList();
+        KLineSeriesIntegrity.Result integrity = KLineSeriesIntegrity.assess(
+                items, responseRows, parsedRows, duplicateRows,
+                requestedSlices, successfulSlices, begin, end);
         return new TencentKLineFetch(
-                byDate.values().stream()
-                        .sorted(java.util.Comparator.comparing(EastMoneyKLine::tradeDate))
-                        .toList(),
-                requestedSlices,
-                successfulSlices,
-                requestedSlices == successfulSlices);
+                items, requestedSlices, successfulSlices, integrity.complete(), integrity.detail());
     }
 
     private record TencentKLineFetch(
             List<EastMoneyKLine> rows,
             int requestedSlices,
             int successfulSlices,
-            boolean complete
+            boolean complete,
+            String detail
+    ) {
+    }
+
+    private record EastMoneyKLineFetch(
+            List<EastMoneyKLine> rows,
+            boolean complete,
+            String detail
     ) {
     }
 

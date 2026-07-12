@@ -54,6 +54,8 @@ class UniversalAshareScreenerTest {
         assertThat(report.candidates()).extracting(UniversalScreenCandidate::symbol)
                 .contains("000777", "600036", "300001")
                 .doesNotContain("000002", "002001", "600777");
+        assertThat(find(report, "000777").marketTimestamp())
+                .isEqualTo(Instant.parse("2026-07-08T07:30:00Z"));
         assertThat(report.exclusionsSample()).extracting(UniversalScreenExclusion::stage)
                 .contains("TRADABLE", "LIQUIDITY", "SIDEWAYS");
     }
@@ -82,6 +84,32 @@ class UniversalAshareScreenerTest {
         assertThat(report.ruleSet().excludeSideways()).isFalse();
         assertThat(report.candidates()).allSatisfy(candidate ->
                 assertThat(candidate.action()).isNotEqualTo("ACCUMULATE"));
+    }
+
+    @Test
+    void shouldKeepPriceAndMarketTimestampFromTheSameQuoteSource() {
+        EastMoneyQuote base = quote(
+                "600036", "招商银行", "银行", "36.80", "-0.20", "6.00", "0.85", "900000000");
+        EastMoneyQuote realtimeWithoutPrice = new EastMoneyQuote(
+                "600036", "招商银行", "上交所", "银行", null, new BigDecimal("-0.10"),
+                BigDecimal.ONE, BigDecimal.ONE, new BigDecimal("910000000"),
+                new BigDecimal("6.00"), new BigDecimal("0.85"), new BigDecimal("6.00"),
+                "腾讯行情", "https://quote.example.com/600036",
+                Instant.parse("2026-07-08T07:31:01Z"), LocalDate.parse("2026-07-08"),
+                Instant.parse("2026-07-08T07:31:00Z"));
+        client.baseQuotes = List.of(base);
+        client.tencentQuotes = List.of(realtimeWithoutPrice);
+
+        UniversalScreenReport report = screener.screen(new UniversalScreenRequest(
+                3, 50, null, null, null, null, false, true, "VALUE"));
+
+        UniversalScreenCandidate candidate = find(report, "600036");
+        assertThat(candidate.latestPrice()).isEqualByComparingTo("36.80");
+        assertThat(candidate.sourceName()).isEqualTo(base.sourceName());
+        assertThat(candidate.quoteUrl()).isEqualTo(base.quoteUrl());
+        assertThat(candidate.fetchedAt()).isEqualTo(base.fetchedAt());
+        assertThat(candidate.tradeDate()).isEqualTo(base.tradeDate());
+        assertThat(candidate.marketTimestamp()).isEqualTo(base.marketTimestamp());
     }
 
     @Test
@@ -373,6 +401,8 @@ class UniversalAshareScreenerTest {
                 decimal(peTtm),
                 "测试行情",
                 "https://quote.example.com/" + symbol,
+                Instant.parse("2026-07-08T07:30:01Z"),
+                LocalDate.parse("2026-07-08"),
                 Instant.parse("2026-07-08T07:30:00Z")
         );
     }

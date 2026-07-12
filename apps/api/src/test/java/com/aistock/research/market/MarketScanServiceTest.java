@@ -56,6 +56,7 @@ class MarketScanServiceTest {
                 .doesNotContain("000002");
         MarketScanCandidate cmb = find(report, "600036");
         assertThat(cmb.latestPrice()).isEqualByComparingTo("36.83");
+        assertThat(cmb.marketTimestamp()).isEqualTo(Instant.parse("2026-07-01T07:30:00Z"));
         assertThat(cmb.tags()).contains("低估值", "红利防守");
         assertThat(cmb.evidenceCompleteness().status()).isEqualTo("INSUFFICIENT");
         assertThat(cmb.evidenceCompleteness().missingEvidence()).contains("公告/定期报告反证", "行业估值对比");
@@ -183,7 +184,9 @@ class MarketScanServiceTest {
                 decimal(peTtm),
                 "测试行情",
                 "https://quote.example.com/" + symbol,
-                Instant.parse("2026-07-01T00:00:00Z")
+                Instant.parse("2026-07-01T07:30:01Z"),
+                LocalDate.parse("2026-07-01"),
+                Instant.parse("2026-07-01T07:30:00Z")
         );
     }
 

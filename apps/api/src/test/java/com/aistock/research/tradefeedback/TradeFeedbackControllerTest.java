@@ -211,6 +211,47 @@ class TradeFeedbackControllerTest {
     }
 
     @Test
+    void hidesStaleExecutionOutcomesImmediatelyAfterAFillCorrection() throws Exception {
+        String caseId = createCase();
+        mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"side":"BUY","executedAt":"2026-07-11T01:35:00Z","price":35.20,"quantity":100}
+                                """))
+                .andExpect(status().isCreated());
+        String sellResponse = mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"side":"SELL","executedAt":"2026-07-11T02:35:00Z","price":38.00,"quantity":100}
+                                """))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String sellId = new com.fasterxml.jackson.databind.ObjectMapper().readTree(sellResponse)
+                .path("fills").get(1).path("fillId").asText();
+        when(marketDataGateway.dailyKLineSeries(anyString(), any(), any())).thenReturn(
+                MarketKLineSeries.complete(java.util.List.of(
+                        bar("2026-07-11", "36", "39", "34")), "TEST_DAILY_KLINE"));
+        when(marketDataGateway.latestPrice(anyString())).thenReturn(java.util.Optional.empty());
+
+        mockMvc.perform(post("/api/trade-cases/{caseId}/refresh", caseId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'EXECUTION' && @.horizon == 'CLOSED')].status")
+                        .value("MATURED"));
+
+        mockMvc.perform(put("/api/trade-cases/{caseId}/fills/{fillId}", caseId, sellId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"side":"SELL","executedAt":"2026-07-11T02:35:00Z","price":33.00,"quantity":100}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'EXECUTION')]").isEmpty())
+                .andExpect(jsonPath("$.outcomeWarnings[0]").value(containsString("等待重新计算")));
+
+        org.assertj.core.api.Assertions.assertThat(caseRepository.findById(caseId).orElseThrow().isOutcomeDirty())
+                .isTrue();
+    }
+
+    @Test
     void returnsBadRequestForOversellAndMalformedFillInput() throws Exception {
         String caseId = createCase();
         mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)

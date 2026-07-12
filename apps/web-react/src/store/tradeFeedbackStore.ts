@@ -19,6 +19,11 @@ interface TradeCaseIndex {
   caseIdByRecommendation: Record<string, string>
 }
 
+interface TradeCaseCursor {
+  createdAt: string
+  caseId: string
+}
+
 function caseKey(caseSummary: Pick<TradeCaseSummary, 'symbol' | 'sourceModule' | 'ruleVersion' | 'recommendedAt'>) {
   return [caseSummary.symbol, caseSummary.sourceModule, caseSummary.ruleVersion, caseSummary.recommendedAt].join('|')
 }
@@ -110,6 +115,11 @@ function mergeCasesIntoState(state: TradeCaseIndex, incomingCases: TradeCase[]) 
   }
 }
 
+function pageCursor(cases: TradeCase[]): TradeCaseCursor | null {
+  const last = cases[cases.length - 1]
+  return last ? { createdAt: last.createdAt, caseId: last.caseId } : null
+}
+
 interface TradeFeedbackState {
   casesById: Record<string, TradeCase>
   caseIdByRecommendation: Record<string, string>
@@ -117,6 +127,7 @@ interface TradeFeedbackState {
   loading: boolean
   loadingMore: boolean
   hasMore: boolean
+  nextCursor: TradeCaseCursor | null
   loadCases: (force?: boolean) => Promise<void>
   loadMoreCases: () => Promise<void>
   refreshCases: () => Promise<void>
@@ -128,10 +139,7 @@ interface TradeFeedbackState {
 
 export const useTradeFeedbackStore = create<TradeFeedbackState>((set, get) => {
   const mergeCaseResponse = (tradeCase: TradeCase) => {
-    set((state) => ({
-      ...mergeCaseIntoState(state, tradeCase),
-      loaded: true
-    }))
+    set((state) => mergeCaseIntoState(state, tradeCase))
   }
 
   return {
@@ -141,6 +149,7 @@ export const useTradeFeedbackStore = create<TradeFeedbackState>((set, get) => {
     loading: false,
     loadingMore: false,
     hasMore: true,
+    nextCursor: null,
     loadCases: async (force = false) => {
       if (get().loaded && !force) return
       if (loadPromise) return loadPromise
@@ -150,7 +159,8 @@ export const useTradeFeedbackStore = create<TradeFeedbackState>((set, get) => {
           set((state) => ({
             ...mergeCasesIntoState(state, cases),
             loaded: true,
-            hasMore: cases.length === TRADE_CASE_PAGE_SIZE
+            hasMore: cases.length === TRADE_CASE_PAGE_SIZE,
+            nextCursor: pageCursor(cases)
           }))
         })
         .finally(() => {
@@ -162,21 +172,19 @@ export const useTradeFeedbackStore = create<TradeFeedbackState>((set, get) => {
     loadMoreCases: async () => {
       const state = get()
       if (state.loadingMore || !state.hasMore) return
-      const oldest = Object.values(state.casesById).sort((left, right) => {
-        const createdOrder = Date.parse(left.createdAt) - Date.parse(right.createdAt)
-        return createdOrder !== 0 ? createdOrder : left.caseId.localeCompare(right.caseId)
-      })[0]
-      if (!oldest) return
+      const cursor = state.nextCursor
+      if (!cursor) return
       set({ loadingMore: true })
       try {
         const cases = await fetchTradeCases({
-          beforeCreatedAt: oldest.createdAt,
-          beforeCaseId: oldest.caseId,
+          beforeCreatedAt: cursor.createdAt,
+          beforeCaseId: cursor.caseId,
           limit: TRADE_CASE_PAGE_SIZE
         })
         set((current) => ({
           ...mergeCasesIntoState(current, cases),
-          hasMore: cases.length === TRADE_CASE_PAGE_SIZE
+          hasMore: cases.length === TRADE_CASE_PAGE_SIZE,
+          nextCursor: pageCursor(cases)
         }))
       } finally {
         set({ loadingMore: false })

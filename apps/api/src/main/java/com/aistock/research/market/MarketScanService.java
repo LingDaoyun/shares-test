@@ -127,6 +127,7 @@ public class MarketScanService {
                 candidate.market(),
                 candidate.industry(),
                 candidate.latestPrice(),
+                candidate.marketTimestamp(),
                 candidate.changePercent(),
                 candidate.peTtm(),
                 candidate.pbRatio(),

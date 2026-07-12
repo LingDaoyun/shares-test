@@ -3,9 +3,6 @@ package com.aistock.research.tradefeedback;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
@@ -24,11 +21,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import org.mockito.ArgumentCaptor;
 
 class TradeFeedbackServiceTest {
 
@@ -53,7 +50,7 @@ class TradeFeedbackServiceTest {
     void startsIndependentCreateTransactions() {
         when(transactionManager.getTransaction(any())).thenAnswer(invocation -> new SimpleTransactionStatus());
         when(attestations.require(anyString())).thenReturn(snapshot());
-        when(revisions.findByCaseIdOrderByCreatedAtAscRevisionIdAsc(anyString())).thenReturn(List.of());
+        when(revisions.findByCaseIdOrderByRevisionSequenceAsc(anyString())).thenReturn(List.of());
     }
 
     @Test
@@ -102,15 +99,14 @@ class TradeFeedbackServiceTest {
 
     @Test
     void listsCasesWithDatabaseFiltersKeysetCursorAndHardLimit() {
-        when(cases.findAll(any(Specification.class), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of()));
+        when(cases.findCasePage(any(), any(), any(), any(), any(Integer.class)))
+                .thenReturn(List.of());
         Instant cursor = Instant.parse("2026-07-13T00:00:00Z");
 
         service.listCases("holding", "002714", cursor, "case-cursor", 10_000);
 
-        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
-        verify(cases).findAll(any(Specification.class), pageable.capture());
-        assertThat(pageable.getValue().getPageSize()).isEqualTo(200);
+        verify(cases).findCasePage(
+                eq("HOLDING"), eq("002714"), eq(cursor), eq("case-cursor"), eq(200));
     }
 
     @Test
@@ -120,7 +116,7 @@ class TradeFeedbackServiceTest {
                 new BigDecimal("10"), 100, Instant.parse("2026-07-13T01:00:00Z"));
         when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(any()))
                 .thenReturn(List.of(first));
-        when(revisions.findByCaseIdInOrderByCaseIdAscCreatedAtAscRevisionIdAsc(any()))
+        when(revisions.findByCaseIdInOrderByCaseIdAscRevisionSequenceAsc(any()))
                 .thenReturn(List.of());
 
         Map<String, TradeLedgerSummary> ledgers = service.ledgers(
@@ -129,7 +125,7 @@ class TradeFeedbackServiceTest {
         assertThat(ledgers.get("case-1").positionQuantity()).isEqualTo(100);
         assertThat(ledgers.get("case-2").positionQuantity()).isZero();
         verify(fills).findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(any());
-        verify(revisions).findByCaseIdInOrderByCaseIdAscCreatedAtAscRevisionIdAsc(any());
+        verify(revisions).findByCaseIdInOrderByCaseIdAscRevisionSequenceAsc(any());
     }
 
     @Test

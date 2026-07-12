@@ -3,7 +3,6 @@ package com.aistock.research.tradefeedback;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.repository.query.Param;
@@ -11,8 +10,7 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-public interface TradeCaseRepository extends JpaRepository<TradeCaseEntity, String>,
-        JpaSpecificationExecutor<TradeCaseEntity> {
+public interface TradeCaseRepository extends JpaRepository<TradeCaseEntity, String>, TradeCaseQueryRepository {
 
     Optional<TradeCaseEntity> findByRecommendationFingerprint(String recommendationFingerprint);
 
@@ -20,7 +18,9 @@ public interface TradeCaseRepository extends JpaRepository<TradeCaseEntity, Stri
             select tradeCase
             from TradeCaseEntity tradeCase
             where tradeCase.status <> 'CANCELLED'
-            order by tradeCase.updatedAt asc, tradeCase.caseId asc
+            order by case when tradeCase.outcomeDirty = true then 0 else 1 end,
+                     tradeCase.updatedAt asc,
+                     tradeCase.caseId asc
             """)
     List<TradeCaseEntity> findRefreshCandidates(Pageable pageable);
 

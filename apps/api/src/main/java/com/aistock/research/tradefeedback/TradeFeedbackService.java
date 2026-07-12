@@ -3,9 +3,6 @@ package com.aistock.research.tradefeedback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -192,6 +189,7 @@ public class TradeFeedbackService {
                 UUID.randomUUID().toString(),
                 existing.fillId(),
                 tradeCase.getCaseId(),
+                nextRevisionSequence(tradeCase.getCaseId()),
                 corrected.side(),
                 corrected.executedAt(),
                 corrected.price(),
@@ -216,6 +214,7 @@ public class TradeFeedbackService {
                 UUID.randomUUID().toString(),
                 existing.fillId(),
                 tradeCase.getCaseId(),
+                nextRevisionSequence(tradeCase.getCaseId()),
                 existing.side(),
                 existing.executedAt(),
                 existing.price(),
@@ -254,30 +253,17 @@ public class TradeFeedbackService {
             throw new IllegalArgumentException("分页游标必须同时包含 beforeCreatedAt 和 beforeCaseId");
         }
         int boundedLimit = Math.min(Math.max(limit, 1), MAX_PAGE_SIZE);
-        Specification<TradeCaseEntity> filters = (root, query, builder) -> {
-            List<jakarta.persistence.criteria.Predicate> predicates = new ArrayList<>();
-            if (status != null && !status.isBlank()) {
-                predicates.add(builder.equal(
-                        builder.upper(root.get("status")), status.trim().toUpperCase(Locale.ROOT)));
-            }
-            if (symbol != null && !symbol.isBlank()) {
-                predicates.add(builder.equal(root.get("symbol"), symbol.trim()));
-            }
-            if (beforeCreatedAt != null) {
-                String cursorCaseId = beforeCaseId.trim();
-                predicates.add(builder.or(
-                        builder.lessThan(root.get("createdAt"), beforeCreatedAt),
-                        builder.and(
-                                builder.equal(root.get("createdAt"), beforeCreatedAt),
-                                builder.lessThan(root.get("caseId"), cursorCaseId))));
-            }
-            return builder.and(predicates.toArray(jakarta.persistence.criteria.Predicate[]::new));
-        };
-        PageRequest page = PageRequest.of(
-                0,
-                boundedLimit,
-                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("caseId")));
-        return caseRepository.findAll(filters, page).getContent();
+        String normalizedStatus = status == null || status.isBlank()
+                ? null
+                : status.trim().toUpperCase(Locale.ROOT);
+        String normalizedSymbol = symbol == null || symbol.isBlank() ? null : symbol.trim();
+        String normalizedCursorCaseId = beforeCaseId == null ? null : beforeCaseId.trim();
+        return caseRepository.findCasePage(
+                normalizedStatus,
+                normalizedSymbol,
+                beforeCreatedAt,
+                normalizedCursorCaseId,
+                boundedLimit);
     }
 
     @Transactional(readOnly = true)
@@ -316,7 +302,7 @@ public class TradeFeedbackService {
         List<TradeFillEntity> originals = fillRepository
                 .findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(normalizedCaseIds);
         List<TradeFillRevisionEntity> revisions = revisionRepository
-                .findByCaseIdInOrderByCaseIdAscCreatedAtAscRevisionIdAsc(normalizedCaseIds);
+                .findByCaseIdInOrderByCaseIdAscRevisionSequenceAsc(normalizedCaseIds);
         Map<String, List<TradeFillEntity>> originalsByCase = originals.stream()
                 .collect(Collectors.groupingBy(TradeFillEntity::getCaseId));
         Map<String, List<TradeFillRevisionEntity>> revisionsByCase = revisions.stream()
@@ -335,7 +321,7 @@ public class TradeFeedbackService {
     private List<TradeFillSnapshot> activeFills(String caseId) {
         return fillProjector.project(
                 fillRepository.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(caseId),
-                revisionRepository.findByCaseIdOrderByCreatedAtAscRevisionIdAsc(caseId));
+                revisionRepository.findByCaseIdOrderByRevisionSequenceAsc(caseId));
     }
 
     private TradeLedgerSummary calculateLedger(List<TradeFillSnapshot> fills, BigDecimal latestPrice) {
@@ -351,8 +337,12 @@ public class TradeFeedbackService {
         TradeCaseStatus status = fillCount == 0
                 ? TradeCaseStatus.PLANNED
                 : ledger.positionQuantity() == 0 ? TradeCaseStatus.CLOSED : TradeCaseStatus.HOLDING;
-        tradeCase.updateStatus(status.name(), now);
+        tradeCase.updateStatusAndMarkOutcomeDirty(status.name(), now);
         return caseRepository.save(tradeCase);
+    }
+
+    private long nextRevisionSequence(String caseId) {
+        return Math.addExact(revisionRepository.findMaxRevisionSequenceByCaseId(caseId), 1L);
     }
 
     private TradeCaseEntity requireCase(String caseId) {

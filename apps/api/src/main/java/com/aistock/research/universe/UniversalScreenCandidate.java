@@ -3,6 +3,8 @@ package com.aistock.research.universe;
 import com.aistock.research.valuation.ValuationContext;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 public record UniversalScreenCandidate(
@@ -12,6 +14,11 @@ public record UniversalScreenCandidate(
         String market,
         String industry,
         BigDecimal latestPrice,
+        String sourceName,
+        String quoteUrl,
+        Instant fetchedAt,
+        LocalDate tradeDate,
+        Instant marketTimestamp,
         BigDecimal changePercent,
         BigDecimal peTtm,
         BigDecimal pbRatio,

@@ -58,6 +58,9 @@ public class TradeCaseEntity {
     @Column(name = "status", nullable = false, length = 32)
     private String status;
 
+    @Column(name = "outcome_dirty", nullable = false)
+    private boolean outcomeDirty;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -101,6 +104,7 @@ public class TradeCaseEntity {
         this.recommendationVerified = recommendationVerified;
         this.recommendationAttestationId = recommendationAttestationId;
         this.status = status;
+        this.outcomeDirty = false;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
@@ -242,12 +246,27 @@ public class TradeCaseEntity {
         this.updatedAt = updatedAt;
     }
 
+    public void updateStatusAndMarkOutcomeDirty(String status, Instant updatedAt) {
+        this.status = status;
+        this.outcomeDirty = true;
+        this.updatedAt = updatedAt;
+    }
+
+    public void markOutcomeRefreshed(Instant updatedAt) {
+        this.outcomeDirty = false;
+        this.updatedAt = updatedAt;
+    }
+
     public void touch(Instant updatedAt) {
         this.updatedAt = updatedAt;
     }
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public boolean isOutcomeDirty() {
+        return outcomeDirty;
     }
 
     public Instant getUpdatedAt() {

@@ -99,7 +99,7 @@ class TradeFeedbackCriticalServiceTest {
         when(cases.findByIdForUpdate("case-1")).thenReturn(Optional.of(tradeCase));
         when(cases.save(any(TradeCaseEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc("case-1")).thenReturn(List.of(original));
-        when(revisions.findByCaseIdOrderByCreatedAtAscRevisionIdAsc("case-1"))
+        when(revisions.findByCaseIdOrderByRevisionSequenceAsc("case-1"))
                 .thenAnswer(invocation -> List.copyOf(storedRevisions));
         when(revisions.save(any(TradeFillRevisionEntity.class))).thenAnswer(invocation -> {
             TradeFillRevisionEntity revision = invocation.getArgument(0);

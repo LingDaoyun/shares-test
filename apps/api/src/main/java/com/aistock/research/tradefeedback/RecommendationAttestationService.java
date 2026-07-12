@@ -34,11 +34,14 @@ import java.util.UUID;
 public class RecommendationAttestationService {
 
     private static final Duration DEFAULT_TTL = Duration.ofMinutes(30);
+    private static final Duration DEFAULT_MAX_MARKET_AGE = Duration.ofDays(7);
+    private static final Duration MAX_FUTURE_SKEW = Duration.ofMinutes(5);
     private static final int DEFAULT_MAXIMUM_SIZE = 5_000;
 
     private final ObjectMapper objectMapper;
     private final Clock clock;
     private final Duration ttl;
+    private final Duration maxMarketAge;
     private final int maximumSize;
     private final LinkedHashMap<String, Entry> entries = new LinkedHashMap<>(64, 0.75f, true);
     private final Map<String, String> tokenByIdentity = new HashMap<>();
@@ -47,19 +50,30 @@ public class RecommendationAttestationService {
     public RecommendationAttestationService(
             ObjectMapper objectMapper,
             @Value("${trade-feedback.attestation.ttl:PT30M}") Duration ttl,
+            @Value("${trade-feedback.attestation.max-market-age:P7D}") Duration maxMarketAge,
             @Value("${trade-feedback.attestation.maximum-size:5000}") int maximumSize
     ) {
-        this(objectMapper, Clock.systemUTC(), ttl, maximumSize);
+        this(objectMapper, Clock.systemUTC(), ttl, maxMarketAge, maximumSize);
     }
 
     public RecommendationAttestationService(ObjectMapper objectMapper) {
-        this(objectMapper, Clock.systemUTC(), DEFAULT_TTL, DEFAULT_MAXIMUM_SIZE);
+        this(objectMapper, Clock.systemUTC(), DEFAULT_TTL, DEFAULT_MAX_MARKET_AGE, DEFAULT_MAXIMUM_SIZE);
     }
 
     RecommendationAttestationService(
             ObjectMapper objectMapper,
             Clock clock,
             Duration ttl,
+            int maximumSize
+    ) {
+        this(objectMapper, clock, ttl, DEFAULT_MAX_MARKET_AGE, maximumSize);
+    }
+
+    RecommendationAttestationService(
+            ObjectMapper objectMapper,
+            Clock clock,
+            Duration ttl,
+            Duration maxMarketAge,
             int maximumSize
     ) {
         this.objectMapper = objectMapper;
@@ -71,6 +85,10 @@ public class RecommendationAttestationService {
             throw new IllegalArgumentException("推荐凭证容量必须为正整数");
         }
         this.ttl = ttl;
+        if (maxMarketAge == null || maxMarketAge.isZero() || maxMarketAge.isNegative()) {
+            throw new IllegalArgumentException("行情凭证最大年龄必须为正数");
+        }
+        this.maxMarketAge = maxMarketAge;
         this.maximumSize = maximumSize;
     }
 
@@ -101,6 +119,7 @@ public class RecommendationAttestationService {
         }
 
         Instant now = clock.instant();
+        validateMarketTimestamp(recommendedAt, now);
         purgeExpired(now);
         String payloadJson = serialize(recommendationPayload);
         String identityMaterial = String.join(
@@ -155,7 +174,9 @@ public class RecommendationAttestationService {
                             candidate.action()),
                     candidate.score() == null ? null : candidate.score().finalScore(),
                     candidate.latestPrice(),
-                    report.generatedAt(),
+                    candidate.quoteFreshness() == null || candidate.quoteFreshness().blocksRealtimeDecision()
+                            ? null
+                            : candidate.quoteFreshness().marketTimestamp(),
                     candidate);
             putToken(tokens, candidate.symbol(), token);
         }
@@ -191,7 +212,7 @@ public class RecommendationAttestationService {
                             candidate.action()),
                     candidate.score() == null ? null : candidate.score().finalScore(),
                     candidate.latestPrice(),
-                    report.generatedAt(),
+                    candidate.marketTimestamp(),
                     candidate);
             putToken(tokens, candidate.symbol(), token);
         }
@@ -217,7 +238,7 @@ public class RecommendationAttestationService {
                             candidate.action()),
                     candidate.score() == null ? null : candidate.score().finalScore(),
                     candidate.latestPrice(),
-                    report.generatedAt(),
+                    candidate.marketTimestamp(),
                     candidate);
             putToken(tokens, candidate.symbol(), token);
         }
@@ -243,7 +264,7 @@ public class RecommendationAttestationService {
                             candidate.action()),
                     candidate.score() == null ? null : candidate.score().finalScore(),
                     candidate.latestPrice(),
-                    report.generatedAt(),
+                    candidate.marketTimestamp(),
                     candidate);
             putToken(tokens, candidate.symbol(), token);
         }
@@ -303,10 +324,25 @@ public class RecommendationAttestationService {
             Instant recommendedAt,
             Object payload
     ) {
-        if (price == null || price.signum() <= 0 || recommendedAt == null) {
+        if (price == null || price.signum() <= 0 || !isMarketTimestampUsable(recommendedAt, clock.instant())) {
             return null;
         }
         return register(source, symbol, companyName, action, score, price, recommendedAt, payload);
+    }
+
+    private boolean isMarketTimestampUsable(Instant marketTimestamp, Instant now) {
+        return marketTimestamp != null
+                && !marketTimestamp.isAfter(now.plus(MAX_FUTURE_SKEW))
+                && !marketTimestamp.isBefore(now.minus(maxMarketAge));
+    }
+
+    private void validateMarketTimestamp(Instant marketTimestamp, Instant now) {
+        if (marketTimestamp.isAfter(now.plus(MAX_FUTURE_SKEW))) {
+            throw new IllegalArgumentException("行情时间明显晚于当前时间");
+        }
+        if (marketTimestamp.isBefore(now.minus(maxMarketAge))) {
+            throw new IllegalArgumentException("行情时间已超过凭证新鲜度边界");
+        }
     }
 
     private void putToken(Map<String, String> tokens, String key, String token) {

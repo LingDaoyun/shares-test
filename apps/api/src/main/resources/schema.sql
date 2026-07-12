@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS strategy_trade_case (
   recommendation_verified BOOLEAN NOT NULL DEFAULT FALSE,
   recommendation_attestation_id VARCHAR(64),
   status VARCHAR(32) NOT NULL,
+  outcome_dirty BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
   CONSTRAINT fk_trade_case_decision FOREIGN KEY (decision_id)
@@ -110,6 +111,7 @@ CREATE TABLE IF NOT EXISTS strategy_trade_case (
 
 ALTER TABLE strategy_trade_case ADD COLUMN IF NOT EXISTS recommendation_verified BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE strategy_trade_case ADD COLUMN IF NOT EXISTS recommendation_attestation_id VARCHAR(64);
+ALTER TABLE strategy_trade_case ADD COLUMN IF NOT EXISTS outcome_dirty BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_trade_case_page
   ON strategy_trade_case(created_at, case_id);
@@ -122,6 +124,9 @@ CREATE INDEX IF NOT EXISTS idx_trade_case_symbol_page
 
 CREATE INDEX IF NOT EXISTS idx_trade_case_refresh
   ON strategy_trade_case(status, updated_at, case_id);
+
+CREATE INDEX IF NOT EXISTS idx_trade_case_dirty_refresh
+  ON strategy_trade_case(outcome_dirty, status, updated_at, case_id);
 
 CREATE TABLE IF NOT EXISTS strategy_trade_fill (
   fill_id VARCHAR(36) PRIMARY KEY,
@@ -145,6 +150,7 @@ CREATE TABLE IF NOT EXISTS strategy_trade_fill_revision (
   revision_id VARCHAR(36) PRIMARY KEY,
   fill_id VARCHAR(36) NOT NULL,
   case_id VARCHAR(36) NOT NULL,
+  revision_sequence BIGINT NOT NULL,
   revision_type VARCHAR(16) NOT NULL,
   side VARCHAR(8) NOT NULL,
   executed_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -159,8 +165,30 @@ CREATE TABLE IF NOT EXISTS strategy_trade_fill_revision (
   CONSTRAINT ck_trade_fill_revision_quantity CHECK (quantity > 0)
 );
 
-CREATE INDEX IF NOT EXISTS idx_trade_fill_revision_projection
-  ON strategy_trade_fill_revision(case_id, fill_id, created_at, revision_id);
+ALTER TABLE strategy_trade_fill_revision ADD COLUMN IF NOT EXISTS revision_sequence BIGINT;
+
+UPDATE strategy_trade_fill_revision
+SET revision_sequence = (
+  SELECT COUNT(*)
+  FROM strategy_trade_fill_revision prior_revision
+  WHERE prior_revision.case_id = strategy_trade_fill_revision.case_id
+    AND (
+      prior_revision.created_at < strategy_trade_fill_revision.created_at
+      OR (
+        prior_revision.created_at = strategy_trade_fill_revision.created_at
+        AND prior_revision.revision_id <= strategy_trade_fill_revision.revision_id
+      )
+    )
+)
+WHERE revision_sequence IS NULL;
+
+ALTER TABLE strategy_trade_fill_revision ALTER COLUMN revision_sequence SET NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_trade_fill_revision_sequence
+  ON strategy_trade_fill_revision(case_id, revision_sequence);
+
+CREATE INDEX IF NOT EXISTS idx_trade_fill_revision_sequence_projection
+  ON strategy_trade_fill_revision(case_id, fill_id, revision_sequence);
 
 CREATE TABLE IF NOT EXISTS strategy_outcome_snapshot (
   snapshot_id VARCHAR(36) PRIMARY KEY,

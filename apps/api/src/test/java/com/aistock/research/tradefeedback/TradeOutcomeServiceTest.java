@@ -120,6 +120,7 @@ class TradeOutcomeServiceTest {
     @Test
     void advancesAndSavesTheLockedCaseVersionAfterEverySuccessfulReconciliation() {
         TradeCaseEntity tradeCase = tradeCase("HOLDING");
+        tradeCase.updateStatusAndMarkOutcomeDirty("HOLDING", tradeCase.getUpdatedAt());
         when(cases.findById("case-1")).thenReturn(Optional.of(tradeCase));
         when(cases.findByIdForUpdate("case-1")).thenReturn(Optional.of(tradeCase));
         when(cases.save(tradeCase)).thenReturn(tradeCase);
@@ -130,6 +131,7 @@ class TradeOutcomeServiceTest {
 
         service.refresh("case-1");
         Instant firstRefreshVersion = tradeCase.getUpdatedAt();
+        assertThat(tradeCase.isOutcomeDirty()).isFalse();
         service.refresh("case-1");
 
         assertThat(firstRefreshVersion).isAfter(originalVersion);
@@ -257,6 +259,27 @@ class TradeOutcomeServiceTest {
 
         assertThat(stored.get(key("case-1", "RECOMMENDATION", "CURRENT")).getEvaluationPrice())
                 .isEqualByComparingTo("14");
+    }
+
+    @Test
+    void dirtyExecutionCurrentMustBeReplacedEvenWhenTheAvailableQuoteIsOlder() {
+        TradeCaseEntity dirty = tradeCase("HOLDING");
+        dirty.updateStatusAndMarkOutcomeDirty("HOLDING", NOW.minusSeconds(30));
+        when(cases.findById("case-1")).thenReturn(Optional.of(dirty));
+        when(cases.findByIdForUpdate("case-1")).thenReturn(Optional.of(dirty));
+        stored.put(key("case-1", "EXECUTION", "CURRENT"), TradeOutcomeEntity.matured(
+                "stale-execution", "case-1", "EXECUTION", "CURRENT", decimal("10"), decimal("14"),
+                LocalDate.parse("2026-08-10"), decimal("40"), null, null,
+                "EAST_MONEY_LIVE_QUOTE", Instant.parse("2026-08-10T07:00:00Z"), NOW.minusSeconds(60)));
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(twentyBars());
+        when(gateway.latestPrice(anyString())).thenReturn(Optional.of(
+                latest("13", "2026-08-07", "2026-08-07T07:00:00Z")));
+
+        service.refresh("case-1");
+
+        assertThat(stored.get(key("case-1", "EXECUTION", "CURRENT")).getEvaluationPrice())
+                .isEqualByComparingTo("13");
+        assertThat(dirty.isOutcomeDirty()).isFalse();
     }
 
     @Test

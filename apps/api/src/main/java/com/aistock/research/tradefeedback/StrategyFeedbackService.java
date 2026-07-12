@@ -229,7 +229,7 @@ public class StrategyFeedbackService {
                 .findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(caseIds);
         List<TradeFillRevisionEntity> revisions = revisionRepository == null
                 ? List.of()
-                : revisionRepository.findByCaseIdInOrderByCaseIdAscCreatedAtAscRevisionIdAsc(caseIds);
+                : revisionRepository.findByCaseIdInOrderByCaseIdAscRevisionSequenceAsc(caseIds);
         Map<String, List<TradeFillEntity>> originalsByCase = originals.stream()
                 .collect(java.util.stream.Collectors.groupingBy(TradeFillEntity::getCaseId));
         Map<String, List<TradeFillRevisionEntity>> revisionsByCase = revisions.stream()

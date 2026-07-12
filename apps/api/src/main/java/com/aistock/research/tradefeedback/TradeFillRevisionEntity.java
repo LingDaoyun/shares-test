@@ -22,6 +22,9 @@ public class TradeFillRevisionEntity {
     @Column(name = "case_id", nullable = false, length = 36)
     private String caseId;
 
+    @Column(name = "revision_sequence", nullable = false)
+    private long revisionSequence;
+
     @Column(name = "revision_type", nullable = false, length = 16)
     private String revisionType;
 
@@ -47,6 +50,7 @@ public class TradeFillRevisionEntity {
             String revisionId,
             String fillId,
             String caseId,
+            long revisionSequence,
             String revisionType,
             String side,
             Instant executedAt,
@@ -57,6 +61,7 @@ public class TradeFillRevisionEntity {
         this.revisionId = revisionId;
         this.fillId = fillId;
         this.caseId = caseId;
+        this.revisionSequence = revisionSequence;
         this.revisionType = revisionType;
         this.side = side;
         this.executedAt = executedAt;
@@ -69,6 +74,7 @@ public class TradeFillRevisionEntity {
             String revisionId,
             String fillId,
             String caseId,
+            long revisionSequence,
             String side,
             Instant executedAt,
             BigDecimal price,
@@ -76,13 +82,15 @@ public class TradeFillRevisionEntity {
             Instant createdAt
     ) {
         return new TradeFillRevisionEntity(
-                revisionId, fillId, caseId, "CORRECTION", side, executedAt, price, quantity, createdAt);
+                revisionId, fillId, caseId, revisionSequence,
+                "CORRECTION", side, executedAt, price, quantity, createdAt);
     }
 
     public static TradeFillRevisionEntity voided(
             String revisionId,
             String fillId,
             String caseId,
+            long revisionSequence,
             String side,
             Instant executedAt,
             BigDecimal price,
@@ -90,7 +98,8 @@ public class TradeFillRevisionEntity {
             Instant createdAt
     ) {
         return new TradeFillRevisionEntity(
-                revisionId, fillId, caseId, "VOID", side, executedAt, price, quantity, createdAt);
+                revisionId, fillId, caseId, revisionSequence,
+                "VOID", side, executedAt, price, quantity, createdAt);
     }
 
     public String getRevisionId() {
@@ -103,6 +112,10 @@ public class TradeFillRevisionEntity {
 
     public String getCaseId() {
         return caseId;
+    }
+
+    public long getRevisionSequence() {
+        return revisionSequence;
     }
 
     public String getRevisionType() {

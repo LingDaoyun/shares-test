@@ -13,7 +13,7 @@ import java.util.Map;
 public class TradeFillProjector {
 
     private static final Comparator<TradeFillRevisionEntity> REVISION_ORDER = Comparator
-            .comparing(TradeFillRevisionEntity::getCreatedAt)
+            .comparingLong(TradeFillRevisionEntity::getRevisionSequence)
             .thenComparing(TradeFillRevisionEntity::getRevisionId);
     private static final Comparator<TradeFillSnapshot> ACTIVE_ORDER = Comparator
             .comparing(TradeFillSnapshot::executedAt)

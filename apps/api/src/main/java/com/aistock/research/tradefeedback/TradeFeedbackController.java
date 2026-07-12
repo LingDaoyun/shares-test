@@ -60,7 +60,9 @@ public class TradeFeedbackController {
         Map<String, BigDecimal> latestPrices = new java.util.LinkedHashMap<>();
         for (TradeCaseEntity tradeCase : tradeCases) {
             BigDecimal latestPrice = currentEvaluationPrice(
-                    outcomesByCaseId.getOrDefault(tradeCase.getCaseId(), List.of()));
+                    visibleOutcomes(
+                            tradeCase,
+                            outcomesByCaseId.getOrDefault(tradeCase.getCaseId(), List.of())));
             if (latestPrice != null) {
                 latestPrices.put(tradeCase.getCaseId(), latestPrice);
             }
@@ -68,7 +70,9 @@ public class TradeFeedbackController {
         Map<String, TradeLedgerSummary> ledgers = translate(() -> tradeFeedbackService.ledgers(
                 tradeCases.stream().map(TradeCaseEntity::getCaseId).toList(), latestPrices));
         return tradeCases.stream().map(tradeCase -> {
-            List<TradeOutcomeEntity> outcomes = outcomesByCaseId.getOrDefault(tradeCase.getCaseId(), List.of());
+            List<TradeOutcomeEntity> outcomes = visibleOutcomes(
+                    tradeCase,
+                    outcomesByCaseId.getOrDefault(tradeCase.getCaseId(), List.of()));
             return mapper.summary(
                     tradeCase,
                     ledgers.get(tradeCase.getCaseId()),
@@ -123,14 +127,20 @@ public class TradeFeedbackController {
 
     private TradeCaseDetail detail(TradeCaseEntity tradeCase, List<String> warnings) {
         List<TradeFillSnapshot> fills = translate(() -> tradeFeedbackService.fills(tradeCase.getCaseId()));
-        List<TradeOutcomeEntity> outcomes = translate(() -> tradeOutcomeService.outcomes(tradeCase.getCaseId()));
+        List<TradeOutcomeEntity> outcomes = visibleOutcomes(
+                tradeCase,
+                translate(() -> tradeOutcomeService.outcomes(tradeCase.getCaseId())));
         BigDecimal latestPrice = currentEvaluationPrice(outcomes);
+        List<String> visibleWarnings = new java.util.ArrayList<>(warnings);
+        if (tradeCase.isOutcomeDirty()) {
+            visibleWarnings.add("成交事实已变更，执行结果等待重新计算");
+        }
         return mapper.detail(
                 tradeCase,
                 translate(() -> tradeFeedbackService.ledger(tradeCase.getCaseId(), latestPrice)),
                 fills,
                 outcomes,
-                warnings
+                List.copyOf(visibleWarnings)
         );
     }
 
@@ -144,6 +154,18 @@ public class TradeFeedbackController {
                 .filter(java.util.Objects::nonNull)
                 .findFirst()
                 .orElse(null);
+    }
+
+    private List<TradeOutcomeEntity> visibleOutcomes(
+            TradeCaseEntity tradeCase,
+            List<TradeOutcomeEntity> outcomes
+    ) {
+        if (!tradeCase.isOutcomeDirty()) {
+            return outcomes;
+        }
+        return outcomes.stream()
+                .filter(outcome -> !"EXECUTION".equals(outcome.getBaselineType()))
+                .toList();
     }
 
     private <T> T translate(Supplier<T> action) {

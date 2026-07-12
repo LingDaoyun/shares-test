@@ -3,6 +3,7 @@ package com.aistock.research.cycle;
 import com.aistock.research.trading.TradingAdvice;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 public record CycleTrialCandidate(
@@ -13,6 +14,7 @@ public record CycleTrialCandidate(
         String cycleDriver,
         String industry,
         BigDecimal latestPrice,
+        Instant marketTimestamp,
         BigDecimal changePercent,
         BigDecimal peTtm,
         BigDecimal pbRatio,

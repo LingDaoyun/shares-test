@@ -328,8 +328,10 @@ public class TradeOutcomeService {
             Optional<TradeOutcomeEntity> existing = outcomeRepository
                     .findByCaseIdAndBaselineTypeAndHorizon(facts.caseId(), scoped.baselineType(), result.horizon());
             if (existing.isPresent()) {
+                boolean dirtyExecution = lockedCase.isOutcomeDirty()
+                        && EXECUTION.equals(scoped.baselineType());
                 if (isProtectedFixedRecommendation(scoped, existing.get())
-                        || isOlderCurrent(scoped, existing.get())) {
+                        || (!dirtyExecution && isOlderCurrent(scoped, existing.get()))) {
                     continue;
                 }
                 existing.get().replaceWith(result, scoped.sourceName(), scoped.marketTimestamp(), calculatedAt);
@@ -345,7 +347,7 @@ public class TradeOutcomeService {
         if (!nextVersion.isAfter(lockedCase.getUpdatedAt())) {
             nextVersion = lockedCase.getUpdatedAt().plusMillis(1);
         }
-        lockedCase.touch(nextVersion);
+        lockedCase.markOutcomeRefreshed(nextVersion);
         caseRepository.save(lockedCase);
         return true;
     }
@@ -410,7 +412,7 @@ public class TradeOutcomeService {
     private List<FillFact> fillFacts(String caseId) {
         List<TradeFillRevisionEntity> revisions = revisionRepository == null
                 ? List.of()
-                : revisionRepository.findByCaseIdOrderByCreatedAtAscRevisionIdAsc(caseId);
+                : revisionRepository.findByCaseIdOrderByRevisionSequenceAsc(caseId);
         return fillProjector.project(
                         fillRepository.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(caseId), revisions).stream()
                 .map(fill -> new FillFact(

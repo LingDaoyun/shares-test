@@ -286,6 +286,7 @@ export interface MarketScanCandidate {
   market: string | null
   industry: string | null
   latestPrice: number | null
+  marketTimestamp: string | null
   changePercent: number | null
   peTtm: number | null
   pbRatio: number | null
@@ -635,6 +636,7 @@ export interface TechTrackedStock {
   themeName: string
   industry: string | null
   latestPrice: number | null
+  marketTimestamp: string | null
   changePercent: number | null
   peTtm: number | null
   pbRatio: number | null
@@ -821,6 +823,7 @@ export interface CycleTrialCandidate {
   cycleDriver: string
   industry: string | null
   latestPrice: number | null
+  marketTimestamp: string | null
   changePercent: number | null
   peTtm: number | null
   pbRatio: number | null

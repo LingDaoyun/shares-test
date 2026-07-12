@@ -266,9 +266,11 @@ public class MispricingService {
                 candidate.peTtm(),
                 candidate.pbRatio(),
                 candidate.peTtm(),
-                "统一全 A 候选漏斗",
-                null,
-                Instant.now()
+                candidate.sourceName(),
+                candidate.quoteUrl(),
+                candidate.fetchedAt(),
+                candidate.tradeDate(),
+                candidate.marketTimestamp()
         );
     }
 
@@ -368,12 +370,15 @@ public class MispricingService {
         if (fallback == null) {
             return preferred;
         }
+        EastMoneyQuote priceSource = hasUsablePerSharePrice(preferred)
+                ? preferred
+                : hasUsablePerSharePrice(fallback) ? fallback : null;
         return new EastMoneyQuote(
                 firstText(preferred.symbol(), fallback.symbol()),
                 firstText(preferred.name(), fallback.name()),
                 firstText(preferred.market(), fallback.market()),
                 firstText(preferred.industry(), fallback.industry()),
-                hasUsablePerSharePrice(preferred) ? preferred.latestPrice() : fallback.latestPrice(),
+                priceSource == null ? null : priceSource.latestPrice(),
                 firstPresent(preferred.changePercent(), fallback.changePercent()),
                 firstPresent(preferred.turnoverRate(), fallback.turnoverRate()),
                 firstPresent(preferred.volume(), fallback.volume()),
@@ -381,11 +386,11 @@ public class MispricingService {
                 firstPresent(preferred.peRatio(), fallback.peRatio()),
                 firstPresent(preferred.pbRatio(), fallback.pbRatio()),
                 firstPresent(preferred.peTtm(), fallback.peTtm()),
-                firstText(preferred.sourceName(), fallback.sourceName()) + " + 全市场行情",
-                firstText(preferred.quoteUrl(), fallback.quoteUrl()),
-                preferred.fetchedAt() == null ? fallback.fetchedAt() : preferred.fetchedAt(),
-                preferred.tradeDate() == null ? fallback.tradeDate() : preferred.tradeDate(),
-                preferred.marketTimestamp() == null ? fallback.marketTimestamp() : preferred.marketTimestamp()
+                priceSource == null ? "全市场行情价格不可用" : priceSource.sourceName(),
+                priceSource == null ? firstText(preferred.quoteUrl(), fallback.quoteUrl()) : priceSource.quoteUrl(),
+                priceSource == null ? null : priceSource.fetchedAt(),
+                priceSource == null ? null : priceSource.tradeDate(),
+                priceSource == null ? null : priceSource.marketTimestamp()
         );
     }
 
