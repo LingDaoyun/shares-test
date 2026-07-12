@@ -9,6 +9,19 @@ const shanghaiDateTimeFormatter = new Intl.DateTimeFormat('en-CA', {
   hourCycle: 'h23'
 })
 
+export interface CaseOperation {
+  id: number
+  caseId: string
+}
+
+export function shouldApplySelectedCaseOperation(
+  operation: CaseOperation,
+  latestOperationId: number,
+  selectedCaseId: string | null
+) {
+  return operation.id === latestOperationId && operation.caseId === selectedCaseId
+}
+
 export function formatShanghaiDateTimeLocal(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''

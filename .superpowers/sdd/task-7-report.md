@@ -127,3 +127,44 @@ Source scans found no old background hydration, 100-share divisibility, browser-
 - There is still no frontend test harness; frontend verification is the production build, executable pure-helper checks, and source-level interaction review.
 - Live backend/frontend and visual browser QA are intentionally deferred to Task 8.
 - The unrelated modified `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` remained untouched and is excluded from the Task 7 commit.
+
+## Follow-up Fix: Stale Selection And Cancellation Confirmation
+
+### RED Evidence
+
+Ran from `/Users/mac/Documents/shares-test` before adding the selection-aware completion gate:
+
+```text
+node apps/web-react/scripts/tradeReviewSelectionGate.check.mjs
+```
+
+Result: exit code 1. The deterministic assertion failed because the prior token-only gate accepted operation `7` for case A even after case B was selected:
+
+```text
+AssertionError [ERR_ASSERTION]: a completed operation for case A must not update visible detail state after case B is selected
+false !== true
+```
+
+### Fix And GREEN Evidence
+
+- Added `shouldApplySelectedCaseOperation` and a deterministic Node check covering stale case selection, matching case selection, and superseded operation tokens.
+- Detail errors are now stored by case ID and are cleared on every selection, including already-hydrated detail cases.
+- Refresh, cancellation, and fill deletion only surface completion/error feedback when both the operation token and current selected case still match; successful responses still update their keyed case cache.
+- Added an accessible cancellation confirmation dialog with initial focus, Tab trapping, Escape/backdrop dismissal, focus restoration, scroll locking, keyboard controls, and mobile bottom-sheet layout.
+
+Ran:
+
+```text
+node apps/web-react/scripts/tradeReviewSelectionGate.check.mjs
+npm run build --prefix apps/web-react
+git diff --check
+```
+
+Results: the focused Node check exited 0; the production build exited 0 (`1669 modules transformed`, `built in 1.54s`); and `git diff --check` exited 0 with no whitespace errors.
+
+### Changed Files
+
+- `apps/web-react/src/pages/TradeReviewPage.tsx`
+- `apps/web-react/src/lib/tradeReview.ts`
+- `apps/web-react/scripts/tradeReviewSelectionGate.check.mjs`
+- `.superpowers/sdd/task-7-report.md`

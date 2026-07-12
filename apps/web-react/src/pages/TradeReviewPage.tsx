@@ -14,7 +14,13 @@ import { Empty } from '../components/ui/Empty'
 import { Loader } from '../components/ui/Loader'
 import { toast } from '../components/ui/Toast'
 import { changeClass, extractErrorMessage, formatDateTime, formatNumber, formatSignedPercent } from '../lib/format'
-import { extractTradeMutationError, formatShanghaiDateTimeLocal, parseShanghaiDateTimeLocal } from '../lib/tradeReview'
+import {
+  extractTradeMutationError,
+  formatShanghaiDateTimeLocal,
+  parseShanghaiDateTimeLocal,
+  shouldApplySelectedCaseOperation,
+  type CaseOperation
+} from '../lib/tradeReview'
 import { useTradeFeedbackStore } from '../store/tradeFeedbackStore'
 import type {
   TradeCaseDetail,
@@ -29,6 +35,7 @@ import type {
 type StatusFilter = 'ALL' | TradeCaseStatus
 type TradeCase = TradeCaseSummary | TradeCaseDetail
 type CaseMutationKind = 'refresh' | 'cancel' | 'delete' | 'save'
+type CaseMutation = CaseOperation & { kind: CaseMutationKind }
 
 const statusTabs: { value: StatusFilter; label: string }[] = [
   { value: 'ALL', label: '全部' },
@@ -62,13 +69,15 @@ export function TradeReviewPage() {
   const [filter, setFilter] = useState<StatusFilter>('ALL')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [listError, setListError] = useState('')
-  const [detailError, setDetailError] = useState('')
+  const [detailErrors, setDetailErrors] = useState<Record<string, string>>({})
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null)
-  const [mutation, setMutation] = useState<{ id: number; kind: CaseMutationKind } | null>(null)
+  const [mutation, setMutation] = useState<CaseMutation | null>(null)
   const [fillModal, setFillModal] = useState<{ fill?: TradeFillView; returnFocus: HTMLElement | null } | null>(null)
+  const [cancelDialog, setCancelDialog] = useState<{ caseId: string; symbol: string; returnFocus: HTMLElement | null } | null>(null)
   const detailPaneRef = useRef<HTMLElement>(null)
   const mutationSequenceRef = useRef(0)
   const activeMutationIdRef = useRef<number | null>(null)
+  const selectedIdRef = useRef<string | null>(null)
 
   const allCases = useMemo(
     () => Object.values(casesById).sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
@@ -79,17 +88,30 @@ export function TradeReviewPage() {
     [allCases, filter]
   )
   const selected = selectedId ? casesById[selectedId] : undefined
-  const runSelectedMutation = useCallback(async <T,>(kind: CaseMutationKind, request: () => Promise<T>) => {
+  const detailError = selectedId ? detailErrors[selectedId] ?? '' : ''
+  const clearDetailError = useCallback((caseId: string) => {
+    setDetailErrors((current) => {
+      if (!(caseId in current)) return current
+      const { [caseId]: _removed, ...remaining } = current
+      return remaining
+    })
+  }, [])
+  const isCurrentSelectedOperation = useCallback((operation: CaseOperation) => (
+    shouldApplySelectedCaseOperation(operation, mutationSequenceRef.current, selectedIdRef.current)
+  ), [])
+  const runSelectedMutation = useCallback(async <T,>(caseId: string, kind: CaseMutationKind, request: () => Promise<T>) => {
     if (activeMutationIdRef.current !== null) return undefined
-    const id = ++mutationSequenceRef.current
-    activeMutationIdRef.current = id
-    setMutation({ id, kind })
+    const operation: CaseMutation = { id: ++mutationSequenceRef.current, caseId, kind }
+    activeMutationIdRef.current = operation.id
+    setMutation(operation)
     try {
-      return await request()
+      return { operation, response: await request() }
+    } catch (error) {
+      return { operation, error }
     } finally {
-      if (activeMutationIdRef.current === id) {
+      if (activeMutationIdRef.current === operation.id) {
         activeMutationIdRef.current = null
-        setMutation((current) => current?.id === id ? null : current)
+        setMutation((current) => current?.id === operation.id ? null : current)
       }
     }
   }, [])
@@ -110,15 +132,20 @@ export function TradeReviewPage() {
   }, [filteredCases])
 
   useEffect(() => {
+    selectedIdRef.current = selectedId
+    if (selectedId) clearDetailError(selectedId)
+  }, [clearDetailError, selectedId])
+
+  useEffect(() => {
     if (!selectedId || isTradeCaseDetail(casesById[selectedId])) return
     let alive = true
     setDetailLoadingId(selectedId)
-    setDetailError('')
+    clearDetailError(selectedId)
     void getCase(selectedId)
       .catch((error) => {
         if (!alive) return
         const message = extractErrorMessage(error)
-        setDetailError(message)
+        setDetailErrors((current) => ({ ...current, [selectedId]: message }))
         toast.error(`复盘详情加载失败：${message}`)
       })
       .finally(() => {
@@ -127,7 +154,7 @@ export function TradeReviewPage() {
     return () => {
       alive = false
     }
-  }, [casesById, getCase, selectedId])
+  }, [casesById, clearDetailError, getCase, selectedId])
 
   const counts = useMemo(() => {
     const next: Record<StatusFilter, number> = { ALL: allCases.length, PLANNED: 0, HOLDING: 0, CLOSED: 0, CANCELLED: 0 }
@@ -215,36 +242,51 @@ export function TradeReviewPage() {
     }
   }
 
-  const runCaseAction = async (kind: 'refresh' | 'cancel') => {
-    if (!selected || activeMutationIdRef.current !== null) return
-    setDetailError('')
-    try {
-      const response = await runSelectedMutation(kind, () => kind === 'refresh'
-        ? refreshTradeCase(selected.caseId)
-        : cancelTradeCase(selected.caseId))
-      if (!response) return
-      upsertCase(response)
-      toast.success(kind === 'refresh' ? '后续表现已刷新' : '复盘计划已取消')
-    } catch (error) {
-      const message = extractTradeMutationError(error)
-      setDetailError(message)
+  const runCaseAction = async (kind: 'refresh' | 'cancel', caseId: string) => {
+    if (activeMutationIdRef.current !== null) return
+    clearDetailError(caseId)
+    const result = await runSelectedMutation(caseId, kind, () => kind === 'refresh'
+      ? refreshTradeCase(caseId)
+      : cancelTradeCase(caseId))
+    if (!result) return
+    if ('error' in result) {
+      if (!isCurrentSelectedOperation(result.operation)) return
+      const message = extractTradeMutationError(result.error)
+      setDetailErrors((current) => ({ ...current, [caseId]: message }))
       toast.error(`${kind === 'refresh' ? '刷新' : '取消'}失败：${message}`)
+      return
+    }
+    upsertCase(result.response)
+    if (isCurrentSelectedOperation(result.operation)) {
+      toast.success(kind === 'refresh' ? '后续表现已刷新' : '复盘计划已取消')
     }
   }
 
   const removeFill = async (fill: TradeFillView) => {
     if (!selected || activeMutationIdRef.current !== null || !window.confirm(`确认删除这笔${fill.side === 'BUY' ? '买入' : '卖出'} ${fill.quantity} 股的成交记录？`)) return
-    setDetailError('')
-    try {
-      const response = await runSelectedMutation('delete', () => deleteTradeFill(selected.caseId, fill.fillId))
-      if (!response) return
-      upsertCase(response)
-      toast.success('成交记录已删除')
-    } catch (error) {
-      const message = extractTradeMutationError(error)
-      setDetailError(message)
+    const caseId = selected.caseId
+    clearDetailError(caseId)
+    const result = await runSelectedMutation(caseId, 'delete', () => deleteTradeFill(caseId, fill.fillId))
+    if (!result) return
+    if ('error' in result) {
+      if (!isCurrentSelectedOperation(result.operation)) return
+      const message = extractTradeMutationError(result.error)
+      setDetailErrors((current) => ({ ...current, [caseId]: message }))
       toast.error(`删除失败：${message}`)
+      return
     }
+    upsertCase(result.response)
+    if (isCurrentSelectedOperation(result.operation)) toast.success('成交记录已删除')
+  }
+
+  const saveFill = async (caseId: string, fillId: string | undefined, request: UpsertTradeFillRequest) => {
+    const result = await runSelectedMutation(caseId, 'save', () => fillId
+      ? updateTradeFill(caseId, fillId, request)
+      : addTradeFill(caseId, request))
+    if (!result) return undefined
+    if ('error' in result) throw result.error
+    upsertCase(result.response)
+    return result.response
   }
 
   return (
@@ -315,8 +357,8 @@ export function TradeReviewPage() {
               onAddFill={(returnFocus) => { if (!mutation) setFillModal({ returnFocus }) }}
               onEditFill={(fill, returnFocus) => { if (!mutation) setFillModal({ fill, returnFocus }) }}
               onDeleteFill={(fill) => void removeFill(fill)}
-              onRefresh={() => void runCaseAction('refresh')}
-              onCancel={() => void runCaseAction('cancel')}
+              onRefresh={() => void runCaseAction('refresh', selected.caseId)}
+              onRequestCancel={(returnFocus) => setCancelDialog({ caseId: selected.caseId, symbol: selected.symbol, returnFocus })}
             />
           ) : (
             <div role="alert" className="border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
@@ -333,12 +375,23 @@ export function TradeReviewPage() {
           returnFocus={fillModal.returnFocus}
           busy={mutation !== null}
           onClose={() => setFillModal(null)}
-          onSubmit={(request) => runSelectedMutation('save', () => fillModal.fill
-            ? updateTradeFill(selected.caseId, fillModal.fill.fillId, request)
-            : addTradeFill(selected.caseId, request))}
-          onSaved={(response) => {
-            upsertCase(response)
+          onSubmit={(request) => saveFill(selected.caseId, fillModal.fill?.fillId, request)}
+          onSaved={() => {
             setFillModal(null)
+          }}
+        />
+      ) : null}
+
+      {cancelDialog ? (
+        <CancelPlanDialog
+          symbol={cancelDialog.symbol}
+          returnFocus={cancelDialog.returnFocus}
+          busy={mutation !== null}
+          onClose={() => setCancelDialog(null)}
+          onConfirm={() => {
+            const pendingCancel = cancelDialog
+            setCancelDialog(null)
+            void runCaseAction('cancel', pendingCancel.caseId)
           }}
         />
       ) : null}
@@ -355,7 +408,7 @@ function CaseDetail({
   onEditFill,
   onDeleteFill,
   onRefresh,
-  onCancel
+  onRequestCancel
 }: {
   tradeCase: TradeCaseDetail
   error: string
@@ -365,7 +418,7 @@ function CaseDetail({
   onEditFill: (fill: TradeFillView, returnFocus: HTMLElement | null) => void
   onDeleteFill: (fill: TradeFillView) => void
   onRefresh: () => void
-  onCancel: () => void
+  onRequestCancel: (returnFocus: HTMLElement | null) => void
 }) {
   const recommendationOutcomes = ['T1', 'T5', 'T20'].map((horizon) => getRecommendationOutcome(tradeCase, horizon))
   const executionOutcomes = tradeCase.outcomes.filter((outcome) => outcome.baselineType === 'EXECUTION')
@@ -390,7 +443,7 @@ function CaseDetail({
           <div className="flex flex-wrap gap-2">
             <IconButton label="刷新后续表现" loading={action === 'refresh'} disabled={busy} onClick={onRefresh} icon={<RotateCcw className="h-4 w-4" />} />
             {tradeCase.status === 'PLANNED' ? (
-              <Button type="button" variant="ghost" loading={action === 'cancel'} disabled={busy} onClick={onCancel}>取消计划</Button>
+              <Button type="button" variant="ghost" loading={action === 'cancel'} disabled={busy} onClick={(event) => onRequestCancel(event.currentTarget)}>取消计划</Button>
             ) : null}
           </div>
         </div>
@@ -489,6 +542,73 @@ function CaseDetail({
   )
 }
 
+function CancelPlanDialog({ symbol, returnFocus, busy, onClose, onConfirm }: {
+  symbol: string
+  returnFocus: HTMLElement | null
+  busy: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    dialogRef.current?.querySelector<HTMLButtonElement>('[data-cancel-plan-confirm]')?.focus()
+    return () => {
+      document.body.style.overflow = previousOverflow
+      returnFocus?.focus()
+    }
+  }, [returnFocus])
+
+  const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape' && !busy) {
+      event.preventDefault()
+      onClose()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])')
+    if (!focusable?.length) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-ink-900/40 p-0 sm:items-center sm:p-4" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !busy) onClose()
+    }}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cancel-plan-dialog-title"
+        aria-describedby="cancel-plan-dialog-description"
+        className="w-full rounded-t-xl border border-line bg-white shadow-float sm:max-w-md sm:rounded-xl"
+        onKeyDown={handleDialogKeyDown}
+      >
+        <div className="border-b border-line px-4 py-3">
+          <h2 id="cancel-plan-dialog-title" className="text-base font-semibold text-ink-900">取消复盘计划</h2>
+        </div>
+        <div className="px-4 py-5">
+          <p id="cancel-plan-dialog-description" className="text-sm leading-relaxed text-ink-600">确认取消 {symbol} 的复盘计划？取消后将不能继续录入成交。</p>
+          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>返回</Button>
+            <Button data-cancel-plan-confirm type="button" variant="danger" loading={busy} disabled={busy} onClick={onConfirm}>确认取消</Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function FillModal({ tradeCase, fill, returnFocus, busy, onClose, onSubmit, onSaved }: {
   tradeCase: TradeCaseDetail
   fill?: TradeFillView
@@ -496,7 +616,7 @@ function FillModal({ tradeCase, fill, returnFocus, busy, onClose, onSubmit, onSa
   busy: boolean
   onClose: () => void
   onSubmit: (request: UpsertTradeFillRequest) => Promise<TradeCaseDetail | undefined>
-  onSaved: (tradeCase: TradeCaseDetail) => void
+  onSaved: () => void
 }) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const firstFieldRef = useRef<HTMLButtonElement>(null)
@@ -565,7 +685,7 @@ function FillModal({ tradeCase, fill, returnFocus, busy, onClose, onSubmit, onSa
     try {
       const response = await onSubmit(request)
       if (!response) return
-      onSaved(response)
+      onSaved()
       toast.success(fill ? '成交记录已更新' : '成交记录已添加')
     } catch (submitError) {
       const message = extractTradeMutationError(submitError)
