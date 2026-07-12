@@ -1,10 +1,10 @@
 spring:
   datasource:
     url: ${JDBC_DATABASE_URL:jdbc:postgresql://localhost:5432/aistock}
+    driver-class-name: ${JDBC_DATABASE_DRIVER:org.postgresql.Driver}
     username: ${JDBC_DATABASE_USERNAME:aistock}
     password: ${JDBC_DATABASE_PASSWORD:aistock}
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
-

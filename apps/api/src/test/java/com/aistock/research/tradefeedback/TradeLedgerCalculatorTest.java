@@ -49,6 +49,21 @@ class TradeLedgerCalculatorTest {
     }
 
     @Test
+    void leavesTotalProfitUnknownForAnEmptyLedgerWithoutLatestPrice() {
+        TradeLedgerSummary result = calculator.calculate(List.<LedgerFill>of(), null);
+
+        assertThat(result.totalProfit()).isNull();
+    }
+
+    @Test
+    void leavesTotalProfitUnknownForAnOpenLedgerWithoutLatestPrice() {
+        TradeLedgerSummary result = calculator.calculate(List.of(
+                new LedgerFill(BUY, at("2026-07-13T01:35:00Z"), decimal("35"), 200)), null);
+
+        assertThat(result.totalProfit()).isNull();
+    }
+
+    @Test
     void rejectsSaleAboveAvailablePosition() {
         assertThatThrownBy(() -> calculator.calculate(List.of(
                 new LedgerFill(BUY, at("2026-07-13T01:35:00Z"), decimal("30"), 100),

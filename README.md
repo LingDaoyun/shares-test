@@ -119,8 +119,15 @@ Nacos 说明见 [docs/nacos-config.md](docs/nacos-config.md)。
 生产或联调 PostgreSQL 时使用：
 
 ```bash
-SPRING_PROFILES_ACTIVE=prod mvn -pl apps/api spring-boot:run
+SPRING_PROFILES_ACTIVE=prod \
+JDBC_DATABASE_URL=jdbc:postgresql://127.0.0.1:5432/aistock \
+JDBC_DATABASE_DRIVER=org.postgresql.Driver \
+JDBC_DATABASE_USERNAME=aistock \
+JDBC_DATABASE_PASSWORD=change-me \
+mvn -pl apps/api spring-boot:run
 ```
+
+`application-prod.yml` 默认使用 `org.postgresql.Driver`；以上四个 `JDBC_DATABASE_*` 变量应按实际 PostgreSQL 连接信息设置。
 
 ## 当前 API
 
