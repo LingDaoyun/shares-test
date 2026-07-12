@@ -168,3 +168,35 @@ Results: the focused Node check exited 0; the production build exited 0 (`1669 m
 - `apps/web-react/src/lib/tradeReview.ts`
 - `apps/web-react/scripts/tradeReviewSelectionGate.check.mjs`
 - `.superpowers/sdd/task-7-report.md`
+
+## Follow-up Fix: Commit-Phase Selection Guard
+
+### RED Evidence
+
+Extended the focused check to require layout-phase synchronization for automatic list/filter selection and immediate synchronization for explicit row selection, then ran:
+
+```text
+node apps/web-react/scripts/tradeReviewSelectionGate.check.mjs
+```
+
+Result: exit code 1. The check failed because `selectedIdRef` was only assigned in a passive `useEffect`:
+
+```text
+AssertionError [ERR_ASSERTION]: selected case identity must synchronize in a layout effect, before passive effects can observe stale selection
+```
+
+### Fix And GREEN Evidence
+
+- Replaced the passive ref synchronization with `useLayoutEffect`, so list/filter-driven automatic selection updates the operation guard during React's commit phase.
+- Explicit row selection now updates `selectedIdRef` before scheduling `setSelectedId`; the automatic selection state updater remains side-effect free.
+- Extended `tradeReviewSelectionGate.check.mjs` with source assertions for both synchronization paths.
+
+Ran from `/Users/mac/Documents/shares-test`:
+
+```text
+node apps/web-react/scripts/tradeReviewSelectionGate.check.mjs
+npm run build --prefix apps/web-react
+git diff --check
+```
+
+Results: focused Node check exited 0; production build exited 0 (`1669 modules transformed`, `built in 1.53s`); `git diff --check` exited 0 with no whitespace errors.

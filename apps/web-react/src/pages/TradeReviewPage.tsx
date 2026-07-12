@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { Edit3, Plus, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react'
 import {
   addTradeFill,
@@ -131,7 +131,7 @@ export function TradeReviewPage() {
     })
   }, [filteredCases])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     selectedIdRef.current = selectedId
     if (selectedId) clearDetailError(selectedId)
   }, [clearDetailError, selectedId])
@@ -163,6 +163,7 @@ export function TradeReviewPage() {
   }, [allCases])
 
   const selectCase = useCallback((caseId: string) => {
+    selectedIdRef.current = caseId
     setSelectedId(caseId)
     if (window.matchMedia('(max-width: 1279px)').matches) {
       window.requestAnimationFrame(() => detailPaneRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
