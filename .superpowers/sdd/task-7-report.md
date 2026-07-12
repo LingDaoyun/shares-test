@@ -169,6 +169,17 @@ Results: the focused Node check exited 0; the production build exited 0 (`1669 m
 - `apps/web-react/scripts/tradeReviewSelectionGate.check.mjs`
 - `.superpowers/sdd/task-7-report.md`
 
+## Controller Live Browser Verification
+
+The controller rebuilt the production frontend and exercised `/trade-review` against a Dockerized API with an isolated persistent H2 volume.
+
+- At `1440 x 900`, the document and body stayed within the viewport (`1440px`), no visible button/input reported clipped content, no alert was present, and the browser console had zero errors.
+- The desktop fill dialog measured `512 x 396` inside the viewport; all direction, time, price, quantity, cancel, submit, and close controls were visible and unclipped.
+- At `390 x 844`, the document stayed within the viewport (`380px` content width), no visible button/input reported clipped content, and the browser console had zero errors.
+- The mobile fill sheet measured `390 x 516`, was viewport-bounded and scrollable, and its time, price, and quantity fields were visible. The controller entered price `38.20` and quantity `1` without submitting; both values remained intact.
+- The mobile cancel-plan confirmation measured `390 x 240.5`, initially focused `确认取消`, and dismissing it restored focus to `取消计划` without changing the case.
+- Reloading the page retained the same cases, four-fill closed ledger, T1/T5 matured outcomes, and pending T20 state from the persistent API.
+
 ## Follow-up Fix: Commit-Phase Selection Guard
 
 ### RED Evidence
