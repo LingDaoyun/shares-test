@@ -47,3 +47,26 @@ All pages prefer `todayAdvice.actionLabel` and then `todayAdvice.action`, fallin
 ## Concerns
 
 There is no frontend test harness in this project, so static TypeScript/Vite verification and source-level mapping checks were used. The trade-feedback API was not exercised against a running backend in this task; error handling uses the existing toast and API error-message conventions.
+
+## Task 6 Store Race Fix Evidence
+
+Updated `apps/web-react/src/store/tradeFeedbackStore.ts` to use one pure `mergeCase(current, incoming)` policy for both single-record responses and `loadCases()` list responses:
+
+- Valid ISO `updatedAt` versions are compared chronologically; older incoming records never replace newer current records, while newer records replace older records.
+- Equal versions prefer `TradeCaseDetail` over `TradeCaseSummary`, regardless of response order. Equal-shape ties use canonical serialization for deterministic selection.
+- Bulk loading applies the same policy with one cloned case map, then rebuilds `caseIdByRecommendation` from the winning records so stale summary data cannot discard fills/outcomes or leave stale recommendation keys.
+- The pre-existing modification to `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` was left untouched.
+
+Fresh verification from `/Users/mac/Documents/shares-test`:
+
+```text
+npm run build --prefix apps/web-react
+```
+
+Result: exit code 0. TypeScript completed and Vite built the production bundle successfully (`1667 modules transformed`, `built in 1.50s`).
+
+```text
+git diff --check
+```
+
+Result: exit code 0 with no whitespace errors.
