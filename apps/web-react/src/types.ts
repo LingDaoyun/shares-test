@@ -992,6 +992,7 @@ export interface TradeCaseSummary {
   recommendedAt: string
   status: TradeCaseStatus
   ledger: TradeLedgerSummary
+  outcomes: TradeOutcomeView[]
   createdAt: string
   updatedAt: string
 }
@@ -1000,7 +1001,6 @@ export interface TradeCaseDetail extends TradeCaseSummary {
   decisionId: string | null
   recommendationPayload: unknown
   fills: TradeFillView[]
-  outcomes: TradeOutcomeView[]
   outcomeWarnings: string[]
 }
 

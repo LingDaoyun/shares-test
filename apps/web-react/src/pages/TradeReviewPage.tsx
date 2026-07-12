@@ -14,6 +14,7 @@ import { Empty } from '../components/ui/Empty'
 import { Loader } from '../components/ui/Loader'
 import { toast } from '../components/ui/Toast'
 import { changeClass, extractErrorMessage, formatDateTime, formatNumber, formatSignedPercent } from '../lib/format'
+import { extractTradeMutationError, formatShanghaiDateTimeLocal, parseShanghaiDateTimeLocal } from '../lib/tradeReview'
 import { useTradeFeedbackStore } from '../store/tradeFeedbackStore'
 import type {
   TradeCaseDetail,
@@ -27,8 +28,7 @@ import type {
 
 type StatusFilter = 'ALL' | TradeCaseStatus
 type TradeCase = TradeCaseSummary | TradeCaseDetail
-
-const detailLoadPromises = new Map<string, Promise<TradeCaseDetail>>()
+type CaseMutationKind = 'refresh' | 'cancel' | 'delete' | 'save'
 
 const statusTabs: { value: StatusFilter; label: string }[] = [
   { value: 'ALL', label: '全部' },
@@ -64,9 +64,11 @@ export function TradeReviewPage() {
   const [listError, setListError] = useState('')
   const [detailError, setDetailError] = useState('')
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null)
-  const [action, setAction] = useState<'refresh' | 'cancel' | 'delete' | null>(null)
+  const [mutation, setMutation] = useState<{ id: number; kind: CaseMutationKind } | null>(null)
   const [fillModal, setFillModal] = useState<{ fill?: TradeFillView; returnFocus: HTMLElement | null } | null>(null)
   const detailPaneRef = useRef<HTMLElement>(null)
+  const mutationSequenceRef = useRef(0)
+  const activeMutationIdRef = useRef<number | null>(null)
 
   const allCases = useMemo(
     () => Object.values(casesById).sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
@@ -77,13 +79,20 @@ export function TradeReviewPage() {
     [allCases, filter]
   )
   const selected = selectedId ? casesById[selectedId] : undefined
-  const loadDetail = useCallback((caseId: string) => {
-    const inFlight = detailLoadPromises.get(caseId)
-    if (inFlight) return inFlight
-    const request = getCase(caseId).finally(() => detailLoadPromises.delete(caseId))
-    detailLoadPromises.set(caseId, request)
-    return request
-  }, [getCase])
+  const runSelectedMutation = useCallback(async <T,>(kind: CaseMutationKind, request: () => Promise<T>) => {
+    if (activeMutationIdRef.current !== null) return undefined
+    const id = ++mutationSequenceRef.current
+    activeMutationIdRef.current = id
+    setMutation({ id, kind })
+    try {
+      return await request()
+    } finally {
+      if (activeMutationIdRef.current === id) {
+        activeMutationIdRef.current = null
+        setMutation((current) => current?.id === id ? null : current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     void loadCases().catch((error) => {
@@ -105,7 +114,7 @@ export function TradeReviewPage() {
     let alive = true
     setDetailLoadingId(selectedId)
     setDetailError('')
-    void loadDetail(selectedId)
+    void getCase(selectedId)
       .catch((error) => {
         if (!alive) return
         const message = extractErrorMessage(error)
@@ -118,24 +127,7 @@ export function TradeReviewPage() {
     return () => {
       alive = false
     }
-  }, [casesById, loadDetail, selectedId])
-
-  useEffect(() => {
-    let cancelled = false
-    const summaries = allCases.filter((tradeCase) => !isTradeCaseDetail(tradeCase))
-    const hydrateOutcomes = async () => {
-      for (const tradeCase of summaries) {
-        if (cancelled) return
-        await loadDetail(tradeCase.caseId).catch(() => {
-          // Selected-detail loading owns user-facing errors; background hydration remains quiet.
-        })
-      }
-    }
-    void hydrateOutcomes()
-    return () => {
-      cancelled = true
-    }
-  }, [allCases, loadDetail])
+  }, [casesById, getCase, selectedId])
 
   const counts = useMemo(() => {
     const next: Record<StatusFilter, number> = { ALL: allCases.length, PLANNED: 0, HOLDING: 0, CLOSED: 0, CANCELLED: 0 }
@@ -224,38 +216,34 @@ export function TradeReviewPage() {
   }
 
   const runCaseAction = async (kind: 'refresh' | 'cancel') => {
-    if (!selected) return
-    setAction(kind)
+    if (!selected || activeMutationIdRef.current !== null) return
     setDetailError('')
     try {
-      const response = kind === 'refresh'
-        ? await refreshTradeCase(selected.caseId)
-        : await cancelTradeCase(selected.caseId)
+      const response = await runSelectedMutation(kind, () => kind === 'refresh'
+        ? refreshTradeCase(selected.caseId)
+        : cancelTradeCase(selected.caseId))
+      if (!response) return
       upsertCase(response)
       toast.success(kind === 'refresh' ? '后续表现已刷新' : '复盘计划已取消')
     } catch (error) {
-      const message = extractErrorMessage(error)
+      const message = extractTradeMutationError(error)
       setDetailError(message)
       toast.error(`${kind === 'refresh' ? '刷新' : '取消'}失败：${message}`)
-    } finally {
-      setAction(null)
     }
   }
 
   const removeFill = async (fill: TradeFillView) => {
-    if (!selected || !window.confirm(`确认删除这笔${fill.side === 'BUY' ? '买入' : '卖出'} ${fill.quantity} 股的成交记录？`)) return
-    setAction('delete')
+    if (!selected || activeMutationIdRef.current !== null || !window.confirm(`确认删除这笔${fill.side === 'BUY' ? '买入' : '卖出'} ${fill.quantity} 股的成交记录？`)) return
     setDetailError('')
     try {
-      const response = await deleteTradeFill(selected.caseId, fill.fillId)
+      const response = await runSelectedMutation('delete', () => deleteTradeFill(selected.caseId, fill.fillId))
+      if (!response) return
       upsertCase(response)
       toast.success('成交记录已删除')
     } catch (error) {
-      const message = extractErrorMessage(error)
+      const message = extractTradeMutationError(error)
       setDetailError(message)
       toast.error(`删除失败：${message}`)
-    } finally {
-      setAction(null)
     }
   }
 
@@ -322,9 +310,10 @@ export function TradeReviewPage() {
             <CaseDetail
               tradeCase={selected}
               error={detailError}
-              action={action}
-              onAddFill={(returnFocus) => setFillModal({ returnFocus })}
-              onEditFill={(fill, returnFocus) => setFillModal({ fill, returnFocus })}
+              action={mutation?.kind ?? null}
+              busy={mutation !== null}
+              onAddFill={(returnFocus) => { if (!mutation) setFillModal({ returnFocus }) }}
+              onEditFill={(fill, returnFocus) => { if (!mutation) setFillModal({ fill, returnFocus }) }}
               onDeleteFill={(fill) => void removeFill(fill)}
               onRefresh={() => void runCaseAction('refresh')}
               onCancel={() => void runCaseAction('cancel')}
@@ -342,7 +331,11 @@ export function TradeReviewPage() {
           tradeCase={selected}
           fill={fillModal.fill}
           returnFocus={fillModal.returnFocus}
+          busy={mutation !== null}
           onClose={() => setFillModal(null)}
+          onSubmit={(request) => runSelectedMutation('save', () => fillModal.fill
+            ? updateTradeFill(selected.caseId, fillModal.fill.fillId, request)
+            : addTradeFill(selected.caseId, request))}
           onSaved={(response) => {
             upsertCase(response)
             setFillModal(null)
@@ -357,6 +350,7 @@ function CaseDetail({
   tradeCase,
   error,
   action,
+  busy,
   onAddFill,
   onEditFill,
   onDeleteFill,
@@ -365,7 +359,8 @@ function CaseDetail({
 }: {
   tradeCase: TradeCaseDetail
   error: string
-  action: 'refresh' | 'cancel' | 'delete' | null
+  action: CaseMutationKind | null
+  busy: boolean
   onAddFill: (returnFocus: HTMLElement | null) => void
   onEditFill: (fill: TradeFillView, returnFocus: HTMLElement | null) => void
   onDeleteFill: (fill: TradeFillView) => void
@@ -393,9 +388,9 @@ function CaseDetail({
             <p className="mt-1 break-words text-xs text-ink-500">{tradeCase.sourceModule} · {tradeCase.ruleVersion}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <IconButton label="刷新后续表现" loading={action === 'refresh'} onClick={onRefresh} icon={<RotateCcw className="h-4 w-4" />} />
+            <IconButton label="刷新后续表现" loading={action === 'refresh'} disabled={busy} onClick={onRefresh} icon={<RotateCcw className="h-4 w-4" />} />
             {tradeCase.status === 'PLANNED' ? (
-              <Button type="button" variant="ghost" loading={action === 'cancel'} onClick={onCancel}>取消计划</Button>
+              <Button type="button" variant="ghost" loading={action === 'cancel'} disabled={busy} onClick={onCancel}>取消计划</Button>
             ) : null}
           </div>
         </div>
@@ -457,7 +452,7 @@ function CaseDetail({
             variant="primary"
             icon={<Plus className="h-4 w-4" />}
             onClick={(event) => onAddFill(event.currentTarget)}
-            disabled={tradeCase.status === 'CANCELLED'}
+            disabled={tradeCase.status === 'CANCELLED' || busy}
           >
             新增成交
           </Button>
@@ -479,8 +474,8 @@ function CaseDetail({
                       <div className="mt-1 text-xs text-ink-500">{formatDateTime(fill.executedAt)}</div>
                     </div>
                     <div className="flex gap-1">
-                      <IconButton label="编辑成交" onClick={(event) => onEditFill(fill, event.currentTarget)} icon={<Edit3 className="h-4 w-4" />} />
-                      <IconButton label="删除成交" disabled={action === 'delete'} danger onClick={() => onDeleteFill(fill)} icon={<Trash2 className="h-4 w-4" />} />
+                      <IconButton label="编辑成交" disabled={busy} onClick={(event) => onEditFill(fill, event.currentTarget)} icon={<Edit3 className="h-4 w-4" />} />
+                      <IconButton label="删除成交" disabled={busy} danger onClick={() => onDeleteFill(fill)} icon={<Trash2 className="h-4 w-4" />} />
                     </div>
                   </div>
                 </li>
@@ -494,21 +489,22 @@ function CaseDetail({
   )
 }
 
-function FillModal({ tradeCase, fill, returnFocus, onClose, onSaved }: {
+function FillModal({ tradeCase, fill, returnFocus, busy, onClose, onSubmit, onSaved }: {
   tradeCase: TradeCaseDetail
   fill?: TradeFillView
   returnFocus: HTMLElement | null
+  busy: boolean
   onClose: () => void
+  onSubmit: (request: UpsertTradeFillRequest) => Promise<TradeCaseDetail | undefined>
   onSaved: (tradeCase: TradeCaseDetail) => void
 }) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const firstFieldRef = useRef<HTMLButtonElement>(null)
   const [side, setSide] = useState<TradeSide>(fill?.side ?? 'BUY')
-  const [executedAt, setExecutedAt] = useState(() => toDateTimeLocal(fill?.executedAt ?? new Date().toISOString()))
+  const [executedAt, setExecutedAt] = useState(() => formatShanghaiDateTimeLocal(fill?.executedAt ?? new Date().toISOString()))
   const [price, setPrice] = useState(fill ? String(fill.price) : '')
   const [quantity, setQuantity] = useState(fill ? String(fill.quantity) : '100')
   const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow
@@ -521,7 +517,7 @@ function FillModal({ tradeCase, fill, returnFocus, onClose, onSaved }: {
   }, [returnFocus])
 
   const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape' && !saving) {
+    if (event.key === 'Escape' && !busy) {
       event.preventDefault()
       onClose()
       return
@@ -547,8 +543,8 @@ function FillModal({ tradeCase, fill, returnFocus, onClose, onSaved }: {
     setError('')
     const numericPrice = Number(price)
     const numericQuantity = Number(quantity)
-    const timestamp = new Date(executedAt)
-    if (!executedAt || Number.isNaN(timestamp.getTime())) {
+    const timestamp = parseShanghaiDateTimeLocal(executedAt)
+    if (!timestamp) {
       setError('请输入有效的成交时间')
       return
     }
@@ -556,35 +552,31 @@ function FillModal({ tradeCase, fill, returnFocus, onClose, onSaved }: {
       setError('成交价必须大于 0')
       return
     }
-    if (!Number.isInteger(numericQuantity) || numericQuantity <= 0 || numericQuantity % 100 !== 0) {
-      setError('成交股数必须为 100 的正整数倍')
+    if (!Number.isInteger(numericQuantity) || numericQuantity <= 0) {
+      setError('成交股数必须为正整数')
       return
     }
     const request: UpsertTradeFillRequest = {
       side,
-      executedAt: timestamp.toISOString(),
+      executedAt: timestamp,
       price: numericPrice,
       quantity: numericQuantity
     }
-    setSaving(true)
     try {
-      const response = fill
-        ? await updateTradeFill(tradeCase.caseId, fill.fillId, request)
-        : await addTradeFill(tradeCase.caseId, request)
+      const response = await onSubmit(request)
+      if (!response) return
       onSaved(response)
       toast.success(fill ? '成交记录已更新' : '成交记录已添加')
     } catch (submitError) {
-      const message = extractErrorMessage(submitError)
+      const message = extractTradeMutationError(submitError)
       setError(message)
       toast.error(`${fill ? '更新' : '添加'}失败：${message}`)
-    } finally {
-      setSaving(false)
     }
   }
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-ink-900/40 p-0 sm:items-center sm:p-4" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && !saving) onClose()
+      if (event.target === event.currentTarget && !busy) onClose()
     }}>
       <div
         ref={dialogRef}
@@ -599,7 +591,7 @@ function FillModal({ tradeCase, fill, returnFocus, onClose, onSaved }: {
             <h2 id="fill-dialog-title" className="text-base font-semibold text-ink-900">{fill ? '编辑成交' : '新增成交'}</h2>
             <p className="mt-0.5 text-xs text-ink-500">{tradeCase.symbol} {tradeCase.companyName}</p>
           </div>
-          <IconButton label="关闭弹窗" disabled={saving} onClick={onClose} icon={<X className="h-4 w-4" />} />
+          <IconButton label="关闭弹窗" disabled={busy} onClick={onClose} icon={<X className="h-4 w-4" />} />
         </div>
         <form onSubmit={(event) => void submit(event)} className="space-y-4 px-4 py-5">
           <fieldset>
@@ -621,7 +613,7 @@ function FillModal({ tradeCase, fill, returnFocus, onClose, onSaved }: {
           </fieldset>
           <label className="block">
             <span className="field-label">成交时间</span>
-            <input className="field" type="datetime-local" required value={executedAt} onChange={(event) => setExecutedAt(event.target.value)} />
+            <input className="field" type="datetime-local" step="1" required value={executedAt} onChange={(event) => setExecutedAt(event.target.value)} />
           </label>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <label className="block">
@@ -630,13 +622,13 @@ function FillModal({ tradeCase, fill, returnFocus, onClose, onSaved }: {
             </label>
             <label className="block">
               <span className="field-label">成交股数</span>
-              <input className="field tabular" type="number" min="100" step="100" inputMode="numeric" required value={quantity} onChange={(event) => setQuantity(event.target.value)} />
+              <input className="field tabular" type="number" min="1" step="1" inputMode="numeric" required value={quantity} onChange={(event) => setQuantity(event.target.value)} />
             </label>
           </div>
           {error ? <div role="alert" className="border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
           <div className="flex flex-col-reverse gap-2 border-t border-line-soft pt-4 sm:flex-row sm:justify-end">
-            <Button type="button" variant="ghost" disabled={saving} onClick={onClose}>取消</Button>
-            <Button type="submit" variant="primary" loading={saving}>{fill ? '保存修改' : '添加成交'}</Button>
+            <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>取消</Button>
+            <Button type="submit" variant="primary" loading={busy} disabled={busy}>{fill ? '保存修改' : '添加成交'}</Button>
           </div>
         </form>
       </div>
@@ -685,14 +677,17 @@ function OutcomeRow({ horizon, outcome }: { horizon: string; outcome?: TradeOutc
           <div className="mt-1 break-words text-xs text-ink-400">来源 {outcome.sourceName ?? '待补充'} · 行情时间 {formatDateTime(outcome.marketTimestamp)}</div>
         </div>
       ) : (
-        <div className="text-sm text-ink-400">待载入</div>
+        <div className="text-sm text-ink-400">未评估</div>
       )}
     </div>
   )
 }
 
 function OutcomeCell({ outcome }: { outcome?: TradeOutcomeView }) {
-  if (!outcome) return <span className="whitespace-nowrap text-xs text-ink-400">待载入</span>
+  if (!outcome) return <span className="whitespace-nowrap text-xs text-ink-400">未评估</span>
+  if (outcome.status === 'PENDING') return <span className="whitespace-nowrap text-xs text-sky-600">待成熟</span>
+  if (outcome.status === 'UNAVAILABLE') return <span className="whitespace-nowrap text-xs text-red-600">数据不可用</span>
+  if (outcome.status !== 'MATURED') return <span className="whitespace-nowrap text-xs text-ink-400">状态异常</span>
   return <span className={`whitespace-nowrap tabular font-medium ${changeClass(outcome.returnPct)}`}>{formatSignedPercent(outcome.returnPct)}</span>
 }
 
@@ -734,17 +729,9 @@ function isTradeCaseDetail(tradeCase: TradeCase | undefined): tradeCase is Trade
 }
 
 function getRecommendationOutcome(tradeCase: TradeCase, horizon: string) {
-  if (!isTradeCaseDetail(tradeCase)) return undefined
   return tradeCase.outcomes.find((outcome) => outcome.baselineType === 'RECOMMENDATION' && outcome.horizon === horizon)
 }
 
 function formatMoney(value: number | null | undefined) {
   return value === null || value === undefined ? '待补充' : `${formatNumber(value)} 元`
-}
-
-function toDateTimeLocal(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  const offset = date.getTimezoneOffset() * 60_000
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
 }

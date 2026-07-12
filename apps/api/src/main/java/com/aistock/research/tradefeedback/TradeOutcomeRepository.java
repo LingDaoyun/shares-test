@@ -3,6 +3,7 @@ package com.aistock.research.tradefeedback;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -30,6 +31,8 @@ public interface TradeOutcomeRepository extends JpaRepository<TradeOutcomeEntity
     List<MaturedRecommendationRow> findMaturedRecommendationT20();
 
     List<TradeOutcomeEntity> findByCaseIdOrderByHorizonAsc(String caseId);
+
+    List<TradeOutcomeEntity> findByCaseIdInOrderByCaseIdAscBaselineTypeAscHorizonAsc(Collection<String> caseIds);
 
     Optional<TradeOutcomeEntity> findByCaseIdAndBaselineTypeAndHorizon(String caseId, String baselineType, String horizon);
 }

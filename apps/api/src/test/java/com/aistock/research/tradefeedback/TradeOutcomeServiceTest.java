@@ -111,6 +111,26 @@ class TradeOutcomeServiceTest {
     }
 
     @Test
+    void advancesAndSavesTheLockedCaseVersionAfterEverySuccessfulReconciliation() {
+        TradeCaseEntity tradeCase = tradeCase("HOLDING");
+        when(cases.findById("case-1")).thenReturn(Optional.of(tradeCase));
+        when(cases.findByIdForUpdate("case-1")).thenReturn(Optional.of(tradeCase));
+        when(cases.save(tradeCase)).thenReturn(tradeCase);
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(twentyBars());
+        when(gateway.latestPrice(anyString())).thenReturn(Optional.of(
+                latest("13", "2026-08-07", "2026-08-07T07:00:00Z")));
+        Instant originalVersion = tradeCase.getUpdatedAt();
+
+        service.refresh("case-1");
+        Instant firstRefreshVersion = tradeCase.getUpdatedAt();
+        service.refresh("case-1");
+
+        assertThat(firstRefreshVersion).isAfter(originalVersion);
+        assertThat(tradeCase.getUpdatedAt()).isAfter(firstRefreshVersion);
+        verify(cases, times(2)).save(tradeCase);
+    }
+
+    @Test
     void keepsMatureSnapshotsWhenHistoryBecomesInsufficient() {
         TradeOutcomeEntity matureT5 = TradeOutcomeEntity.matured(
                 "mature-t5", "case-1", "RECOMMENDATION", "T5", decimal("10"), decimal("12"),

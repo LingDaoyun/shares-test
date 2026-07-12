@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -18,6 +19,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest
@@ -33,7 +38,7 @@ class TradeFeedbackControllerTest {
     @Autowired
     private TradeFillRepository fillRepository;
 
-    @Autowired
+    @SpyBean
     private TradeOutcomeRepository outcomeRepository;
 
     @MockBean
@@ -65,8 +70,9 @@ class TradeFeedbackControllerTest {
                 new LatestMarketPrice(new java.math.BigDecimal("40"), "EAST_MONEY_LIVE_QUOTE",
                         java.time.LocalDate.parse("2026-07-20"),
                         java.time.Instant.parse("2026-07-20T07:00:00Z"))));
+        java.time.Instant versionBeforeRefresh = caseRepository.findById(caseId).orElseThrow().getUpdatedAt();
 
-        mockMvc.perform(post("/api/trade-cases/{caseId}/refresh", caseId))
+        String refreshed = mockMvc.perform(post("/api/trade-cases/{caseId}/refresh", caseId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.outcomeWarnings").isEmpty())
                 .andExpect(jsonPath("$.ledger.latestPrice").value(40))
@@ -82,7 +88,15 @@ class TradeFeedbackControllerTest {
                 .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'RECOMMENDATION' && @.horizon == 'CURRENT')].sourceName")
                         .value("EAST_MONEY_LIVE_QUOTE"))
                 .andExpect(jsonPath("$.outcomes[?(@.baselineType == 'RECOMMENDATION' && @.horizon == 'CURRENT')].marketTimestamp")
-                        .value("2026-07-20T07:00:00Z"));
+                        .value("2026-07-20T07:00:00Z"))
+                .andReturn().getResponse().getContentAsString();
+        String refreshedVersion = new com.fasterxml.jackson.databind.ObjectMapper().readTree(refreshed)
+                .path("updatedAt").asText();
+        org.assertj.core.api.Assertions.assertThat(java.time.Instant.parse(refreshedVersion))
+                .isAfter(versionBeforeRefresh);
+        mockMvc.perform(get("/api/trade-cases"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.caseId == '" + caseId + "')].updatedAt").value(refreshedVersion));
 
         mockMvc.perform(post("/api/trade-cases/{caseId}/refresh", caseId))
                 .andExpect(status().isOk());
@@ -131,6 +145,40 @@ class TradeFeedbackControllerTest {
                 .andExpect(jsonPath("$.caseId").value(caseId))
                 .andExpect(jsonPath("$.createdAt").isNotEmpty())
                 .andExpect(jsonPath("$.updatedAt").isNotEmpty());
+    }
+
+    @Test
+    void listsCompactOutcomesWithOneBulkQueryAndNoPerCaseOutcomeReads() throws Exception {
+        String firstCaseId = createCase();
+        caseRepository.save(TradeCaseEntity.planned(
+                "case-2", "fingerprint-2", null, "600519", "贵州茅台", "SHORT_TERM",
+                "观察", null, "short-term-v1", new java.math.BigDecimal("1500"),
+                java.time.Instant.parse("2026-07-13T02:00:00Z"), "{}",
+                java.time.Instant.parse("2026-07-13T02:00:00Z")));
+        outcomeRepository.save(TradeOutcomeEntity.matured(
+                "outcome-list-t1", firstCaseId, "RECOMMENDATION", "T1",
+                new java.math.BigDecimal("36.20"), new java.math.BigDecimal("37.00"),
+                java.time.LocalDate.parse("2026-07-14"), new java.math.BigDecimal("2.2099"),
+                null, null, "DAILY_KLINE", null, java.time.Instant.parse("2026-07-14T08:00:00Z")));
+        outcomeRepository.save(TradeOutcomeEntity.matured(
+                "outcome-list-current", firstCaseId, "RECOMMENDATION", "CURRENT",
+                new java.math.BigDecimal("36.20"), new java.math.BigDecimal("38.00"),
+                java.time.LocalDate.parse("2026-07-14"), new java.math.BigDecimal("4.9724"),
+                null, null, "EAST_MONEY_LIVE_QUOTE", java.time.Instant.parse("2026-07-14T07:00:00Z"),
+                java.time.Instant.parse("2026-07-14T08:00:00Z")));
+        outcomeRepository.save(TradeOutcomeEntity.pending(
+                "outcome-list-t5", "case-2", "RECOMMENDATION", "T5",
+                java.time.Instant.parse("2026-07-14T08:00:00Z")));
+        clearInvocations(outcomeRepository);
+
+        mockMvc.perform(get("/api/trade-cases"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.caseId == '" + firstCaseId + "')].outcomes[?(@.horizon == 'T1')].status").value("MATURED"))
+                .andExpect(jsonPath("$[?(@.caseId == '" + firstCaseId + "')].ledger.latestPrice").value(38.0))
+                .andExpect(jsonPath("$[?(@.caseId == 'case-2')].outcomes[0].status").value("PENDING"));
+
+        verify(outcomeRepository, times(1)).findByCaseIdInOrderByCaseIdAscBaselineTypeAscHorizonAsc(any());
+        verify(outcomeRepository, never()).findByCaseIdOrderByHorizonAsc(anyString());
     }
 
     @Test

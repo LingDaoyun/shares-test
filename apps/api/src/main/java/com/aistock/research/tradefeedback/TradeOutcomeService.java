@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -120,6 +121,21 @@ public class TradeOutcomeService {
             requireCase(caseId);
             return outcomeRepository.findByCaseIdOrderByHorizonAsc(caseId);
         })).orElseGet(List::of);
+    }
+
+    public List<TradeOutcomeEntity> outcomes(Collection<String> caseIds) {
+        List<String> normalizedCaseIds = caseIds == null ? List.of() : caseIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(String::trim)
+                .filter(caseId -> !caseId.isEmpty())
+                .distinct()
+                .toList();
+        if (normalizedCaseIds.isEmpty()) {
+            return List.of();
+        }
+        return Optional.ofNullable(readTransaction.execute(status ->
+                outcomeRepository.findByCaseIdInOrderByCaseIdAscBaselineTypeAscHorizonAsc(normalizedCaseIds)
+        )).orElseGet(List::of);
     }
 
     private boolean needsRefresh(TradeCaseEntity tradeCase) {
@@ -254,6 +270,12 @@ public class TradeOutcomeService {
         if (!writes.isEmpty()) {
             outcomeRepository.saveAll(writes);
         }
+        Instant nextVersion = clock.instant();
+        if (!nextVersion.isAfter(lockedCase.getUpdatedAt())) {
+            nextVersion = lockedCase.getUpdatedAt().plusMillis(1);
+        }
+        lockedCase.touch(nextVersion);
+        caseRepository.save(lockedCase);
         return true;
     }
 

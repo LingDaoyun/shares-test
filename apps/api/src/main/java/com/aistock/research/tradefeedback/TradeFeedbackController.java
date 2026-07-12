@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Supplier;
 
 @RestController
@@ -48,14 +49,21 @@ public class TradeFeedbackController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String symbol
     ) {
-        return translate(tradeFeedbackService::listCases).stream()
+        List<TradeCaseEntity> tradeCases = translate(tradeFeedbackService::listCases).stream()
                 .filter(tradeCase -> matches(tradeCase.getStatus(), status))
                 .filter(tradeCase -> matches(tradeCase.getSymbol(), symbol))
-                .map(tradeCase -> mapper.summary(
-                        tradeCase,
-                        translate(() -> tradeFeedbackService.ledger(tradeCase.getCaseId(), null))
-                ))
                 .toList();
+        Map<String, List<TradeOutcomeEntity>> outcomesByCaseId = translate(() -> tradeOutcomeService.outcomes(
+                tradeCases.stream().map(TradeCaseEntity::getCaseId).toList()
+        )).stream().collect(java.util.stream.Collectors.groupingBy(TradeOutcomeEntity::getCaseId));
+        return tradeCases.stream().map(tradeCase -> {
+            List<TradeOutcomeEntity> outcomes = outcomesByCaseId.getOrDefault(tradeCase.getCaseId(), List.of());
+            return mapper.summary(
+                    tradeCase,
+                    translate(() -> tradeFeedbackService.ledger(tradeCase.getCaseId(), currentEvaluationPrice(outcomes))),
+                    outcomes
+            );
+        }).toList();
     }
 
     @GetMapping("/{caseId}")

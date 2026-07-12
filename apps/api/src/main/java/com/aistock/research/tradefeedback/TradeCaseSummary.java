@@ -2,6 +2,7 @@ package com.aistock.research.tradefeedback;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 
 public record TradeCaseSummary(
         String caseId,
@@ -15,6 +16,7 @@ public record TradeCaseSummary(
         Instant recommendedAt,
         String status,
         TradeLedgerSummary ledger,
+        List<TradeOutcomeView> outcomes,
         Instant createdAt,
         Instant updatedAt
 ) {

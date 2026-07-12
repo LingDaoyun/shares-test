@@ -16,7 +16,11 @@ class TradeFeedbackMapper {
         this.objectMapper = objectMapper;
     }
 
-    TradeCaseSummary summary(TradeCaseEntity tradeCase, TradeLedgerSummary ledger) {
+    TradeCaseSummary summary(
+            TradeCaseEntity tradeCase,
+            TradeLedgerSummary ledger,
+            List<TradeOutcomeEntity> outcomes
+    ) {
         return new TradeCaseSummary(
                 tradeCase.getCaseId(),
                 tradeCase.getSymbol(),
@@ -29,6 +33,7 @@ class TradeFeedbackMapper {
                 tradeCase.getRecommendedAt(),
                 tradeCase.getStatus(),
                 ledger,
+                outcomes.stream().map(this::outcome).toList(),
                 tradeCase.getCreatedAt(),
                 tradeCase.getUpdatedAt()
         );

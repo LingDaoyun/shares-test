@@ -186,6 +186,10 @@ public class TradeCaseEntity {
         this.updatedAt = updatedAt;
     }
 
+    public void touch(Instant updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }

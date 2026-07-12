@@ -60,3 +60,70 @@ Result: exit code 0 with no whitespace errors, including the pre-existing unrela
 - The trade-case summary contract omits outcomes. The page therefore performs one deduplicated, serial detail request per summary to populate all T1/T5/T20 table cells; a future summary API that includes compact outcomes would remove this N+1 read pattern.
 - The frontend was not exercised against a running backend in this task. Backend validation and outcome-refresh failures are surfaced through inline alerts and existing toast conventions.
 - The unrelated modified `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` remains untouched and will not be staged.
+
+## Review Fixes At HEAD 1731593
+
+- Successful outcome reconciliation now advances and saves the locked parent case version. The timestamp is forced to be strictly newer even when the clock has not advanced.
+- `TradeCaseSummary` now includes compact outcomes. The list endpoint fetches outcomes for all filtered case IDs with one bulk repository query, maps them by case, and reuses CURRENT prices for the existing ledger summaries. No per-case outcome read was added.
+- The page no longer hydrates every summary through detail requests. Only the selected summary loads its detail.
+- Fill quantity accepts any positive integer with `min="1"` and `step="1"`.
+- Structured backend field messages are shown in stable field-name order before top-level text. Non-API/parser failures use a safe generic message.
+- `datetime-local` values display Asia/Shanghai wall time with seconds and submit through explicit `+08:00` parsing with `step="1"`.
+- Scan cells distinguish `未评估`, `待成熟`, `数据不可用`, and matured returns.
+- Refresh, cancel, add, edit, and delete share one tokenized selected-case mutation gate. All related controls disable while it is active, and only the matching operation token can clear it.
+- Existing focus trapping, Escape handling, focus restoration, scroll locking, responsive table/detail layout, alerts, labels, and tooltips remain in place. Browser visual QA remains deferred to Task 8.
+
+## RED Evidence
+
+Ran:
+
+```text
+mvn -pl apps/api -Dtest=TradeOutcomeServiceTest,TradeFeedbackControllerTest test
+```
+
+After adding the missing bulk repository signature so the behavioral tests could compile, the focused run failed as expected: `Tests run: 23, Failures: 2, Errors: 0, Skipped: 0`.
+
+- `advancesAndSavesTheLockedCaseVersionAfterEverySuccessfulReconciliation`: refreshed `updatedAt` remained equal to the prior version.
+- `listsCompactOutcomesWithOneBulkQueryAndNoPerCaseOutcomeReads`: list JSON had no summary `outcomes` value.
+
+## GREEN Evidence
+
+Focused backend regression run:
+
+```text
+mvn -pl apps/api -Dtest=TradeOutcomeServiceTest,TradeFeedbackControllerTest test
+```
+
+Result: `Tests run: 23, Failures: 0, Errors: 0, Skipped: 0`. This includes service-level monotonic version saves, refresh-response/list-version equality, compact summary outcomes, retained summary latest price, exactly one bulk outcome repository call, and no per-case outcome repository reads from the list endpoint.
+
+Full backend suite:
+
+```text
+mvn -pl apps/api test
+```
+
+Result: `Tests run: 202, Failures: 0, Errors: 0, Skipped: 0`.
+
+Frontend production build:
+
+```text
+npm run build --prefix apps/web-react
+```
+
+Result: exit code 0; TypeScript and Vite completed with `1669 modules transformed`, `built in 1.55s`.
+
+Pure helper/source checks used Node 24 type stripping and source scans. Verified:
+
+```text
+2026-07-13T01:35:42Z -> 2026-07-13T09:35:42 -> 2026-07-13T01:35:42.000Z
+fields { quantity, price } -> 价格错误；股数错误
+raw parser Error -> 请求失败，请稍后重试
+```
+
+Source scans found no old background hydration, 100-share divisibility, browser-zone offset conversion, or `min/step="100"` code.
+
+## Remaining Concerns After Review
+
+- There is still no frontend test harness; frontend verification is the production build, executable pure-helper checks, and source-level interaction review.
+- Live backend/frontend and visual browser QA are intentionally deferred to Task 8.
+- The unrelated modified `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` remained untouched and is excluded from the Task 7 commit.
