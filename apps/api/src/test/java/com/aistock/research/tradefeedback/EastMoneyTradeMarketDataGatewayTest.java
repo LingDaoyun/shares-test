@@ -1,6 +1,8 @@
 package com.aistock.research.tradefeedback;
 
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
+import com.aistock.research.integration.eastmoney.EastMoneyKLine;
+import com.aistock.research.integration.eastmoney.EastMoneyKLineSeries;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import org.junit.jupiter.api.Test;
 
@@ -69,6 +71,28 @@ class EastMoneyTradeMarketDataGatewayTest {
         assertThatThrownBy(() -> gateway.latestPrice("002714"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("east money down");
+    }
+
+    @Test
+    void preservesHistoricalProviderAndRejectsPartialSeriesAtTheOutcomeBoundary() {
+        EastMoneyClient client = mock(EastMoneyClient.class);
+        LocalDate begin = LocalDate.parse("2025-01-01");
+        LocalDate end = LocalDate.parse("2026-07-11");
+        EastMoneyKLine partialRow = new EastMoneyKLine(
+                "002714", LocalDate.parse("2025-01-02"), new BigDecimal("10"),
+                new BigDecimal("11"), new BigDecimal("12"), new BigDecimal("9"), null, null);
+        when(client.fetchDailyKLineSeries("002714", begin, end)).thenReturn(
+                new EastMoneyKLineSeries(
+                        List.of(partialRow), "TENCENT_QFQ_DAILY_PARTIAL", false,
+                        "仅完成 1/2 个分片"));
+        EastMoneyTradeMarketDataGateway gateway = new EastMoneyTradeMarketDataGateway(client);
+
+        MarketKLineSeries result = gateway.dailyKLineSeries("002714", begin, end);
+
+        assertThat(result.complete()).isFalse();
+        assertThat(result.sourceName()).isEqualTo("TENCENT_QFQ_DAILY_PARTIAL");
+        assertThat(result.rows()).hasSize(1);
+        assertThat(result.detail()).contains("1/2");
     }
 
     private EastMoneyQuote quote(String symbol, String price) {

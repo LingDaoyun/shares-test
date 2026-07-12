@@ -159,7 +159,14 @@ export function TechTrackerPage() {
                   <Tag tone="neutral">{stocks.length} 只</Tag>
                 </div>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {stocks.map((stock) => <TechStockCard key={stock.symbol} stock={stock} generatedAt={report.generatedAt} />)}
+                  {stocks.map((stock) => (
+                    <TechStockCard
+                      key={stock.symbol}
+                      stock={stock}
+                      generatedAt={report.generatedAt}
+                      tradeCaptureToken={report.tradeCaptureTokens?.[stock.symbol] ?? null}
+                    />
+                  ))}
                 </div>
               </section>
             ))}
@@ -170,9 +177,15 @@ export function TechTrackerPage() {
   )
 }
 
-function TechStockCard({ stock, generatedAt }: { stock: TechTrackedStock; generatedAt: string }) {
-  const action = stock.todayAdvice.actionLabel || stock.todayAdvice.action || stock.actionLabel || stock.action
-
+function TechStockCard({
+  stock,
+  generatedAt,
+  tradeCaptureToken
+}: {
+  stock: TechTrackedStock
+  generatedAt: string
+  tradeCaptureToken: string | null
+}) {
   return (
     <Card className="transition hover:border-brand-300 hover:shadow-soft">
       <div className="flex flex-col gap-4">
@@ -189,14 +202,10 @@ function TechStockCard({ stock, generatedAt }: { stock: TechTrackedStock; genera
             <WatchButton symbol={stock.symbol} />
             <TradeReviewButton
               symbol={stock.symbol}
-              companyName={stock.name}
               sourceModule="HOT_TRACKER"
-              action={action}
-              score={stock.score.finalScore}
               ruleVersion="hot-tracker-v2"
-              recommendedPrice={stock.latestPrice}
               recommendedAt={generatedAt}
-              payload={stock}
+              attestationToken={tradeCaptureToken}
             />
             <ScoreBadge value={stock.score.finalScore} />
             <Tag tone={actionTone[stock.action] ?? 'neutral'}>{stock.actionLabel}</Tag>

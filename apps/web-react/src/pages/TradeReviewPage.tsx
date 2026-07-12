@@ -62,7 +62,10 @@ export function TradeReviewPage() {
   const casesById = useTradeFeedbackStore((state) => state.casesById)
   const loaded = useTradeFeedbackStore((state) => state.loaded)
   const loading = useTradeFeedbackStore((state) => state.loading)
+  const loadingMore = useTradeFeedbackStore((state) => state.loadingMore)
+  const hasMore = useTradeFeedbackStore((state) => state.hasMore)
   const loadCases = useTradeFeedbackStore((state) => state.loadCases)
+  const loadMoreCases = useTradeFeedbackStore((state) => state.loadMoreCases)
   const refreshCases = useTradeFeedbackStore((state) => state.refreshCases)
   const getCase = useTradeFeedbackStore((state) => state.getCase)
   const upsertCase = useTradeFeedbackStore((state) => state.upsertCase)
@@ -343,6 +346,22 @@ export function TradeReviewPage() {
               emptyText={filter === 'ALL' ? '暂无复盘单' : '当前状态下暂无复盘单'}
             />
           )}
+          {loaded && hasMore ? (
+            <div className="flex justify-center border-t border-line-soft py-3">
+              <Button
+                type="button"
+                variant="secondary"
+                loading={loadingMore}
+                onClick={() => void loadMoreCases().catch((error) => {
+                  const message = extractErrorMessage(error)
+                  setListError(message)
+                  toast.error(`更早复盘单加载失败：${message}`)
+                })}
+              >
+                加载更早记录
+              </Button>
+            </div>
+          ) : null}
         </section>
         <aside ref={detailPaneRef} aria-labelledby="trade-case-detail-heading" className="min-w-0 scroll-mt-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:self-start xl:overflow-y-auto">
           {!selected ? (
@@ -438,6 +457,9 @@ function CaseDetail({
             <div className="flex flex-wrap items-center gap-2">
               <h2 id="trade-case-detail-heading" className="text-lg font-semibold text-ink-900">{tradeCase.symbol} {tradeCase.companyName}</h2>
               <StatusTag status={tradeCase.status} />
+              <Tag tone={tradeCase.recommendationVerified ? 'success' : 'neutral'}>
+                {tradeCase.recommendationVerified ? '系统认证' : '历史未认证'}
+              </Tag>
             </div>
             <p className="mt-1 break-words text-xs text-ink-500">{tradeCase.sourceModule} · {tradeCase.ruleVersion}</p>
           </div>

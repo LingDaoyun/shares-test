@@ -1,5 +1,6 @@
 package com.aistock.research.mispricing;
 
+import com.aistock.research.tradefeedback.RecommendationAttestationService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -12,9 +13,14 @@ import java.math.BigDecimal;
 public class MispricingController {
 
     private final MispricingService mispricingService;
+    private final RecommendationAttestationService attestationService;
 
-    public MispricingController(MispricingService mispricingService) {
+    public MispricingController(
+            MispricingService mispricingService,
+            RecommendationAttestationService attestationService
+    ) {
         this.mispricingService = mispricingService;
+        this.attestationService = attestationService;
     }
 
     @GetMapping("/report")
@@ -26,6 +32,7 @@ public class MispricingController {
             @RequestParam(required = false) BigDecimal minQuality,
             @RequestParam(required = false) Integer scanLimit
     ) {
-        return mispricingService.report(limit, hotHeat, maxPe, maxPb, minQuality, scanLimit);
+        return attestationService.attest(
+                mispricingService.report(limit, hotHeat, maxPe, maxPb, minQuality, scanLimit));
     }
 }

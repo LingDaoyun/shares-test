@@ -8,5 +8,9 @@ public interface TradeMarketDataGateway {
 
     List<MarketBar> dailyKLines(String symbol, LocalDate begin, LocalDate end);
 
+    default MarketKLineSeries dailyKLineSeries(String symbol, LocalDate begin, LocalDate end) {
+        return MarketKLineSeries.complete(dailyKLines(symbol, begin, end), "UNSPECIFIED_DAILY_KLINE");
+    }
+
     Optional<LatestMarketPrice> latestPrice(String symbol);
 }

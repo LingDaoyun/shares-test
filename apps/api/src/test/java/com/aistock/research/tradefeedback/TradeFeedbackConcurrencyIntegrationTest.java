@@ -24,7 +24,13 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DataJpaTest
-@Import({TradeFeedbackService.class, TradeLedgerCalculator.class, TradeFeedbackConcurrencyIntegrationTest.TestConfig.class})
+@Import({
+        TradeFeedbackService.class,
+        TradeLedgerCalculator.class,
+        TradeFillProjector.class,
+        RecommendationAttestationService.class,
+        TradeFeedbackConcurrencyIntegrationTest.TestConfig.class
+})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class TradeFeedbackConcurrencyIntegrationTest {
 
@@ -37,7 +43,7 @@ class TradeFeedbackConcurrencyIntegrationTest {
         }
     }
 
-    private static final Instant RECOMMENDED_AT = Instant.parse("2026-07-13T01:00:00Z");
+    private static final Instant RECOMMENDED_AT = Instant.parse("2026-07-11T01:00:00Z");
 
     @org.springframework.beans.factory.annotation.Autowired
     private TradeFeedbackService service;
@@ -49,10 +55,17 @@ class TradeFeedbackConcurrencyIntegrationTest {
     private TradeFillRepository fills;
 
     @org.springframework.beans.factory.annotation.Autowired
+    private TradeFillRevisionRepository revisions;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private RecommendationAttestationService attestations;
+
+    @org.springframework.beans.factory.annotation.Autowired
     private TradeLedgerCalculator ledgerCalculator;
 
     @BeforeEach
     void clearDatabase() {
+        revisions.deleteAll();
         fills.deleteAll();
         cases.deleteAll();
     }
@@ -60,11 +73,11 @@ class TradeFeedbackConcurrencyIntegrationTest {
     @Test
     void concurrentSellsNeverPersistAnOversoldLedger() throws Exception {
         TradeCaseEntity tradeCase = service.createCase(caseRequest("decision-sells"));
-        service.addFill(tradeCase.getCaseId(), fill(TradeSide.BUY, "2026-07-13T01:05:00Z", "35", 100));
+        service.addFill(tradeCase.getCaseId(), fill(TradeSide.BUY, "2026-07-11T01:05:00Z", "35", 100));
 
         List<Attempt<TradeCaseEntity>> attempts = runConcurrently(
-                () -> service.addFill(tradeCase.getCaseId(), fill(TradeSide.SELL, "2026-07-13T01:10:00Z", "36", 60)),
-                () -> service.addFill(tradeCase.getCaseId(), fill(TradeSide.SELL, "2026-07-13T01:10:00Z", "36", 60))
+                () -> service.addFill(tradeCase.getCaseId(), fill(TradeSide.SELL, "2026-07-11T01:10:00Z", "36", 60)),
+                () -> service.addFill(tradeCase.getCaseId(), fill(TradeSide.SELL, "2026-07-11T01:10:00Z", "36", 60))
         );
 
         assertThat(attempts).filteredOn(attempt -> attempt.error() == null).hasSize(1);
@@ -123,18 +136,16 @@ class TradeFeedbackConcurrencyIntegrationTest {
     }
 
     private CreateTradeCaseRequest caseRequest(String decisionId) {
-        return new CreateTradeCaseRequest(
-                null,
+        String token = attestations.register(
+                RecommendationSource.MISPRICING,
                 "002714",
                 "牧原股份",
-                "MISPRICING",
                 "分批建仓",
                 new BigDecimal("78"),
-                "mispricing-v2",
                 new BigDecimal("36.20"),
                 RECOMMENDED_AT,
-                java.util.Map.of("source", "concurrency-test")
-        );
+                java.util.Map.of("source", "concurrency-test", "request", decisionId));
+        return new CreateTradeCaseRequest(token);
     }
 
     private UpsertTradeFillRequest fill(TradeSide side, String executedAt, String price, long quantity) {

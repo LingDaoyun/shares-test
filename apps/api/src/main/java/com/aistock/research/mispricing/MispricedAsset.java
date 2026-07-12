@@ -5,6 +5,7 @@ import com.aistock.research.quality.EvidenceCompleteness;
 import com.aistock.research.quality.RecommendationEvidenceBundle;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 public record MispricedAsset(
@@ -14,6 +15,7 @@ public record MispricedAsset(
         String assetGroup,
         String industry,
         BigDecimal latestPrice,
+        Instant marketTimestamp,
         BigDecimal changePercent,
         BigDecimal peTtm,
         BigDecimal pbRatio,

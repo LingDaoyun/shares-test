@@ -506,6 +506,7 @@ export interface ShortTermReport {
   hotDirections: ShortTermHotDirection[]
   marketSentiment: ShortTermMarketSentiment
   exclusions: ShortTermRiskExclusion[]
+  tradeCaptureTokens: Record<string, string>
   generatedAt: string
 }
 
@@ -550,6 +551,7 @@ export interface ShortTermRiskExclusion {
   market: string | null
   industry: string | null
   latestPrice: number | null
+  marketTimestamp: string | null
   changePercent: number | null
   amount: number | null
   peTtm: number | null
@@ -658,6 +660,7 @@ export interface TechTrackingReport {
   policySignals: TechEvidenceItem[]
   ruleSet: TechTrackingRuleSet
   candidates: TechTrackedStock[]
+  tradeCaptureTokens: Record<string, string>
   generatedAt: string
 }
 
@@ -712,6 +715,7 @@ export interface MispricedAsset {
   assetGroup: string
   industry: string | null
   latestPrice: number | null
+  marketTimestamp: string | null
   changePercent: number | null
   peTtm: number | null
   pbRatio: number | null
@@ -741,6 +745,7 @@ export interface MispricingReport {
   ruleSet: MispricingRuleSet
   policySignals: MispricingEvidenceItem[]
   candidates: MispricedAsset[]
+  tradeCaptureTokens: Record<string, string>
   generatedAt: string
 }
 
@@ -847,6 +852,7 @@ export interface CycleTrialReport {
   methodology: string[]
   ruleSet: CycleTrialRuleSet
   candidates: CycleTrialCandidate[]
+  tradeCaptureTokens: Record<string, string>
   generatedAt: string
 }
 
@@ -889,6 +895,8 @@ export interface DailyDecisionSignal {
   actionLabel: string
   confidence: number
   score: number | null
+  recommendedPrice: number | null
+  marketTimestamp: string | null
   horizon: string
   marketPhase: string
   todayAdvice: TradingAdvice
@@ -908,6 +916,7 @@ export interface DailySignalReport {
   actionCounts: Record<string, number>
   strategyPlaybooks: StrategyPlaybook[]
   signals: DailyDecisionSignal[]
+  tradeCaptureTokens: Record<string, string>
   generatedAt: string
 }
 
@@ -922,16 +931,7 @@ export type TradeSide = 'BUY' | 'SELL'
 export type TradeCaseStatus = 'PLANNED' | 'HOLDING' | 'CLOSED' | 'CANCELLED'
 
 export interface CreateTradeCaseRequest {
-  decisionId?: string | null
-  symbol: string
-  companyName: string
-  sourceModule: string
-  recommendationAction: string
-  recommendationScore?: number | null
-  ruleVersion: string
-  recommendedPrice: number
-  recommendedAt: string
-  recommendationPayload: unknown
+  attestationToken: string
 }
 
 export interface UpsertTradeFillRequest {
@@ -990,6 +990,7 @@ export interface TradeCaseSummary {
   ruleVersion: string
   recommendedPrice: number
   recommendedAt: string
+  recommendationVerified: boolean
   status: TradeCaseStatus
   ledger: TradeLedgerSummary
   outcomes: TradeOutcomeView[]

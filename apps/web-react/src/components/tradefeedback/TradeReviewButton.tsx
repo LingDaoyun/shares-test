@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { ClipboardCheck, ClipboardPlus, Loader2 } from 'lucide-react'
 import { toast } from '../ui/Toast'
 import { extractErrorMessage } from '../../lib/format'
@@ -6,63 +6,39 @@ import { useTradeFeedbackStore } from '../../store/tradeFeedbackStore'
 
 export interface TradeReviewButtonProps {
   symbol: string
-  companyName: string
   sourceModule: string
-  action: string
-  score: number | null
   ruleVersion: string
-  recommendedPrice: number | null
   recommendedAt: string | null
-  payload: unknown
+  attestationToken: string | null
 }
 
-function unavailableReason(recommendedPrice: number | null, recommendedAt: string | null) {
-  if (recommendedPrice == null && !recommendedAt) return '缺少实时每股价格和推荐时间'
-  if (recommendedPrice == null) return '缺少实时每股价格'
+function unavailableReason(attestationToken: string | null, recommendedAt: string | null) {
+  if (!attestationToken) return '当前推荐缺少可验证的实时价格或时间'
   if (!recommendedAt) return '缺少推荐时间'
   return null
 }
 
 export function TradeReviewButton({
   symbol,
-  companyName,
   sourceModule,
-  action,
-  score,
   ruleVersion,
-  recommendedPrice,
   recommendedAt,
-  payload
+  attestationToken
 }: TradeReviewButtonProps) {
-  const loadCases = useTradeFeedbackStore((state) => state.loadCases)
   const getCaseId = useTradeFeedbackStore((state) => state.getCaseId)
   const ensureCase = useTradeFeedbackStore((state) => state.ensureCase)
   const [saving, setSaving] = useState(false)
-  const reason = unavailableReason(recommendedPrice, recommendedAt)
+  const reason = unavailableReason(attestationToken, recommendedAt)
   const caseId = recommendedAt
     ? getCaseId({ symbol, sourceModule, ruleVersion, recommendedAt })
     : undefined
   const reviewing = Boolean(caseId)
 
-  useEffect(() => {
-    void loadCases().catch(() => undefined)
-  }, [loadCases])
-
   const createCase = async () => {
-    if (reason || reviewing || saving || recommendedPrice == null || !recommendedAt) return
+    if (reason || reviewing || saving || !attestationToken) return
     setSaving(true)
     try {
-      await ensureCase({
-        symbol,
-        companyName,
-        sourceModule,
-        recommendationAction: action,
-        recommendationScore: score,
-        ruleVersion,
-        recommendedPrice,
-        recommendedAt,
-        recommendationPayload: payload
-      })
+      await ensureCase({ attestationToken })
       toast.success(`${symbol} 已加入复盘`)
     } catch (error) {
       toast.error(`加入复盘失败：${extractErrorMessage(error)}`)

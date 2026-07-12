@@ -2,10 +2,9 @@ package com.aistock.research.tradefeedback;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.List;
 
-public record TradeCaseSummary(
-        String caseId,
+public record VerifiedRecommendationSnapshot(
+        String attestationId,
         String symbol,
         String companyName,
         String sourceModule,
@@ -14,11 +13,6 @@ public record TradeCaseSummary(
         String ruleVersion,
         BigDecimal recommendedPrice,
         Instant recommendedAt,
-        boolean recommendationVerified,
-        String status,
-        TradeLedgerSummary ledger,
-        List<TradeOutcomeView> outcomes,
-        Instant createdAt,
-        Instant updatedAt
+        String recommendationPayloadJson
 ) {
 }

@@ -99,12 +99,29 @@ CREATE TABLE IF NOT EXISTS strategy_trade_case (
   recommended_price NUMERIC(20, 6) NOT NULL,
   recommended_at TIMESTAMP WITH TIME ZONE NOT NULL,
   recommendation_payload_json TEXT NOT NULL,
+  recommendation_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  recommendation_attestation_id VARCHAR(64),
   status VARCHAR(32) NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
   CONSTRAINT fk_trade_case_decision FOREIGN KEY (decision_id)
     REFERENCES investment_decision_history(decision_id)
 );
+
+ALTER TABLE strategy_trade_case ADD COLUMN IF NOT EXISTS recommendation_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE strategy_trade_case ADD COLUMN IF NOT EXISTS recommendation_attestation_id VARCHAR(64);
+
+CREATE INDEX IF NOT EXISTS idx_trade_case_page
+  ON strategy_trade_case(created_at, case_id);
+
+CREATE INDEX IF NOT EXISTS idx_trade_case_status_page
+  ON strategy_trade_case(status, created_at, case_id);
+
+CREATE INDEX IF NOT EXISTS idx_trade_case_symbol_page
+  ON strategy_trade_case(symbol, created_at, case_id);
+
+CREATE INDEX IF NOT EXISTS idx_trade_case_refresh
+  ON strategy_trade_case(status, updated_at, case_id);
 
 CREATE TABLE IF NOT EXISTS strategy_trade_fill (
   fill_id VARCHAR(36) PRIMARY KEY,
@@ -123,6 +140,27 @@ CREATE TABLE IF NOT EXISTS strategy_trade_fill (
 
 CREATE INDEX IF NOT EXISTS idx_trade_fill_feedback_lookup
   ON strategy_trade_fill(case_id, side, executed_at, created_at, fill_id);
+
+CREATE TABLE IF NOT EXISTS strategy_trade_fill_revision (
+  revision_id VARCHAR(36) PRIMARY KEY,
+  fill_id VARCHAR(36) NOT NULL,
+  case_id VARCHAR(36) NOT NULL,
+  revision_type VARCHAR(16) NOT NULL,
+  side VARCHAR(8) NOT NULL,
+  executed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  price NUMERIC(20, 6) NOT NULL,
+  quantity BIGINT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  CONSTRAINT fk_trade_fill_revision_fill FOREIGN KEY (fill_id) REFERENCES strategy_trade_fill(fill_id),
+  CONSTRAINT fk_trade_fill_revision_case FOREIGN KEY (case_id) REFERENCES strategy_trade_case(case_id),
+  CONSTRAINT ck_trade_fill_revision_type CHECK (revision_type IN ('CORRECTION', 'VOID')),
+  CONSTRAINT ck_trade_fill_revision_side CHECK (side IN ('BUY', 'SELL')),
+  CONSTRAINT ck_trade_fill_revision_price CHECK (price > 0),
+  CONSTRAINT ck_trade_fill_revision_quantity CHECK (quantity > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_fill_revision_projection
+  ON strategy_trade_fill_revision(case_id, fill_id, created_at, revision_id);
 
 CREATE TABLE IF NOT EXISTS strategy_outcome_snapshot (
   snapshot_id VARCHAR(36) PRIMARY KEY,

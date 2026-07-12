@@ -2,6 +2,8 @@ package com.aistock.research.tradefeedback;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.Pageable;
+import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -10,11 +12,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 class StrategyFeedbackServiceTest {
@@ -34,8 +37,8 @@ class StrategyFeedbackServiceTest {
         rows.addAll(rows("FOUR", "v1", 4, decimal("1.00")));
         rows.addAll(rows("FIVE", "v1", 5, decimal("1.00")));
         rows.addAll(rows("TWENTY", "v1", 20, decimal("12.00")));
-        when(outcomes.findMaturedRecommendationT20()).thenReturn(rows);
-        when(fills.findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY")))
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class))).thenReturn(rows);
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection()))
                 .thenReturn(List.of());
 
         List<StrategyFeedbackSummary> summaries = service.summaries();
@@ -54,8 +57,9 @@ class StrategyFeedbackServiceTest {
 
     @Test
     void clampsNegativeReliabilityAdjustmentAtMinusFive() {
-        when(outcomes.findMaturedRecommendationT20()).thenReturn(rows("WEAK", "v1", 20, decimal("-8.00")));
-        when(fills.findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY")))
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class)))
+                .thenReturn(rows("WEAK", "v1", 20, decimal("-8.00")));
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection()))
                 .thenReturn(List.of());
 
         StrategyFeedbackSummary summary = service.summaries().get(0);
@@ -75,8 +79,8 @@ class StrategyFeedbackServiceTest {
                 row("even-3", "EVEN", "v1", "7.00", "7.00", "-7.00", "2026-06-03T15:30:00Z"),
                 row("even-4", "EVEN", "v1", "9.00", "9.00", "-9.00", "2026-06-04T15:30:00Z")
         );
-        when(outcomes.findMaturedRecommendationT20()).thenReturn(rows);
-        when(fills.findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY")))
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class))).thenReturn(rows);
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection()))
                 .thenReturn(List.of());
 
         List<StrategyFeedbackSummary> summaries = service.summaries();
@@ -96,9 +100,9 @@ class StrategyFeedbackServiceTest {
         MaturedRecommendationRow nullReturn = new MaturedRecommendationRow(
                 "case-null", "MODULE", "v1", decimal("100.00"),
                 Instant.parse("2026-06-03T16:30:00Z"), null, decimal("8.00"), decimal("-4.00"));
-        when(outcomes.findMaturedRecommendationT20())
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class)))
                 .thenReturn(List.of(includedWithoutBuy, includedWithBuy, nullReturn));
-        when(fills.findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY")))
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection()))
                 .thenReturn(List.of(fill("buy-1", "case-buy", "BUY", "2026-06-03T01:00:00Z", "110.00",
                         "2026-06-03T01:01:00Z")));
 
@@ -113,13 +117,13 @@ class StrategyFeedbackServiceTest {
 
     @Test
     void selectsFirstBuyByExecutedAtThenCreatedAtThenFillId() {
-        when(outcomes.findMaturedRecommendationT20()).thenReturn(List.of(
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class))).thenReturn(List.of(
                 row("case-fill-id", "MODULE", "v1", "2.00", "4.00", "-2.00", "2026-06-01T00:00:00Z"),
                 row("case-created-at", "MODULE", "v1", "2.00", "4.00", "-2.00", "2026-06-01T00:00:00Z"),
                 row("case-executed-at", "MODULE", "v1", "2.00", "4.00", "-2.00", "2026-06-01T00:00:00Z")));
         Instant executedAt = Instant.parse("2026-06-02T01:00:00Z");
         Instant createdAt = Instant.parse("2026-06-02T01:01:00Z");
-        when(fills.findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY")))
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection()))
                 .thenReturn(List.of(
                         TradeFillEntity.create("z-fill", "case-fill-id", "BUY", executedAt,
                                 decimal("130.00"), 100, createdAt),
@@ -144,12 +148,12 @@ class StrategyFeedbackServiceTest {
 
     @Test
     void returnsExactCohortsInStableSourceModuleAndRuleVersionOrder() {
-        when(outcomes.findMaturedRecommendationT20()).thenReturn(List.of(
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class))).thenReturn(List.of(
                 row("z-2", "ZETA", "v2", "1", "1", "-1", "2026-06-01T00:00:00Z"),
                 row("a-2", "ALPHA", "v2", "1", "1", "-1", "2026-06-01T00:00:00Z"),
                 row("a-1", "ALPHA", "v1", "1", "1", "-1", "2026-06-01T00:00:00Z")
         ));
-        when(fills.findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY")))
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection()))
                 .thenReturn(List.of());
 
         assertThat(service.summaries())
@@ -174,8 +178,8 @@ class StrategyFeedbackServiceTest {
         rows.addAll(rows("DELTA", "v1", 17, decimal("1.00")));
         rows.addAll(rows("CHARLIE", "v1", 16, decimal("1.00")));
         rows.addAll(rows("BRAVO", "v1", 15, decimal("1.00")));
-        when(outcomes.findMaturedRecommendationT20()).thenReturn(rows);
-        when(fills.findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY")))
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class))).thenReturn(rows);
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection()))
                 .thenReturn(List.of());
 
         List<StrategyFeedbackSummary> summaries = service.summaries();
@@ -193,24 +197,40 @@ class StrategyFeedbackServiceTest {
 
     @Test
     void usesOneBulkOutcomeQueryAndOneBulkBuyQueryPerAggregation() {
-        when(outcomes.findMaturedRecommendationT20()).thenReturn(rows("MODULE", "v1", 5, decimal("1.00")));
-        when(fills.findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY")))
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class)))
+                .thenReturn(rows("MODULE", "v1", 5, decimal("1.00")));
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection()))
                 .thenReturn(List.of());
 
         service.summaries();
 
-        verify(outcomes).findMaturedRecommendationT20();
-        verify(fills).findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY"));
+        verify(outcomes).findMaturedRecommendationT20(any(Pageable.class));
+        verify(fills).findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection());
     }
 
     @Test
     void skipsBulkFillQueryWhenNoEligibleRowsExist() {
-        when(outcomes.findMaturedRecommendationT20()).thenReturn(List.of());
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class))).thenReturn(List.of());
 
         assertThat(service.summaries()).isEmpty();
 
         verify(fills, never())
-                .findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY"));
+                .findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection());
+    }
+
+    @Test
+    void boundsAndCachesTheFeedbackSampleWindow() {
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class)))
+                .thenReturn(rows("MODULE", "v1", 5, decimal("1.00")));
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection()))
+                .thenReturn(List.of());
+
+        service.summaries();
+        service.summaries();
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(outcomes, times(1)).findMaturedRecommendationT20(pageable.capture());
+        assertThat(pageable.getValue().getPageSize()).isEqualTo(5000);
     }
 
     private List<MaturedRecommendationRow> rows(

@@ -179,6 +179,32 @@ public class TradeOutcomeEntity {
         );
     }
 
+    public static TradeOutcomeEntity unavailable(
+            String snapshotId,
+            String caseId,
+            String baselineType,
+            String horizon,
+            String sourceName,
+            Instant calculatedAt
+    ) {
+        return new TradeOutcomeEntity(
+                snapshotId,
+                caseId,
+                baselineType,
+                horizon,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "UNAVAILABLE",
+                sourceName,
+                null,
+                calculatedAt
+        );
+    }
+
     public void replaceWith(
             OutcomeResult result,
             String sourceName,

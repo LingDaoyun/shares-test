@@ -17,4 +17,8 @@ public record OutcomeResult(
     public static OutcomeResult pending(String horizon) {
         return new OutcomeResult(horizon, null, null, null, null, null, null, "PENDING");
     }
+
+    public static OutcomeResult unavailable(String horizon) {
+        return new OutcomeResult(horizon, null, null, null, null, null, null, "UNAVAILABLE");
+    }
 }

@@ -4,6 +4,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.data.domain.Pageable;
+import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -72,6 +74,11 @@ class TradeOutcomeServiceTest {
                     key(entity.getCaseId(), entity.getBaselineType(), entity.getHorizon()), entity));
             return entities;
         });
+        when(gateway.dailyKLineSeries(anyString(), any(), any())).thenAnswer(invocation ->
+                MarketKLineSeries.complete(
+                        gateway.dailyKLines(
+                                invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2)),
+                        "TEST_DAILY_KLINE"));
 
         service = new TradeOutcomeService(
                 cases, fills, outcomes, gateway, new TradeOutcomeCalculator(), new TradeLedgerCalculator(),
@@ -102,7 +109,7 @@ class TradeOutcomeServiceTest {
                 .isEqualByComparingTo("30.0000");
         assertThat(stored.get(key("case-1", "EXECUTION", "CLOSED")).getStatus()).isEqualTo("PENDING");
         assertThat(stored.get(key("case-1", "RECOMMENDATION", "T1")).getSourceName())
-                .isEqualTo("DAILY_KLINE");
+                .isEqualTo("TEST_DAILY_KLINE");
         assertThat(stored.get(key("case-1", "RECOMMENDATION", "CURRENT")).getSourceName())
                 .isEqualTo("EAST_MONEY_LIVE_QUOTE");
         assertThat(stored.get(key("case-1", "RECOMMENDATION", "CURRENT")).getMarketTimestamp())
@@ -150,7 +157,7 @@ class TradeOutcomeServiceTest {
     }
 
     @Test
-    void returnsWarningAndLeavesSnapshotsUntouchedWhenGatewayFails() {
+    void persistsRecoverableUnavailableWithoutDowngradingMatureFixedOutcomeWhenGatewayFails() {
         TradeOutcomeEntity matureT1 = TradeOutcomeEntity.matured(
                 "mature-t1", "case-1", "RECOMMENDATION", "T1", decimal("10"), decimal("11"),
                 LocalDate.parse("2026-07-13"), decimal("10"), decimal("12"), decimal("-2"), NOW.minusSeconds(60));
@@ -159,13 +166,16 @@ class TradeOutcomeServiceTest {
 
         TradeOutcomeRefresh result = service.refresh("case-1");
 
-        assertThat(result.warnings()).singleElement().asString().contains("market down");
-        assertThat(stored.values()).containsExactly(matureT1);
-        verify(outcomes, never()).saveAll(any());
+        assertThat(result.warnings()).anySatisfy(warning -> assertThat(warning).contains("market down"));
+        assertThat(stored.get(key("case-1", "RECOMMENDATION", "T1"))).isSameAs(matureT1);
+        assertThat(stored.get(key("case-1", "RECOMMENDATION", "T5")).getStatus())
+                .isEqualTo("UNAVAILABLE");
+        assertThat(stored.get(key("case-1", "RECOMMENDATION", "T20")).getStatus())
+                .isEqualTo("UNAVAILABLE");
     }
 
     @Test
-    void namesLastKlineCloseFallbackAndKeepsEmptyHistoryPending() {
+    void namesLastKlineCloseFallbackAndMarksEmptyHistoryUnavailable() {
         when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(List.of(
                 new MarketBar(LocalDate.parse("2026-07-13"), decimal("11"), decimal("12"), decimal("9"))));
         when(gateway.latestPrice(anyString())).thenReturn(Optional.empty());
@@ -184,7 +194,7 @@ class TradeOutcomeServiceTest {
         when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(List.of());
         service.refresh("case-1");
 
-        assertThat(stored.get(key("case-1", "RECOMMENDATION", "T1")).getStatus()).isEqualTo("PENDING");
+        assertThat(stored.get(key("case-1", "RECOMMENDATION", "T1")).getStatus()).isEqualTo("UNAVAILABLE");
         assertThat(stored.get(key("case-1", "RECOMMENDATION", "T20")).getEvaluationPrice()).isNull();
     }
 
@@ -227,9 +237,9 @@ class TradeOutcomeServiceTest {
         service.refresh("case-1");
 
         TradeOutcomeEntity current = stored.get(key("case-1", "RECOMMENDATION", "CURRENT"));
-        assertThat(current.getStatus()).isEqualTo("PENDING");
+        assertThat(current.getStatus()).isEqualTo("UNAVAILABLE");
         assertThat(current.getEvaluationDate()).isNull();
-        assertThat(current.getSourceName()).isNull();
+        assertThat(current.getSourceName()).isEqualTo("LIVE_QUOTE_UNAVAILABLE");
     }
 
     @Test
@@ -304,11 +314,9 @@ class TradeOutcomeServiceTest {
     void schedulerContinuesAfterCandidateSelectionFailsAndIncludesLaterCases() {
         TradeCaseEntity brokenClosedCase = tradeCase("case-1", "CLOSED");
         TradeCaseEntity laterClosedCase = tradeCase("case-2", "CLOSED");
-        when(cases.findAllByOrderByCreatedAtDesc()).thenReturn(List.of(brokenClosedCase, laterClosedCase));
-        when(outcomes.findByCaseIdAndBaselineTypeAndHorizon("case-1", "RECOMMENDATION", "T20"))
-                .thenThrow(new IllegalStateException("candidate lookup failed"));
-        stored.put(key("case-2", "RECOMMENDATION", "T20"), TradeOutcomeEntity.pending(
-                "case-2-pending-t20", "case-2", "RECOMMENDATION", "T20", NOW.minusSeconds(60)));
+        when(cases.findRefreshCandidates(any(Pageable.class)))
+                .thenReturn(List.of(brokenClosedCase, laterClosedCase));
+        when(cases.findById("case-1")).thenThrow(new IllegalStateException("candidate lookup failed"));
         when(cases.findById("case-2")).thenReturn(Optional.of(laterClosedCase));
         when(cases.findByIdForUpdate("case-2")).thenReturn(Optional.of(laterClosedCase));
         when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc("case-2")).thenReturn(List.of());
@@ -318,7 +326,30 @@ class TradeOutcomeServiceTest {
 
         service.refreshOpenCases();
 
-        verify(gateway, times(1)).dailyKLines(anyString(), any(), any());
+        verify(gateway, times(1)).dailyKLineSeries(anyString(), any(), any());
+    }
+
+    @Test
+    void schedulerUsesBoundedOldestFirstBatchAndRefreshesClosedExecutionAfterT20Matures() {
+        TradeCaseEntity closed = tradeCase("case-1", "CLOSED");
+        when(cases.findRefreshCandidates(any(Pageable.class))).thenReturn(List.of(closed));
+        stored.put(key("case-1", "RECOMMENDATION", "T20"), TradeOutcomeEntity.matured(
+                "mature-t20", "case-1", "RECOMMENDATION", "T20", decimal("10"), decimal("12"),
+                LocalDate.parse("2026-08-07"), decimal("20"), null, null, NOW.minusSeconds(60)));
+        when(cases.findById("case-1")).thenReturn(Optional.of(closed));
+        when(cases.findByIdForUpdate("case-1")).thenReturn(Optional.of(closed));
+        when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc("case-1")).thenReturn(List.of(
+                fill("buy", "BUY", "2026-07-13T01:30:00Z", "10", 100),
+                fill("sell", "SELL", "2026-07-15T01:30:00Z", "12", 100)));
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(twentyBars());
+        when(gateway.latestPrice(anyString())).thenReturn(Optional.empty());
+
+        service.refreshOpenCases();
+
+        assertThat(stored.get(key("case-1", "EXECUTION", "CLOSED")).getStatus()).isEqualTo("MATURED");
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(cases).findRefreshCandidates(pageable.capture());
+        assertThat(pageable.getValue().getPageSize()).isEqualTo(100);
     }
 
     private TradeCaseEntity tradeCase(String status) {

@@ -1,5 +1,6 @@
 package com.aistock.research.cycle;
 
+import com.aistock.research.tradefeedback.RecommendationAttestationService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -12,9 +13,14 @@ import java.math.BigDecimal;
 public class CycleTrialController {
 
     private final CycleTrialService cycleTrialService;
+    private final RecommendationAttestationService attestationService;
 
-    public CycleTrialController(CycleTrialService cycleTrialService) {
+    public CycleTrialController(
+            CycleTrialService cycleTrialService,
+            RecommendationAttestationService attestationService
+    ) {
         this.cycleTrialService = cycleTrialService;
+        this.attestationService = attestationService;
     }
 
     @GetMapping("/report")
@@ -25,6 +31,7 @@ public class CycleTrialController {
             @RequestParam(required = false) BigDecimal maxChaseRise,
             @RequestParam(required = false) BigDecimal minVolumeRatio
     ) {
-        return cycleTrialService.report(limit, leftTrialScore, rightAddScore, maxChaseRise, minVolumeRatio);
+        return attestationService.attest(
+                cycleTrialService.report(limit, leftTrialScore, rightAddScore, maxChaseRise, minVolumeRatio));
     }
 }

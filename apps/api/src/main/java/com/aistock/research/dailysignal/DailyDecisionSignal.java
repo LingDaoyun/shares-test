@@ -3,6 +3,7 @@ package com.aistock.research.dailysignal;
 import com.aistock.research.trading.TradingAdvice;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 public record DailyDecisionSignal(
@@ -16,6 +17,8 @@ public record DailyDecisionSignal(
         String actionLabel,
         int confidence,
         BigDecimal score,
+        BigDecimal recommendedPrice,
+        Instant marketTimestamp,
         String horizon,
         String marketPhase,
         TradingAdvice todayAdvice,

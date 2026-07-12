@@ -15,8 +15,8 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.function.Supplier;
 
@@ -47,20 +47,31 @@ public class TradeFeedbackController {
     @GetMapping
     public List<TradeCaseSummary> list(
             @RequestParam(required = false) String status,
-            @RequestParam(required = false) String symbol
+            @RequestParam(required = false) String symbol,
+            @RequestParam(required = false) Instant beforeCreatedAt,
+            @RequestParam(required = false) String beforeCaseId,
+            @RequestParam(defaultValue = "50") int limit
     ) {
-        List<TradeCaseEntity> tradeCases = translate(tradeFeedbackService::listCases).stream()
-                .filter(tradeCase -> matches(tradeCase.getStatus(), status))
-                .filter(tradeCase -> matches(tradeCase.getSymbol(), symbol))
-                .toList();
+        List<TradeCaseEntity> tradeCases = translate(() -> tradeFeedbackService.listCases(
+                status, symbol, beforeCreatedAt, beforeCaseId, limit));
         Map<String, List<TradeOutcomeEntity>> outcomesByCaseId = translate(() -> tradeOutcomeService.outcomes(
                 tradeCases.stream().map(TradeCaseEntity::getCaseId).toList()
         )).stream().collect(java.util.stream.Collectors.groupingBy(TradeOutcomeEntity::getCaseId));
+        Map<String, BigDecimal> latestPrices = new java.util.LinkedHashMap<>();
+        for (TradeCaseEntity tradeCase : tradeCases) {
+            BigDecimal latestPrice = currentEvaluationPrice(
+                    outcomesByCaseId.getOrDefault(tradeCase.getCaseId(), List.of()));
+            if (latestPrice != null) {
+                latestPrices.put(tradeCase.getCaseId(), latestPrice);
+            }
+        }
+        Map<String, TradeLedgerSummary> ledgers = translate(() -> tradeFeedbackService.ledgers(
+                tradeCases.stream().map(TradeCaseEntity::getCaseId).toList(), latestPrices));
         return tradeCases.stream().map(tradeCase -> {
             List<TradeOutcomeEntity> outcomes = outcomesByCaseId.getOrDefault(tradeCase.getCaseId(), List.of());
             return mapper.summary(
                     tradeCase,
-                    translate(() -> tradeFeedbackService.ledger(tradeCase.getCaseId(), currentEvaluationPrice(outcomes))),
+                    ledgers.get(tradeCase.getCaseId()),
                     outcomes
             );
         }).toList();
@@ -111,7 +122,7 @@ public class TradeFeedbackController {
     }
 
     private TradeCaseDetail detail(TradeCaseEntity tradeCase, List<String> warnings) {
-        List<TradeFillEntity> fills = translate(() -> tradeFeedbackService.fills(tradeCase.getCaseId()));
+        List<TradeFillSnapshot> fills = translate(() -> tradeFeedbackService.fills(tradeCase.getCaseId()));
         List<TradeOutcomeEntity> outcomes = translate(() -> tradeOutcomeService.outcomes(tradeCase.getCaseId()));
         BigDecimal latestPrice = currentEvaluationPrice(outcomes);
         return mapper.detail(
@@ -133,13 +144,6 @@ public class TradeFeedbackController {
                 .filter(java.util.Objects::nonNull)
                 .findFirst()
                 .orElse(null);
-    }
-
-    private boolean matches(String actual, String filter) {
-        if (filter == null || filter.isBlank()) {
-            return true;
-        }
-        return actual.toLowerCase(Locale.ROOT).equals(filter.trim().toLowerCase(Locale.ROOT));
     }
 
     private <T> T translate(Supplier<T> action) {

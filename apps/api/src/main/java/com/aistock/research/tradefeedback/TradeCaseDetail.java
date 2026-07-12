@@ -16,6 +16,7 @@ public record TradeCaseDetail(
         BigDecimal recommendedPrice,
         Instant recommendedAt,
         Object recommendationPayload,
+        boolean recommendationVerified,
         String status,
         TradeLedgerSummary ledger,
         List<TradeFillView> fills,

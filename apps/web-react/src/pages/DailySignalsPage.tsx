@@ -163,7 +163,13 @@ export function DailySignalsPage() {
                   <Tag tone={actionTone(action)}>{signals.length} 条</Tag>
                 </div>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {signals.map((signal) => <SignalCard key={`${signal.sourceType}-${signal.symbol}`} signal={signal} generatedAt={report.generatedAt} />)}
+                  {signals.map((signal) => (
+                    <SignalCard
+                      key={`${signal.sourceType}-${signal.symbol}`}
+                      signal={signal}
+                      tradeCaptureToken={report.tradeCaptureTokens?.[`${signal.sourceType}|${signal.symbol}`] ?? null}
+                    />
+                  ))}
                 </div>
               </section>
             ))}
@@ -174,9 +180,13 @@ export function DailySignalsPage() {
   )
 }
 
-function SignalCard({ signal, generatedAt }: { signal: DailyDecisionSignal; generatedAt: string }) {
-  const action = signal.todayAdvice.actionLabel || signal.todayAdvice.action || signal.actionLabel || signal.action
-
+function SignalCard({
+  signal,
+  tradeCaptureToken
+}: {
+  signal: DailyDecisionSignal
+  tradeCaptureToken: string | null
+}) {
   return (
     <Card className="transition hover:border-brand-300 hover:shadow-soft">
       <div className="flex flex-col gap-4">
@@ -194,14 +204,10 @@ function SignalCard({ signal, generatedAt }: { signal: DailyDecisionSignal; gene
             <WatchButton symbol={signal.symbol} />
             <TradeReviewButton
               symbol={signal.symbol}
-              companyName={signal.name}
               sourceModule="DAILY_SIGNAL"
-              action={action}
-              score={signal.score ?? signal.confidence}
               ruleVersion="daily-signal-v1"
-              recommendedPrice={null}
-              recommendedAt={generatedAt}
-              payload={signal}
+              recommendedAt={signal.marketTimestamp}
+              attestationToken={tradeCaptureToken}
             />
             <ScoreBadge value={signal.score ?? signal.confidence} />
             <Tag tone={actionTone(signal.action)}>{signal.actionLabel}</Tag>

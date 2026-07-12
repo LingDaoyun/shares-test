@@ -1,5 +1,6 @@
 package com.aistock.research.tech;
 
+import com.aistock.research.tradefeedback.RecommendationAttestationService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -12,9 +13,14 @@ import java.math.BigDecimal;
 public class TechTrackingController {
 
     private final TechTrackingService techTrackingService;
+    private final RecommendationAttestationService attestationService;
 
-    public TechTrackingController(TechTrackingService techTrackingService) {
+    public TechTrackingController(
+            TechTrackingService techTrackingService,
+            RecommendationAttestationService attestationService
+    ) {
         this.techTrackingService = techTrackingService;
+        this.attestationService = attestationService;
     }
 
     @GetMapping("/report")
@@ -25,6 +31,7 @@ public class TechTrackingController {
             @RequestParam(required = false) BigDecimal hardMaxPe,
             @RequestParam(required = false) BigDecimal hardMaxPb
     ) {
-        return techTrackingService.report(limit, coreMaxPe, coreMaxPb, hardMaxPe, hardMaxPb);
+        return attestationService.attest(
+                techTrackingService.report(limit, coreMaxPe, coreMaxPb, hardMaxPe, hardMaxPb));
     }
 }

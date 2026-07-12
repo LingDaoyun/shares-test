@@ -3,6 +3,8 @@ package com.aistock.research.tradefeedback;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -27,12 +29,13 @@ public class TradeOutcomeService {
     private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private static final String RECOMMENDATION = "RECOMMENDATION";
     private static final String EXECUTION = "EXECUTION";
-    private static final String DAILY_KLINE = "DAILY_KLINE";
     private static final String LAST_KLINE_CLOSE_FALLBACK = "LAST_KLINE_CLOSE_FALLBACK";
     private static final String EXECUTION_FILLS = "EXECUTION_FILLS";
 
     private final TradeCaseRepository caseRepository;
     private final TradeFillRepository fillRepository;
+    private final TradeFillRevisionRepository revisionRepository;
+    private final TradeFillProjector fillProjector;
     private final TradeOutcomeRepository outcomeRepository;
     private final TradeMarketDataGateway gateway;
     private final TradeOutcomeCalculator outcomeCalculator;
@@ -40,19 +43,24 @@ public class TradeOutcomeService {
     private final TransactionTemplate readTransaction;
     private final TransactionTemplate writeTransaction;
     private final Clock clock;
+    private final int schedulerBatchSize;
 
     @Autowired
     public TradeOutcomeService(
             TradeCaseRepository caseRepository,
             TradeFillRepository fillRepository,
+            TradeFillRevisionRepository revisionRepository,
+            TradeFillProjector fillProjector,
             TradeOutcomeRepository outcomeRepository,
             TradeMarketDataGateway gateway,
             TradeOutcomeCalculator outcomeCalculator,
             TradeLedgerCalculator ledgerCalculator,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            @Value("${trade-feedback.outcome.scheduler-batch-size:100}") int schedulerBatchSize
     ) {
-        this(caseRepository, fillRepository, outcomeRepository, gateway, outcomeCalculator, ledgerCalculator,
-                transactionManager, Clock.systemUTC());
+        this(caseRepository, fillRepository, revisionRepository, fillProjector,
+                outcomeRepository, gateway, outcomeCalculator, ledgerCalculator,
+                transactionManager, Clock.systemUTC(), schedulerBatchSize);
     }
 
     TradeOutcomeService(
@@ -65,13 +73,52 @@ public class TradeOutcomeService {
             PlatformTransactionManager transactionManager,
             Clock clock
     ) {
+        this(caseRepository, fillRepository, null, new TradeFillProjector(), outcomeRepository, gateway,
+                outcomeCalculator, ledgerCalculator, transactionManager, clock, 100);
+    }
+
+    TradeOutcomeService(
+            TradeCaseRepository caseRepository,
+            TradeFillRepository fillRepository,
+            TradeFillRevisionRepository revisionRepository,
+            TradeFillProjector fillProjector,
+            TradeOutcomeRepository outcomeRepository,
+            TradeMarketDataGateway gateway,
+            TradeOutcomeCalculator outcomeCalculator,
+            TradeLedgerCalculator ledgerCalculator,
+            PlatformTransactionManager transactionManager,
+            Clock clock
+    ) {
+        this(caseRepository, fillRepository, revisionRepository, fillProjector, outcomeRepository, gateway,
+                outcomeCalculator, ledgerCalculator, transactionManager, clock, 100);
+    }
+
+    TradeOutcomeService(
+            TradeCaseRepository caseRepository,
+            TradeFillRepository fillRepository,
+            TradeFillRevisionRepository revisionRepository,
+            TradeFillProjector fillProjector,
+            TradeOutcomeRepository outcomeRepository,
+            TradeMarketDataGateway gateway,
+            TradeOutcomeCalculator outcomeCalculator,
+            TradeLedgerCalculator ledgerCalculator,
+            PlatformTransactionManager transactionManager,
+            Clock clock,
+            int schedulerBatchSize
+    ) {
         this.caseRepository = caseRepository;
         this.fillRepository = fillRepository;
+        this.revisionRepository = revisionRepository;
+        this.fillProjector = fillProjector;
         this.outcomeRepository = outcomeRepository;
         this.gateway = gateway;
         this.outcomeCalculator = outcomeCalculator;
         this.ledgerCalculator = ledgerCalculator;
         this.clock = clock;
+        if (schedulerBatchSize <= 0) {
+            throw new IllegalArgumentException("复盘结果调度批次必须为正整数");
+        }
+        this.schedulerBatchSize = schedulerBatchSize;
         this.readTransaction = transaction(transactionManager, true);
         this.writeTransaction = transaction(transactionManager, false);
     }
@@ -100,15 +147,13 @@ public class TradeOutcomeService {
     }
 
     public void refreshOpenCases() {
-        List<TradeCaseEntity> cases = readTransaction.execute(status -> caseRepository.findAllByOrderByCreatedAtDesc());
+        List<TradeCaseEntity> cases = readTransaction.execute(status ->
+                caseRepository.findRefreshCandidates(PageRequest.of(0, schedulerBatchSize)));
         if (cases == null) {
             return;
         }
         for (TradeCaseEntity tradeCase : cases) {
             try {
-                if (TradeCaseStatus.CANCELLED.name().equals(tradeCase.getStatus()) || !needsRefresh(tradeCase)) {
-                    continue;
-                }
                 refresh(tradeCase.getCaseId());
             } catch (RuntimeException exception) {
                 logger.warn("定时刷新单个复盘失败：{}，原因：{}", tradeCase.getCaseId(), exception.getMessage());
@@ -138,17 +183,6 @@ public class TradeOutcomeService {
         )).orElseGet(List::of);
     }
 
-    private boolean needsRefresh(TradeCaseEntity tradeCase) {
-        if (TradeCaseStatus.HOLDING.name().equals(tradeCase.getStatus())
-                || TradeCaseStatus.PLANNED.name().equals(tradeCase.getStatus())) {
-            return true;
-        }
-        Optional<TradeOutcomeEntity> t20 = readTransaction.execute(status ->
-                outcomeRepository.findByCaseIdAndBaselineTypeAndHorizon(
-                        tradeCase.getCaseId(), RECOMMENDATION, "T20"));
-        return t20 == null || t20.isEmpty() || "PENDING".equals(t20.get().getStatus());
-    }
-
     private CaseFacts loadFacts(String caseId) {
         TradeCaseEntity tradeCase = requireCase(caseId);
         List<FillFact> fills = fillFacts(caseId);
@@ -168,16 +202,39 @@ public class TradeOutcomeService {
     private MarketFacts loadMarketFacts(CaseFacts facts) {
         LocalDate recommendationDate = facts.recommendedAt().atZone(SHANGHAI).toLocalDate();
         LocalDate today = LocalDate.now(clock.withZone(SHANGHAI));
-        List<MarketBar> rows = gateway.dailyKLines(facts.symbol(), recommendationDate, today);
-        Optional<LatestMarketPrice> latest = gateway.latestPrice(facts.symbol());
         List<String> warnings = new ArrayList<>();
+        MarketKLineSeries series;
+        try {
+            series = gateway.dailyKLineSeries(facts.symbol(), recommendationDate, today);
+            if (series == null) {
+                series = MarketKLineSeries.unavailable("HISTORICAL_KLINE_UNAVAILABLE", "历史行情源返回空响应");
+            }
+        } catch (RuntimeException exception) {
+            series = MarketKLineSeries.unavailable("HISTORICAL_KLINE_UNAVAILABLE", rootMessage(exception));
+        }
+        boolean historyAvailable = series.complete() && !series.rows().isEmpty();
+        List<MarketBar> rows = historyAvailable ? series.rows() : List.of();
+        if (!historyAvailable) {
+            String detail = series.detail() == null || series.detail().isBlank()
+                    ? "历史行情为空或不完整"
+                    : series.detail();
+            warnings.add("历史行情不可用：" + detail);
+        }
+
+        Optional<LatestMarketPrice> latest;
+        try {
+            latest = gateway.latestPrice(facts.symbol());
+        } catch (RuntimeException exception) {
+            warnings.add("CURRENT 实时行情不可用：" + rootMessage(exception));
+            latest = Optional.empty();
+        }
         if (latest.filter(this::trustworthyQuote).isPresent()) {
             if (EastMoneyTradeMarketDataGateway.TENCENT_LIVE_QUOTE_FALLBACK.equals(latest.get().source())) {
                 warnings.add("CURRENT 使用 " + latest.get().source());
             }
             return new MarketFacts(
-                    List.copyOf(rows), latest.get().price(), latest.get().tradeDate(), latest.get().source(),
-                    latest.get().marketTimestamp(), warnings);
+                    List.copyOf(rows), historyAvailable, series.sourceName(), latest.get().price(),
+                    latest.get().tradeDate(), latest.get().source(), latest.get().marketTimestamp(), warnings);
         }
         if (latest.isPresent()) {
             warnings.add("CURRENT 行情缺少可信交易时间，未按实时行情使用");
@@ -190,10 +247,11 @@ public class TradeOutcomeService {
         if (lastBar.isPresent()) {
             warnings.add("CURRENT 使用 LAST_KLINE_CLOSE_FALLBACK");
             return new MarketFacts(
-                    List.copyOf(rows), lastBar.get().close(), lastBar.get().tradeDate(),
-                    LAST_KLINE_CLOSE_FALLBACK, null, warnings);
+                    List.copyOf(rows), historyAvailable, series.sourceName(), lastBar.get().close(),
+                    lastBar.get().tradeDate(), LAST_KLINE_CLOSE_FALLBACK, null, warnings);
         }
-        return new MarketFacts(List.copyOf(rows), null, null, null, null, warnings);
+        return new MarketFacts(
+                List.copyOf(rows), historyAvailable, series.sourceName(), null, null, null, null, warnings);
     }
 
     private boolean trustworthyQuote(LatestMarketPrice latest) {
@@ -206,12 +264,24 @@ public class TradeOutcomeService {
 
     private List<ScopedOutcome> calculate(CaseFacts facts, MarketFacts market) {
         List<ScopedOutcome> results = new ArrayList<>();
-        outcomeCalculator.evaluateRecommendation(
-                        facts.recommendedPrice(), market.rows(), facts.recommendedAt())
-                .forEach(result -> results.add(new ScopedOutcome(RECOMMENDATION, result, DAILY_KLINE, null)));
-        results.add(new ScopedOutcome(RECOMMENDATION, outcomeCalculator.evaluateRecommendationCurrent(
-                facts.recommendedPrice(), market.rows(), facts.recommendedAt(),
-                market.latestPrice(), market.evaluationDate()), market.sourceName(), market.marketTimestamp()));
+        if (market.historyAvailable()) {
+            outcomeCalculator.evaluateRecommendation(
+                            facts.recommendedPrice(), market.rows(), facts.recommendedAt())
+                    .forEach(result -> results.add(new ScopedOutcome(
+                            RECOMMENDATION, result, market.historySourceName(), null)));
+        } else {
+            List.of("T1", "T5", "T20").forEach(horizon -> results.add(new ScopedOutcome(
+                    RECOMMENDATION, OutcomeResult.unavailable(horizon), market.historySourceName(), null)));
+        }
+        OutcomeResult currentRecommendation = market.latestPrice() == null
+                ? OutcomeResult.unavailable("CURRENT")
+                : outcomeCalculator.evaluateRecommendationCurrent(
+                        facts.recommendedPrice(), market.rows(), facts.recommendedAt(),
+                        market.latestPrice(), market.evaluationDate());
+        results.add(new ScopedOutcome(
+                RECOMMENDATION, currentRecommendation,
+                market.latestPrice() == null ? "LIVE_QUOTE_UNAVAILABLE" : market.sourceName(),
+                market.marketTimestamp()));
 
         if (!facts.fills().isEmpty() || facts.hadExecutionOutcomes()) {
             if (facts.fills().isEmpty()) {
@@ -230,7 +300,8 @@ public class TradeOutcomeService {
                         market.evaluationDate()), market.sourceName(), market.marketTimestamp()));
                 results.add(new ScopedOutcome(EXECUTION, OutcomeResult.pending("CLOSED"), null, null));
             } else {
-                results.add(new ScopedOutcome(EXECUTION, OutcomeResult.pending("CURRENT"), null, null));
+                results.add(new ScopedOutcome(
+                        EXECUTION, OutcomeResult.unavailable("CURRENT"), "LIVE_QUOTE_UNAVAILABLE", null));
                 results.add(new ScopedOutcome(EXECUTION, OutcomeResult.pending("CLOSED"), null, null));
             }
         }
@@ -283,7 +354,7 @@ public class TradeOutcomeService {
         return RECOMMENDATION.equals(scoped.baselineType())
                 && List.of("T1", "T5", "T20").contains(scoped.result().horizon())
                 && "MATURED".equals(existing.getStatus())
-                && "PENDING".equals(scoped.result().status());
+                && !"MATURED".equals(scoped.result().status());
     }
 
     private boolean isOlderCurrent(ScopedOutcome scoped, TradeOutcomeEntity existing) {
@@ -324,6 +395,11 @@ public class TradeOutcomeService {
                     snapshotId, caseId, scoped.baselineType(), result.horizon(),
                     scoped.sourceName(), scoped.marketTimestamp(), calculatedAt);
         }
+        if ("UNAVAILABLE".equals(result.status())) {
+            return TradeOutcomeEntity.unavailable(
+                    snapshotId, caseId, scoped.baselineType(), result.horizon(),
+                    scoped.sourceName(), calculatedAt);
+        }
         return TradeOutcomeEntity.matured(
                 snapshotId, caseId, scoped.baselineType(), result.horizon(), result.baselinePrice(),
                 result.evaluationPrice(), result.evaluationDate(), result.returnPct(),
@@ -332,10 +408,14 @@ public class TradeOutcomeService {
     }
 
     private List<FillFact> fillFacts(String caseId) {
-        return fillRepository.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(caseId).stream()
+        List<TradeFillRevisionEntity> revisions = revisionRepository == null
+                ? List.of()
+                : revisionRepository.findByCaseIdOrderByCreatedAtAscRevisionIdAsc(caseId);
+        return fillProjector.project(
+                        fillRepository.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(caseId), revisions).stream()
                 .map(fill -> new FillFact(
-                        fill.getFillId(), fill.getSide(), fill.getExecutedAt(), fill.getPrice(), fill.getQuantity(),
-                        fill.getCreatedAt(), fill.getUpdatedAt()))
+                        fill.fillId(), fill.side(), fill.executedAt(), fill.price(), fill.quantity(),
+                        fill.createdAt(), fill.updatedAt()))
                 .sorted(Comparator.comparing(FillFact::executedAt)
                         .thenComparing(FillFact::createdAt)
                         .thenComparing(FillFact::fillId))
@@ -397,6 +477,8 @@ public class TradeOutcomeService {
 
     private record MarketFacts(
             List<MarketBar> rows,
+            boolean historyAvailable,
+            String historySourceName,
             BigDecimal latestPrice,
             LocalDate evaluationDate,
             String sourceName,

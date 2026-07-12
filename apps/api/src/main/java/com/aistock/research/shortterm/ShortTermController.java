@@ -1,5 +1,6 @@
 package com.aistock.research.shortterm;
 
+import com.aistock.research.tradefeedback.RecommendationAttestationService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,10 +17,16 @@ public class ShortTermController {
 
     private final ShortTermService shortTermService;
     private final ShortTermScanJobService scanJobService;
+    private final RecommendationAttestationService attestationService;
 
-    public ShortTermController(ShortTermService shortTermService, ShortTermScanJobService scanJobService) {
+    public ShortTermController(
+            ShortTermService shortTermService,
+            ShortTermScanJobService scanJobService,
+            RecommendationAttestationService attestationService
+    ) {
         this.shortTermService = shortTermService;
         this.scanJobService = scanJobService;
+        this.attestationService = attestationService;
     }
 
     @GetMapping("/report")
@@ -35,7 +42,7 @@ public class ShortTermController {
             @RequestParam(required = false) BigDecimal maxDistanceToMa20,
             @RequestParam(required = false) BigDecimal minFinancialScore
     ) {
-        return shortTermService.report(
+        return attestationService.attest(shortTermService.report(
                 limit,
                 scanLimit,
                 klineLimit,
@@ -46,7 +53,7 @@ public class ShortTermController {
                 maxEntryRise,
                 maxDistanceToMa20,
                 minFinancialScore
-        );
+        ));
     }
 
     @PostMapping("/scan-jobs")
@@ -56,6 +63,6 @@ public class ShortTermController {
 
     @GetMapping("/scan-jobs/{jobId}")
     public ShortTermScanJobStatus scanJob(@PathVariable String jobId) {
-        return scanJobService.get(jobId);
+        return attestationService.attest(scanJobService.get(jobId));
     }
 }

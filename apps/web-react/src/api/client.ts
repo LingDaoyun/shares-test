@@ -182,7 +182,13 @@ export function fetchWatchlistHistory(symbol: string, limit = 20) {
     .then((res) => res.data)
 }
 
-export function fetchTradeCases(params: { status?: TradeCaseStatus; symbol?: string } = {}) {
+export function fetchTradeCases(params: {
+  status?: TradeCaseStatus
+  symbol?: string
+  beforeCreatedAt?: string
+  beforeCaseId?: string
+  limit?: number
+} = {}) {
   return http.get<TradeCaseSummary[]>('/trade-cases', { params }).then((res) => res.data)
 }
 

@@ -48,6 +48,14 @@ class DailySignalServiceTest {
                 .orElseThrow();
         assertThat(inspur.action()).isEqualTo("add");
         assertThat(inspur.strategyTags()).contains("growth_quality", "shrink_pullback");
+        assertThat(inspur.recommendedPrice()).isEqualByComparingTo("60.00");
+        assertThat(inspur.marketTimestamp()).isEqualTo(Instant.parse("2026-07-01T07:00:00Z"));
+        DailyDecisionSignal cmb = report.signals().stream()
+                .filter(signal -> "600036".equals(signal.symbol()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(cmb.recommendedPrice()).isEqualByComparingTo("36.00");
+        assertThat(cmb.marketTimestamp()).isEqualTo(Instant.parse("2026-07-01T07:01:00Z"));
         assertThat(report.marketContext().riskTags()).contains("热门方向高过热");
     }
 
@@ -76,6 +84,7 @@ class DailySignalServiceTest {
                         "国产 AI 服务器",
                         "计算机设备",
                         new BigDecimal("60.00"),
+                        Instant.parse("2026-07-01T07:00:00Z"),
                         new BigDecimal("-4.00"),
                         new BigDecimal("42.00"),
                         new BigDecimal("4.60"),
@@ -140,6 +149,7 @@ class DailySignalServiceTest {
                         "优质金融",
                         "银行",
                         new BigDecimal("36.00"),
+                        Instant.parse("2026-07-01T07:01:00Z"),
                         new BigDecimal("-0.50"),
                         new BigDecimal("6.00"),
                         new BigDecimal("0.80"),
@@ -187,7 +197,7 @@ class DailySignalServiceTest {
                                 List.of()
                         )
                 )),
-                Instant.parse("2026-07-02T00:00:00Z")
+                Instant.parse("2026-07-02T01:00:00Z")
         );
     }
 

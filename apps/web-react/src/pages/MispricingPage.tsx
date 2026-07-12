@@ -185,7 +185,14 @@ export function MispricingPage() {
                   <Tag tone="neutral">{assets.length} 只</Tag>
                 </div>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {assets.map((asset) => <MispricedAssetCard key={asset.symbol} asset={asset} generatedAt={report.generatedAt} />)}
+                  {assets.map((asset) => (
+                    <MispricedAssetCard
+                      key={asset.symbol}
+                      asset={asset}
+                      generatedAt={report.generatedAt}
+                      tradeCaptureToken={report.tradeCaptureTokens?.[asset.symbol] ?? null}
+                    />
+                  ))}
                 </div>
               </section>
             ))}
@@ -196,9 +203,15 @@ export function MispricingPage() {
   )
 }
 
-function MispricedAssetCard({ asset, generatedAt }: { asset: MispricedAsset; generatedAt: string }) {
-  const action = asset.todayAdvice.actionLabel || asset.todayAdvice.action || asset.actionLabel || asset.action
-
+function MispricedAssetCard({
+  asset,
+  generatedAt,
+  tradeCaptureToken
+}: {
+  asset: MispricedAsset
+  generatedAt: string
+  tradeCaptureToken: string | null
+}) {
   return (
     <Card className="transition hover:border-brand-300 hover:shadow-soft">
       <div className="flex flex-col gap-4">
@@ -215,14 +228,10 @@ function MispricedAssetCard({ asset, generatedAt }: { asset: MispricedAsset; gen
             <WatchButton symbol={asset.symbol} />
             <TradeReviewButton
               symbol={asset.symbol}
-              companyName={asset.name}
               sourceModule="MISPRICING"
-              action={action}
-              score={asset.score.finalScore}
               ruleVersion="mispricing-v2"
-              recommendedPrice={asset.latestPrice}
               recommendedAt={generatedAt}
-              payload={asset}
+              attestationToken={tradeCaptureToken}
             />
             <ScoreBadge value={asset.score.finalScore} />
             <Tag tone={actionTone[asset.action] ?? 'neutral'}>{asset.actionLabel}</Tag>

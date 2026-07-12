@@ -1,6 +1,7 @@
 package com.aistock.research.tradefeedback;
 
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
+import com.aistock.research.integration.eastmoney.EastMoneyKLineSeries;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import org.springframework.stereotype.Component;
 
@@ -27,6 +28,18 @@ public class EastMoneyTradeMarketDataGateway implements TradeMarketDataGateway {
         return eastMoneyClient.fetchDailyKLines(symbol, begin, end).stream()
                 .map(row -> new MarketBar(row.tradeDate(), row.close(), row.high(), row.low()))
                 .toList();
+    }
+
+    @Override
+    public MarketKLineSeries dailyKLineSeries(String symbol, LocalDate begin, LocalDate end) {
+        EastMoneyKLineSeries series = eastMoneyClient.fetchDailyKLineSeries(symbol, begin, end);
+        return new MarketKLineSeries(
+                series.rows().stream()
+                        .map(row -> new MarketBar(row.tradeDate(), row.close(), row.high(), row.low()))
+                        .toList(),
+                series.sourceName(),
+                series.complete(),
+                series.detail());
     }
 
     @Override

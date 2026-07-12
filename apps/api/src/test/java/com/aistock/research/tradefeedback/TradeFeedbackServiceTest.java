@@ -1,16 +1,22 @@
 package com.aistock.research.tradefeedback;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -22,23 +28,32 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.ArgumentCaptor;
 
 class TradeFeedbackServiceTest {
 
     private final TradeCaseRepository cases = mock(TradeCaseRepository.class);
     private final TradeFillRepository fills = mock(TradeFillRepository.class);
+    private final TradeFillRevisionRepository revisions = mock(TradeFillRevisionRepository.class);
+    private final RecommendationAttestationService attestations = mock(RecommendationAttestationService.class);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final TradeFeedbackService service = new TradeFeedbackService(
             cases,
             fills,
-            new ObjectMapper(),
+            revisions,
+            new TradeFillProjector(),
+            attestations,
             new TradeLedgerCalculator(),
-            transactionManager
+            transactionManager,
+            Clock.fixed(Instant.parse("2026-07-14T00:00:00Z"), ZoneOffset.UTC),
+            Duration.ofMinutes(5)
     );
 
     @BeforeEach
     void startsIndependentCreateTransactions() {
         when(transactionManager.getTransaction(any())).thenAnswer(invocation -> new SimpleTransactionStatus());
+        when(attestations.require(anyString())).thenReturn(snapshot());
+        when(revisions.findByCaseIdOrderByCreatedAtAscRevisionIdAsc(anyString())).thenReturn(List.of());
     }
 
     @Test
@@ -71,7 +86,7 @@ class TradeFeedbackServiceTest {
         TradeCaseEntity created = service.createCase(request);
 
         assertThat(created.getCaseId())
-                .isEqualTo(service.createCase(request).getCaseId());
+                .isEqualTo(service.createCase(new CreateTradeCaseRequest("reissued-token")).getCaseId());
         assertThat(created.getRecommendationPayloadJson()).isEqualTo("{\"source\":\"test\"}");
         assertThat(service.addFill(created.getCaseId(), fill(TradeSide.BUY, "2026-07-13T01:35:00Z", "35", 100))
                 .getStatus()).isEqualTo("HOLDING");
@@ -86,7 +101,39 @@ class TradeFeedbackServiceTest {
     }
 
     @Test
-    void preservesRecommendationFactsWhileNormalizingTheIdempotencyFingerprint() {
+    void listsCasesWithDatabaseFiltersKeysetCursorAndHardLimit() {
+        when(cases.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+        Instant cursor = Instant.parse("2026-07-13T00:00:00Z");
+
+        service.listCases("holding", "002714", cursor, "case-cursor", 10_000);
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(cases).findAll(any(Specification.class), pageable.capture());
+        assertThat(pageable.getValue().getPageSize()).isEqualTo(200);
+    }
+
+    @Test
+    void calculatesPageLedgersWithOneBulkReadPerFactTable() {
+        TradeFillEntity first = TradeFillEntity.create(
+                "fill-1", "case-1", "BUY", Instant.parse("2026-07-13T01:00:00Z"),
+                new BigDecimal("10"), 100, Instant.parse("2026-07-13T01:00:00Z"));
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(any()))
+                .thenReturn(List.of(first));
+        when(revisions.findByCaseIdInOrderByCaseIdAscCreatedAtAscRevisionIdAsc(any()))
+                .thenReturn(List.of());
+
+        Map<String, TradeLedgerSummary> ledgers = service.ledgers(
+                List.of("case-1", "case-2"), Map.of("case-1", new BigDecimal("11")));
+
+        assertThat(ledgers.get("case-1").positionQuantity()).isEqualTo(100);
+        assertThat(ledgers.get("case-2").positionQuantity()).isZero();
+        verify(fills).findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(any());
+        verify(revisions).findByCaseIdInOrderByCaseIdAscCreatedAtAscRevisionIdAsc(any());
+    }
+
+    @Test
+    void derivesRecommendationFactsFromTheAttestation() {
         AtomicReference<TradeCaseEntity> storedCase = new AtomicReference<>();
         when(cases.findByRecommendationFingerprint(anyString()))
                 .thenAnswer(invocation -> Optional.ofNullable(storedCase.get()));
@@ -95,27 +142,38 @@ class TradeFeedbackServiceTest {
             storedCase.set(entity);
             return entity;
         });
-        CreateTradeCaseRequest request = new CreateTradeCaseRequest(
-                " decision-1 ", " 002714 ", "牧原股份", " mispricing ", "Build Position",
-                new BigDecimal("78"), " mispricing-v2 ", new BigDecimal("36.20"),
-                Instant.parse("2026-07-13T01:00:00Z"), java.util.Map.of());
-        CreateTradeCaseRequest equivalent = new CreateTradeCaseRequest(
-                "DECISION-1", "002714", "牧原股份", "MISPRICING", "Build Position",
-                new BigDecimal("78"), "MISPRICING-V2", new BigDecimal("36.20"),
-                Instant.parse("2026-07-13T01:00:00Z"), java.util.Map.of());
+        CreateTradeCaseRequest request = new CreateTradeCaseRequest(" server-token ");
+        CreateTradeCaseRequest equivalent = new CreateTradeCaseRequest("server-token");
 
         TradeCaseEntity created = service.createCase(request);
 
-        assertThat(created.getRecommendationAction()).isEqualTo("Build Position");
-        assertThat(created.getSourceModule()).isEqualTo("mispricing");
+        assertThat(created.getRecommendationAction()).isEqualTo("分批建仓");
+        assertThat(created.getSourceModule()).isEqualTo("MISPRICING");
+        assertThat(created.isRecommendationVerified()).isTrue();
         assertThat(service.createCase(equivalent).getCaseId()).isEqualTo(created.getCaseId());
+    }
+
+    @Test
+    void validatesTheAttestationBeforeReturningAnExistingCase() {
+        when(attestations.require("expired-token"))
+                .thenThrow(new IllegalArgumentException("推荐凭证已过期，请刷新推荐后重试"));
+        when(cases.findByRecommendationFingerprint(anyString())).thenReturn(Optional.of(
+                TradeCaseEntity.planned(
+                        "existing", "fingerprint", null, "002714", "牧原股份", "MISPRICING",
+                        "观察", null, "mispricing-v2", new BigDecimal("36.20"),
+                        Instant.parse("2026-07-12T01:00:00Z"), "{}",
+                        Instant.parse("2026-07-12T01:00:00Z"))));
+
+        assertThatThrownBy(() -> service.createCase(new CreateTradeCaseRequest("expired-token")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("过期");
     }
 
     @Test
     void reloadsTheExistingCaseAfterADuplicateCreateRollsBack() {
         TradeCaseEntity existing = plannedCase("PLANNED");
         when(cases.findByRecommendationFingerprint(anyString()))
-                .thenReturn(Optional.empty(), Optional.of(existing));
+                .thenReturn(Optional.empty(), Optional.empty(), Optional.of(existing));
         when(cases.saveAndFlush(any(TradeCaseEntity.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate recommendation fingerprint"));
 
@@ -135,7 +193,6 @@ class TradeFeedbackServiceTest {
                 "fill-sell", tradeCase.getCaseId(), "SELL", Instant.parse("2026-07-13T03:35:00Z"),
                 new BigDecimal("36"), 40, Instant.parse("2026-07-12T01:00:00Z"));
         when(cases.findByIdForUpdate(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
-        when(fills.findById("fill-buy")).thenReturn(Optional.of(buy));
         when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(tradeCase.getCaseId())).thenReturn(List.of(buy, sell));
 
         assertThatThrownBy(() -> service.updateFill(
@@ -144,7 +201,7 @@ class TradeFeedbackServiceTest {
                 .hasMessageContaining("卖出股数超过当前持仓");
 
         assertThat(buy.getExecutedAt()).isEqualTo(Instant.parse("2026-07-13T01:35:00Z"));
-        verify(fills, never()).save(any(TradeFillEntity.class));
+        verify(revisions, never()).save(any(TradeFillRevisionEntity.class));
     }
 
     @Test
@@ -172,13 +229,15 @@ class TradeFeedbackServiceTest {
                 new BigDecimal("35"), 100, Instant.parse("2026-07-12T01:00:00Z"));
         when(cases.findByIdForUpdate(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
         when(cases.save(any(TradeCaseEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(fills.findById(buy.getFillId())).thenReturn(Optional.of(buy));
         when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(tradeCase.getCaseId())).thenReturn(List.of(buy));
+        when(revisions.save(any(TradeFillRevisionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         TradeCaseEntity result = service.deleteFill(tradeCase.getCaseId(), buy.getFillId());
 
         assertThat(result.getStatus()).isEqualTo("PLANNED");
-        verify(fills).delete(buy);
+        verify(revisions).save(org.mockito.ArgumentMatchers.argThat(
+                revision -> "VOID".equals(revision.getRevisionType()) && buy.getFillId().equals(revision.getFillId())));
+        verify(fills, never()).delete(buy);
     }
 
     @Test
@@ -212,18 +271,15 @@ class TradeFeedbackServiceTest {
     }
 
     private CreateTradeCaseRequest caseRequest() {
-        return new CreateTradeCaseRequest(
-                "decision-1",
-                " 002714 ",
-                "牧原股份",
-                "MISPRICING",
-                "分批建仓",
-                new BigDecimal("78"),
-                "mispricing-v2",
-                new BigDecimal("36.20"),
-                Instant.parse("2026-07-13T01:00:00Z"),
-                java.util.Map.of("source", "test")
-        );
+        return new CreateTradeCaseRequest("server-token");
+    }
+
+    private VerifiedRecommendationSnapshot snapshot() {
+        return new VerifiedRecommendationSnapshot(
+                "attestation-id",
+                "002714", "牧原股份", "MISPRICING", "分批建仓", new BigDecimal("78"),
+                "mispricing-v2", new BigDecimal("36.20"), Instant.parse("2026-07-13T01:00:00Z"),
+                "{\"source\":\"test\"}");
     }
 
     private UpsertTradeFillRequest fill(TradeSide side, String executedAt, String price, long quantity) {

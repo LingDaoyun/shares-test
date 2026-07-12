@@ -3,8 +3,16 @@ import { createTradeCase, fetchTradeCase, fetchTradeCases } from '../api/client'
 import type { CreateTradeCaseRequest, TradeCaseDetail, TradeCaseSummary } from '../types'
 
 let loadPromise: Promise<void> | null = null
+const TRADE_CASE_PAGE_SIZE = 50
 
 type TradeCase = TradeCaseSummary | TradeCaseDetail
+
+interface RecommendationIdentity {
+  symbol: string
+  sourceModule: string
+  ruleVersion: string
+  recommendedAt: string
+}
 
 interface TradeCaseIndex {
   casesById: Record<string, TradeCase>
@@ -107,10 +115,13 @@ interface TradeFeedbackState {
   caseIdByRecommendation: Record<string, string>
   loaded: boolean
   loading: boolean
+  loadingMore: boolean
+  hasMore: boolean
   loadCases: (force?: boolean) => Promise<void>
+  loadMoreCases: () => Promise<void>
   refreshCases: () => Promise<void>
   upsertCase: (tradeCase: TradeCase) => void
-  getCaseId: (request: Pick<CreateTradeCaseRequest, 'symbol' | 'sourceModule' | 'ruleVersion' | 'recommendedAt'>) => string | undefined
+  getCaseId: (request: RecommendationIdentity) => string | undefined
   getCase: (caseId: string) => Promise<TradeCaseDetail>
   ensureCase: (request: CreateTradeCaseRequest) => Promise<TradeCaseDetail>
 }
@@ -128,15 +139,18 @@ export const useTradeFeedbackStore = create<TradeFeedbackState>((set, get) => {
     caseIdByRecommendation: {},
     loaded: false,
     loading: false,
+    loadingMore: false,
+    hasMore: true,
     loadCases: async (force = false) => {
       if (get().loaded && !force) return
       if (loadPromise) return loadPromise
       set({ loading: true })
-      loadPromise = fetchTradeCases()
+      loadPromise = fetchTradeCases({ limit: TRADE_CASE_PAGE_SIZE })
         .then((cases) => {
           set((state) => ({
             ...mergeCasesIntoState(state, cases),
-            loaded: true
+            loaded: true,
+            hasMore: cases.length === TRADE_CASE_PAGE_SIZE
           }))
         })
         .finally(() => {
@@ -144,6 +158,29 @@ export const useTradeFeedbackStore = create<TradeFeedbackState>((set, get) => {
           loadPromise = null
         })
       return loadPromise
+    },
+    loadMoreCases: async () => {
+      const state = get()
+      if (state.loadingMore || !state.hasMore) return
+      const oldest = Object.values(state.casesById).sort((left, right) => {
+        const createdOrder = Date.parse(left.createdAt) - Date.parse(right.createdAt)
+        return createdOrder !== 0 ? createdOrder : left.caseId.localeCompare(right.caseId)
+      })[0]
+      if (!oldest) return
+      set({ loadingMore: true })
+      try {
+        const cases = await fetchTradeCases({
+          beforeCreatedAt: oldest.createdAt,
+          beforeCaseId: oldest.caseId,
+          limit: TRADE_CASE_PAGE_SIZE
+        })
+        set((current) => ({
+          ...mergeCasesIntoState(current, cases),
+          hasMore: cases.length === TRADE_CASE_PAGE_SIZE
+        }))
+      } finally {
+        set({ loadingMore: false })
+      }
     },
     refreshCases: async () => get().loadCases(true),
     upsertCase: mergeCaseResponse,
@@ -154,13 +191,6 @@ export const useTradeFeedbackStore = create<TradeFeedbackState>((set, get) => {
       return tradeCase
     },
     ensureCase: async (request) => {
-      await get().loadCases()
-      const existingCaseId = get().getCaseId(request)
-      if (existingCaseId) {
-        const existingCase = get().casesById[existingCaseId]
-        if (existingCase && 'fills' in existingCase) return existingCase
-        return get().getCase(existingCaseId)
-      }
       const tradeCase = await createTradeCase(request)
       mergeCaseResponse(tradeCase)
       return tradeCase

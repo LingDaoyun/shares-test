@@ -2,6 +2,7 @@ package com.aistock.research.tradefeedback;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.domain.Pageable;
 
 import java.util.Collection;
 import java.util.List;
@@ -22,13 +23,14 @@ public interface TradeOutcomeRepository extends JpaRepository<TradeOutcomeEntity
             )
             from TradeOutcomeEntity outcome, TradeCaseEntity tradeCase
             where tradeCase.caseId = outcome.caseId
+              and tradeCase.recommendationVerified = true
               and outcome.baselineType = 'RECOMMENDATION'
               and outcome.horizon = 'T20'
               and outcome.status = 'MATURED'
               and outcome.returnPct is not null
-            order by tradeCase.sourceModule, tradeCase.ruleVersion, tradeCase.caseId
+            order by tradeCase.recommendedAt desc, tradeCase.caseId desc
             """)
-    List<MaturedRecommendationRow> findMaturedRecommendationT20();
+    List<MaturedRecommendationRow> findMaturedRecommendationT20(Pageable pageable);
 
     List<TradeOutcomeEntity> findByCaseIdOrderByHorizonAsc(String caseId);
 

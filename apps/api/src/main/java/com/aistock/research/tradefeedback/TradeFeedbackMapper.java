@@ -31,6 +31,7 @@ class TradeFeedbackMapper {
                 tradeCase.getRuleVersion(),
                 tradeCase.getRecommendedPrice(),
                 tradeCase.getRecommendedAt(),
+                tradeCase.isRecommendationVerified(),
                 tradeCase.getStatus(),
                 ledger,
                 outcomes.stream().map(this::outcome).toList(),
@@ -42,7 +43,7 @@ class TradeFeedbackMapper {
     TradeCaseDetail detail(
             TradeCaseEntity tradeCase,
             TradeLedgerSummary ledger,
-            List<TradeFillEntity> fills,
+            List<TradeFillSnapshot> fills,
             List<TradeOutcomeEntity> outcomes,
             List<String> outcomeWarnings
     ) {
@@ -58,6 +59,7 @@ class TradeFeedbackMapper {
                 tradeCase.getRecommendedPrice(),
                 tradeCase.getRecommendedAt(),
                 parsePayload(tradeCase.getRecommendationPayloadJson()),
+                tradeCase.isRecommendationVerified(),
                 tradeCase.getStatus(),
                 ledger,
                 fills.stream().map(this::fill).toList(),
@@ -85,16 +87,16 @@ class TradeFeedbackMapper {
         );
     }
 
-    private TradeFillView fill(TradeFillEntity fill) {
+    private TradeFillView fill(TradeFillSnapshot fill) {
         try {
             return new TradeFillView(
-                    fill.getFillId(),
-                    TradeSide.valueOf(fill.getSide()),
-                    fill.getExecutedAt(),
-                    fill.getPrice(),
-                    fill.getQuantity(),
-                    fill.getCreatedAt(),
-                    fill.getUpdatedAt()
+                    fill.fillId(),
+                    TradeSide.valueOf(fill.side()),
+                    fill.executedAt(),
+                    fill.price(),
+                    fill.quantity(),
+                    fill.createdAt(),
+                    fill.updatedAt()
             );
         } catch (IllegalArgumentException exception) {
             throw new IllegalStateException("已保存的成交方向无法解析", exception);

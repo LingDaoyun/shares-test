@@ -3,6 +3,7 @@ package com.aistock.research.tech;
 import com.aistock.research.trading.TradingAdvice;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 public record TechTrackedStock(
@@ -13,6 +14,7 @@ public record TechTrackedStock(
         String themeName,
         String industry,
         BigDecimal latestPrice,
+        Instant marketTimestamp,
         BigDecimal changePercent,
         BigDecimal peTtm,
         BigDecimal pbRatio,

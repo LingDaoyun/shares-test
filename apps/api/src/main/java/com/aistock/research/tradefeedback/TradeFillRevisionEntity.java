@@ -9,15 +9,21 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 @Entity
-@Table(name = "strategy_trade_fill")
-public class TradeFillEntity {
+@Table(name = "strategy_trade_fill_revision")
+public class TradeFillRevisionEntity {
 
     @Id
+    @Column(name = "revision_id", nullable = false, length = 36)
+    private String revisionId;
+
     @Column(name = "fill_id", nullable = false, length = 36)
     private String fillId;
 
     @Column(name = "case_id", nullable = false, length = 36)
     private String caseId;
+
+    @Column(name = "revision_type", nullable = false, length = 16)
+    private String revisionType;
 
     @Column(name = "side", nullable = false, length = 8)
     private String side;
@@ -34,33 +40,33 @@ public class TradeFillEntity {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
-    @Column(name = "updated_at", nullable = false)
-    private Instant updatedAt;
-
-    protected TradeFillEntity() {
+    protected TradeFillRevisionEntity() {
     }
 
-    private TradeFillEntity(
+    private TradeFillRevisionEntity(
+            String revisionId,
             String fillId,
             String caseId,
+            String revisionType,
             String side,
             Instant executedAt,
             BigDecimal price,
             long quantity,
-            Instant createdAt,
-            Instant updatedAt
+            Instant createdAt
     ) {
+        this.revisionId = revisionId;
         this.fillId = fillId;
         this.caseId = caseId;
+        this.revisionType = revisionType;
         this.side = side;
         this.executedAt = executedAt;
         this.price = price;
         this.quantity = quantity;
         this.createdAt = createdAt;
-        this.updatedAt = updatedAt;
     }
 
-    public static TradeFillEntity create(
+    public static TradeFillRevisionEntity correction(
+            String revisionId,
             String fillId,
             String caseId,
             String side,
@@ -69,7 +75,26 @@ public class TradeFillEntity {
             long quantity,
             Instant createdAt
     ) {
-        return new TradeFillEntity(fillId, caseId, side, executedAt, price, quantity, createdAt, createdAt);
+        return new TradeFillRevisionEntity(
+                revisionId, fillId, caseId, "CORRECTION", side, executedAt, price, quantity, createdAt);
+    }
+
+    public static TradeFillRevisionEntity voided(
+            String revisionId,
+            String fillId,
+            String caseId,
+            String side,
+            Instant executedAt,
+            BigDecimal price,
+            long quantity,
+            Instant createdAt
+    ) {
+        return new TradeFillRevisionEntity(
+                revisionId, fillId, caseId, "VOID", side, executedAt, price, quantity, createdAt);
+    }
+
+    public String getRevisionId() {
+        return revisionId;
     }
 
     public String getFillId() {
@@ -78,6 +103,10 @@ public class TradeFillEntity {
 
     public String getCaseId() {
         return caseId;
+    }
+
+    public String getRevisionType() {
+        return revisionType;
     }
 
     public String getSide() {
@@ -98,9 +127,5 @@ public class TradeFillEntity {
 
     public Instant getCreatedAt() {
         return createdAt;
-    }
-
-    public Instant getUpdatedAt() {
-        return updatedAt;
     }
 }

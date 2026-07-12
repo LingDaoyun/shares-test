@@ -170,7 +170,14 @@ export function CycleTrialPage() {
                   <Tag tone="neutral">{candidates.length} 只</Tag>
                 </div>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {candidates.map((candidate) => <CycleCard key={candidate.symbol} candidate={candidate} generatedAt={report.generatedAt} />)}
+                  {candidates.map((candidate) => (
+                    <CycleCard
+                      key={candidate.symbol}
+                      candidate={candidate}
+                      generatedAt={report.generatedAt}
+                      tradeCaptureToken={report.tradeCaptureTokens?.[candidate.symbol] ?? null}
+                    />
+                  ))}
                 </div>
               </section>
             ))}
@@ -181,9 +188,15 @@ export function CycleTrialPage() {
   )
 }
 
-function CycleCard({ candidate, generatedAt }: { candidate: CycleTrialCandidate; generatedAt: string }) {
-  const action = candidate.todayAdvice.actionLabel || candidate.todayAdvice.action || candidate.actionLabel || candidate.action
-
+function CycleCard({
+  candidate,
+  generatedAt,
+  tradeCaptureToken
+}: {
+  candidate: CycleTrialCandidate
+  generatedAt: string
+  tradeCaptureToken: string | null
+}) {
   return (
     <Card className="transition hover:border-brand-300 hover:bg-brand-50/30 hover:shadow-soft">
       <div className="flex flex-col gap-4">
@@ -201,14 +214,10 @@ function CycleCard({ candidate, generatedAt }: { candidate: CycleTrialCandidate;
             <WatchButton symbol={candidate.symbol} />
             <TradeReviewButton
               symbol={candidate.symbol}
-              companyName={candidate.name}
               sourceModule="CYCLE_TRIAL"
-              action={action}
-              score={candidate.score.finalScore}
               ruleVersion="cycle-trial-v2"
-              recommendedPrice={candidate.latestPrice}
               recommendedAt={generatedAt}
-              payload={candidate}
+              attestationToken={tradeCaptureToken}
             />
             <ScoreBadge value={candidate.score.finalScore} />
             <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>

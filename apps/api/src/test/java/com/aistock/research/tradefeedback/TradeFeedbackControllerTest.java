@@ -38,6 +38,12 @@ class TradeFeedbackControllerTest {
     @Autowired
     private TradeFillRepository fillRepository;
 
+    @Autowired
+    private TradeFillRevisionRepository fillRevisionRepository;
+
+    @Autowired
+    private RecommendationAttestationService attestationService;
+
     @SpyBean
     private TradeOutcomeRepository outcomeRepository;
 
@@ -47,6 +53,7 @@ class TradeFeedbackControllerTest {
     @AfterEach
     void cleanJournal() {
         outcomeRepository.deleteAll();
+        fillRevisionRepository.deleteAll();
         fillRepository.deleteAll();
         caseRepository.deleteAll();
     }
@@ -57,15 +64,16 @@ class TradeFeedbackControllerTest {
         mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"side":"BUY","executedAt":"2026-07-13T01:35:00Z","price":35.20,"quantity":100}
+                                {"side":"BUY","executedAt":"2026-07-11T01:35:00Z","price":35.20,"quantity":100}
                                 """))
                 .andExpect(status().isCreated());
-        when(marketDataGateway.dailyKLines(anyString(), any(), any())).thenReturn(java.util.List.of(
-                bar("2026-07-14", "37", "38", "35"),
-                bar("2026-07-15", "38", "39", "36"),
-                bar("2026-07-16", "39", "40", "37"),
-                bar("2026-07-17", "40", "41", "38"),
-                bar("2026-07-20", "41", "42", "39")));
+        when(marketDataGateway.dailyKLineSeries(anyString(), any(), any())).thenReturn(
+                MarketKLineSeries.complete(java.util.List.of(
+                        bar("2026-07-14", "37", "38", "35"),
+                        bar("2026-07-15", "38", "39", "36"),
+                        bar("2026-07-16", "39", "40", "37"),
+                        bar("2026-07-17", "40", "41", "38"),
+                        bar("2026-07-20", "41", "42", "39")), "TEST_DAILY_KLINE"));
         when(marketDataGateway.latestPrice("002714")).thenReturn(java.util.Optional.of(
                 new LatestMarketPrice(new java.math.BigDecimal("40"), "EAST_MONEY_LIVE_QUOTE",
                         java.time.LocalDate.parse("2026-07-20"),
@@ -106,19 +114,7 @@ class TradeFeedbackControllerTest {
 
     @Test
     void createsListsAndLoadsTradeCasesWithRecommendationPayloadAndLedger() throws Exception {
-        String request = """
-                {
-                  "symbol":"002714",
-                  "companyName":"牧原股份",
-                  "sourceModule":"MISPRICING",
-                  "recommendationAction":"分批建仓",
-                  "recommendationScore":78,
-                  "ruleVersion":"mispricing-v2",
-                  "recommendedPrice":36.20,
-                  "recommendedAt":"2026-07-13T01:00:00Z",
-                  "recommendationPayload":{"source":"test"}
-                }
-                """;
+        String request = attestedRequest(java.util.Map.of("source", "test"));
 
         String created = mockMvc.perform(post("/api/trade-cases")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -126,6 +122,7 @@ class TradeFeedbackControllerTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.caseId").isNotEmpty())
                 .andExpect(jsonPath("$.decisionId").doesNotExist())
+                .andExpect(jsonPath("$.recommendationVerified").value(true))
                 .andExpect(jsonPath("$.recommendationPayload.source").value("test"))
                 .andExpect(jsonPath("$.ledger.latestPrice").doesNotExist())
                 .andExpect(jsonPath("$.ledger.unrealizedProfit").doesNotExist())
@@ -188,7 +185,7 @@ class TradeFeedbackControllerTest {
         String firstFill = mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"side":"BUY","executedAt":"2026-07-13T01:35:00Z","price":35.20,"quantity":200}
+                                {"side":"BUY","executedAt":"2026-07-11T01:35:00Z","price":35.20,"quantity":200}
                                 """))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("HOLDING"))
@@ -201,7 +198,7 @@ class TradeFeedbackControllerTest {
         mockMvc.perform(put("/api/trade-cases/{caseId}/fills/{fillId}", caseId, fillId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"side":"BUY","executedAt":"2026-07-13T01:35:00Z","price":35.50,"quantity":150}
+                                {"side":"BUY","executedAt":"2026-07-11T01:35:00Z","price":35.50,"quantity":150}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ledger.positionQuantity").value(150))
@@ -219,14 +216,14 @@ class TradeFeedbackControllerTest {
         mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"side":"BUY","executedAt":"2026-07-13T01:35:00Z","price":35.20,"quantity":200}
+                                {"side":"BUY","executedAt":"2026-07-11T01:35:00Z","price":35.20,"quantity":200}
                                 """))
                 .andExpect(status().isCreated());
 
         mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"side":"SELL","executedAt":"2026-07-13T02:35:00Z","price":36,"quantity":201}
+                                {"side":"SELL","executedAt":"2026-07-11T02:35:00Z","price":36,"quantity":201}
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value(containsString("超过当前持仓")));
@@ -234,7 +231,7 @@ class TradeFeedbackControllerTest {
         mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"side":"BUY","executedAt":"2026-07-13T02:35:00Z","price":0,"quantity":0}
+                                {"side":"BUY","executedAt":"2026-07-11T02:35:00Z","price":0,"quantity":0}
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
@@ -249,7 +246,7 @@ class TradeFeedbackControllerTest {
         mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"side":"HOLD","executedAt":"2026-07-13T01:35:00Z","price":35.20,"quantity":1}
+                                {"side":"HOLD","executedAt":"2026-07-11T01:35:00Z","price":35.20,"quantity":1}
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
@@ -285,7 +282,7 @@ class TradeFeedbackControllerTest {
         mockMvc.perform(post("/api/trade-cases/{caseId}/fills", caseId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"side":"BUY","executedAt":"2026-07-13T01:35:00Z","price":35.20,"quantity":1}
+                                {"side":"BUY","executedAt":"2026-07-11T01:35:00Z","price":35.20,"quantity":1}
                                 """))
                 .andExpect(status().isCreated());
         mockMvc.perform(post("/api/trade-cases/{caseId}/cancel", caseId))
@@ -293,16 +290,43 @@ class TradeFeedbackControllerTest {
     }
 
     @Test
+    void pagesCasesWithAStableCreatedAtAndCaseIdCursor() throws Exception {
+        caseRepository.save(TradeCaseEntity.planned(
+                "case-old", "fingerprint-old", null, "002714", "牧原股份", "MISPRICING",
+                "观察", null, "mispricing-v2", new java.math.BigDecimal("35"),
+                java.time.Instant.parse("2026-07-01T01:00:00Z"), "{}",
+                java.time.Instant.parse("2026-07-01T01:00:00Z")));
+        caseRepository.save(TradeCaseEntity.planned(
+                "case-new", "fingerprint-new", null, "600519", "贵州茅台", "SHORT_TERM",
+                "观察", null, "short-term-right-side-v2", new java.math.BigDecimal("1500"),
+                java.time.Instant.parse("2026-07-02T01:00:00Z"), "{}",
+                java.time.Instant.parse("2026-07-02T01:00:00Z")));
+
+        String firstPage = mockMvc.perform(get("/api/trade-cases").param("limit", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].caseId").value("case-new"))
+                .andReturn().getResponse().getContentAsString();
+        com.fasterxml.jackson.databind.JsonNode cursor = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(firstPage).get(0);
+
+        mockMvc.perform(get("/api/trade-cases")
+                        .param("limit", "1")
+                        .param("beforeCreatedAt", cursor.path("createdAt").asText())
+                        .param("beforeCaseId", cursor.path("caseId").asText()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].caseId").value("case-old"));
+    }
+
+    @Test
     void validatesCreateRequestBeforeItReachesPersistence() throws Exception {
         mockMvc.perform(post("/api/trade-cases")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"symbol":"bad","companyName":"","sourceModule":"","recommendationAction":"","ruleVersion":"","recommendedPrice":0}
+                                {"attestationToken":""}
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
-                .andExpect(jsonPath("$.fields.symbol").isNotEmpty())
-                .andExpect(jsonPath("$.fields.recommendedAt").isNotEmpty());
+                .andExpect(jsonPath("$.fields.attestationToken").isNotEmpty());
     }
 
     @Test
@@ -321,21 +345,24 @@ class TradeFeedbackControllerTest {
     private String createCase() throws Exception {
         String response = mockMvc.perform(post("/api/trade-cases")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "symbol":"002714",
-                                  "companyName":"牧原股份",
-                                  "sourceModule":"MISPRICING",
-                                  "recommendationAction":"分批建仓",
-                                  "ruleVersion":"mispricing-v2",
-                                  "recommendedPrice":36.20,
-                                  "recommendedAt":"2026-07-13T01:00:00Z",
-                                  "recommendationPayload":{}
-                                }
-                                """))
+                        .content(attestedRequest(java.util.Map.of())))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         return new com.fasterxml.jackson.databind.ObjectMapper().readTree(response).path("caseId").asText();
+    }
+
+    private String attestedRequest(Object payload) throws Exception {
+        String token = attestationService.register(
+                RecommendationSource.MISPRICING,
+                "002714",
+                "牧原股份",
+                "分批建仓",
+                new java.math.BigDecimal("78"),
+                new java.math.BigDecimal("36.20"),
+                java.time.Instant.parse("2026-07-10T01:00:00Z"),
+                payload);
+        return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(
+                java.util.Map.of("attestationToken", token));
     }
 
     private MarketBar bar(String date, String close, String high, String low) {

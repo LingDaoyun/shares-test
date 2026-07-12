@@ -49,6 +49,12 @@ public class TradeCaseEntity {
     @Column(name = "recommendation_payload_json", nullable = false, columnDefinition = "TEXT")
     private String recommendationPayloadJson;
 
+    @Column(name = "recommendation_verified", nullable = false)
+    private boolean recommendationVerified;
+
+    @Column(name = "recommendation_attestation_id", length = 64)
+    private String recommendationAttestationId;
+
     @Column(name = "status", nullable = false, length = 32)
     private String status;
 
@@ -74,6 +80,8 @@ public class TradeCaseEntity {
             BigDecimal recommendedPrice,
             Instant recommendedAt,
             String recommendationPayloadJson,
+            boolean recommendationVerified,
+            String recommendationAttestationId,
             String status,
             Instant createdAt,
             Instant updatedAt
@@ -90,6 +98,8 @@ public class TradeCaseEntity {
         this.recommendedPrice = recommendedPrice;
         this.recommendedAt = recommendedAt;
         this.recommendationPayloadJson = recommendationPayloadJson;
+        this.recommendationVerified = recommendationVerified;
+        this.recommendationAttestationId = recommendationAttestationId;
         this.status = status;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
@@ -123,6 +133,44 @@ public class TradeCaseEntity {
                 recommendedPrice,
                 recommendedAt,
                 recommendationPayloadJson,
+                false,
+                null,
+                "PLANNED",
+                createdAt,
+                createdAt
+        );
+    }
+
+    public static TradeCaseEntity verifiedPlanned(
+            String caseId,
+            String recommendationFingerprint,
+            String recommendationAttestationId,
+            String symbol,
+            String companyName,
+            String sourceModule,
+            String recommendationAction,
+            BigDecimal recommendationScore,
+            String ruleVersion,
+            BigDecimal recommendedPrice,
+            Instant recommendedAt,
+            String recommendationPayloadJson,
+            Instant createdAt
+    ) {
+        return new TradeCaseEntity(
+                caseId,
+                recommendationFingerprint,
+                null,
+                symbol,
+                companyName,
+                sourceModule,
+                recommendationAction,
+                recommendationScore,
+                ruleVersion,
+                recommendedPrice,
+                recommendedAt,
+                recommendationPayloadJson,
+                true,
+                recommendationAttestationId,
                 "PLANNED",
                 createdAt,
                 createdAt
@@ -175,6 +223,14 @@ public class TradeCaseEntity {
 
     public String getRecommendationPayloadJson() {
         return recommendationPayloadJson;
+    }
+
+    public boolean isRecommendationVerified() {
+        return recommendationVerified;
+    }
+
+    public String getRecommendationAttestationId() {
+        return recommendationAttestationId;
     }
 
     public String getStatus() {

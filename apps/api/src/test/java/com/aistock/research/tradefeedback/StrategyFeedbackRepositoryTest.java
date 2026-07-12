@@ -3,6 +3,7 @@ package com.aistock.research.tradefeedback;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.data.domain.PageRequest;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -25,7 +26,8 @@ class StrategyFeedbackRepositoryTest {
         Instant now = Instant.parse("2026-07-01T00:00:00Z");
         List<String> caseIds = List.of(
                 "included", "current", "execution", "pending", "unavailable", "null-return", "t5");
-        caseIds.forEach(caseId -> cases.save(tradeCase(caseId, now)));
+        caseIds.forEach(caseId -> cases.save(verifiedTradeCase(caseId, now)));
+        cases.save(unverifiedTradeCase("unverified", now));
 
         outcomes.save(matured("included", "RECOMMENDATION", "T20", decimal("3.00"), now));
         outcomes.save(matured("current", "RECOMMENDATION", "CURRENT", decimal("3.00"), now));
@@ -41,18 +43,19 @@ class StrategyFeedbackRepositoryTest {
         outcomes.save(unavailable);
         outcomes.save(matured("null-return", "RECOMMENDATION", "T20", null, now));
         outcomes.save(matured("t5", "RECOMMENDATION", "T5", decimal("3.00"), now));
+        outcomes.save(matured("unverified", "RECOMMENDATION", "T20", decimal("3.00"), now));
         outcomes.flush();
 
-        assertThat(outcomes.findMaturedRecommendationT20())
+        assertThat(outcomes.findMaturedRecommendationT20(PageRequest.of(0, 100)))
                 .extracting(MaturedRecommendationRow::caseId)
                 .containsExactly("included");
     }
 
-    private TradeCaseEntity tradeCase(String caseId, Instant now) {
-        return TradeCaseEntity.planned(
+    private TradeCaseEntity verifiedTradeCase(String caseId, Instant now) {
+        return TradeCaseEntity.verifiedPlanned(
                 caseId,
                 "fingerprint-" + caseId,
-                null,
+                "attestation-" + caseId,
                 "002714",
                 "牧原股份",
                 "MODULE",
@@ -64,6 +67,12 @@ class StrategyFeedbackRepositoryTest {
                 "{}",
                 now
         );
+    }
+
+    private TradeCaseEntity unverifiedTradeCase(String caseId, Instant now) {
+        return TradeCaseEntity.planned(
+                caseId, "fingerprint-" + caseId, null, "002714", "牧原股份", "MODULE",
+                "观察", decimal("60.00"), "v1", decimal("100.00"), now, "{}", now);
     }
 
     private TradeOutcomeEntity matured(
