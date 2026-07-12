@@ -8,6 +8,7 @@ import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Loader } from '../components/ui/Loader'
 import { SectionBanner } from '../components/ui/SectionBanner'
+import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
 import type { BacktestReport, BacktestSummary, ShortTermCandidate, ShortTermHotDirection, ShortTermReport, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice } from '../types'
@@ -309,6 +310,7 @@ export function ShortTermPage() {
                   backtestLoading={backtestLoading}
                   backtestError={backtestError}
                   weightProfile={report.weightProfile}
+                  generatedAt={report.generatedAt}
                 />
               ) : <Card><Loader text="等待候选数据" /></Card>}
             </div>
@@ -441,14 +443,18 @@ function CandidateDetail({
   backtestSummary,
   backtestLoading,
   backtestError,
-  weightProfile
+  weightProfile,
+  generatedAt
 }: {
   candidate: ShortTermCandidate
   backtestSummary?: BacktestSummary
   backtestLoading: boolean
   backtestError: string
   weightProfile: ShortTermWeightProfile
+  generatedAt: string
 }) {
+  const action = candidate.todayAdvice.actionLabel || candidate.todayAdvice.action || candidate.actionLabel || candidate.action
+
   return (
     <Card className="transition hover:border-brand-300">
       <div className="flex flex-col gap-4">
@@ -460,6 +466,17 @@ function CandidateDetail({
           </div>
           <div className="flex shrink-0 flex-col items-end gap-2">
             <WatchButton symbol={candidate.symbol} />
+            <TradeReviewButton
+              symbol={candidate.symbol}
+              companyName={candidate.name}
+              sourceModule="SHORT_TERM"
+              action={action}
+              score={candidate.score.finalScore}
+              ruleVersion="short-term-right-side-v2"
+              recommendedPrice={candidate.latestPrice}
+              recommendedAt={generatedAt}
+              payload={candidate}
+            />
             <ScoreBadge value={candidate.score.finalScore} />
             <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
             <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>

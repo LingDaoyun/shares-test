@@ -7,6 +7,7 @@ import { SectionBanner } from '../components/ui/SectionBanner'
 import { Button } from '../components/ui/Button'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Loader } from '../components/ui/Loader'
+import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatSignedPercent } from '../lib/format'
 import type { CycleTrialCandidate, CycleTrialReport } from '../types'
@@ -169,7 +170,7 @@ export function CycleTrialPage() {
                   <Tag tone="neutral">{candidates.length} 只</Tag>
                 </div>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {candidates.map((candidate) => <CycleCard key={candidate.symbol} candidate={candidate} />)}
+                  {candidates.map((candidate) => <CycleCard key={candidate.symbol} candidate={candidate} generatedAt={report.generatedAt} />)}
                 </div>
               </section>
             ))}
@@ -180,7 +181,9 @@ export function CycleTrialPage() {
   )
 }
 
-function CycleCard({ candidate }: { candidate: CycleTrialCandidate }) {
+function CycleCard({ candidate, generatedAt }: { candidate: CycleTrialCandidate; generatedAt: string }) {
+  const action = candidate.todayAdvice.actionLabel || candidate.todayAdvice.action || candidate.actionLabel || candidate.action
+
   return (
     <Card className="transition hover:border-brand-300 hover:bg-brand-50/30 hover:shadow-soft">
       <div className="flex flex-col gap-4">
@@ -196,6 +199,17 @@ function CycleCard({ candidate }: { candidate: CycleTrialCandidate }) {
           </div>
           <div className="flex shrink-0 flex-col items-end gap-2">
             <WatchButton symbol={candidate.symbol} />
+            <TradeReviewButton
+              symbol={candidate.symbol}
+              companyName={candidate.name}
+              sourceModule="CYCLE_TRIAL"
+              action={action}
+              score={candidate.score.finalScore}
+              ruleVersion="cycle-trial-v2"
+              recommendedPrice={candidate.latestPrice}
+              recommendedAt={generatedAt}
+              payload={candidate}
+            />
             <ScoreBadge value={candidate.score.finalScore} />
             <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
             <Tag tone={adviceTone(candidate.todayAdvice.action)}>今日：{candidate.todayAdvice.actionLabel}</Tag>

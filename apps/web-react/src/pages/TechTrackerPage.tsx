@@ -7,6 +7,7 @@ import { SectionBanner } from '../components/ui/SectionBanner'
 import { Button } from '../components/ui/Button'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Loader } from '../components/ui/Loader'
+import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatSignedPercent } from '../lib/format'
 import type { TechTrackedStock, TechTrackingReport } from '../types'
@@ -158,7 +159,7 @@ export function TechTrackerPage() {
                   <Tag tone="neutral">{stocks.length} 只</Tag>
                 </div>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {stocks.map((stock) => <TechStockCard key={stock.symbol} stock={stock} />)}
+                  {stocks.map((stock) => <TechStockCard key={stock.symbol} stock={stock} generatedAt={report.generatedAt} />)}
                 </div>
               </section>
             ))}
@@ -169,7 +170,9 @@ export function TechTrackerPage() {
   )
 }
 
-function TechStockCard({ stock }: { stock: TechTrackedStock }) {
+function TechStockCard({ stock, generatedAt }: { stock: TechTrackedStock; generatedAt: string }) {
+  const action = stock.todayAdvice.actionLabel || stock.todayAdvice.action || stock.actionLabel || stock.action
+
   return (
     <Card className="transition hover:border-brand-300 hover:shadow-soft">
       <div className="flex flex-col gap-4">
@@ -184,6 +187,17 @@ function TechStockCard({ stock }: { stock: TechTrackedStock }) {
           </div>
           <div className="flex shrink-0 flex-col items-end gap-2">
             <WatchButton symbol={stock.symbol} />
+            <TradeReviewButton
+              symbol={stock.symbol}
+              companyName={stock.name}
+              sourceModule="HOT_TRACKER"
+              action={action}
+              score={stock.score.finalScore}
+              ruleVersion="hot-tracker-v2"
+              recommendedPrice={stock.latestPrice}
+              recommendedAt={generatedAt}
+              payload={stock}
+            />
             <ScoreBadge value={stock.score.finalScore} />
             <Tag tone={actionTone[stock.action] ?? 'neutral'}>{stock.actionLabel}</Tag>
             <Tag tone={adviceTone(stock.todayAdvice.action)}>今日：{stock.todayAdvice.actionLabel}</Tag>

@@ -917,3 +917,109 @@ export interface ApiErrorBody {
   timestamp: string
   fields: Record<string, string>
 }
+
+export type TradeSide = 'BUY' | 'SELL'
+export type TradeCaseStatus = 'PLANNED' | 'HOLDING' | 'CLOSED' | 'CANCELLED'
+
+export interface CreateTradeCaseRequest {
+  decisionId?: string | null
+  symbol: string
+  companyName: string
+  sourceModule: string
+  recommendationAction: string
+  recommendationScore?: number | null
+  ruleVersion: string
+  recommendedPrice: number
+  recommendedAt: string
+  recommendationPayload: unknown
+}
+
+export interface UpsertTradeFillRequest {
+  side: TradeSide
+  executedAt: string
+  price: number
+  quantity: number
+}
+
+export interface TradeFill {
+  fillId: string
+  side: TradeSide
+  executedAt: string
+  price: number
+  quantity: number
+}
+
+export interface TradeFillView extends TradeFill {
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TradeLedgerSummary {
+  latestPrice: number | null
+  positionQuantity: number
+  averageCost: number
+  realizedProfit: number
+  unrealizedProfit: number | null
+  totalProfit: number | null
+}
+
+export interface TradeOutcomeView {
+  baselineType: string
+  horizon: string
+  baselinePrice: number | null
+  evaluationPrice: number | null
+  evaluationDate: string | null
+  returnPct: number | null
+  maxRunupPct: number | null
+  maxDrawdownPct: number | null
+  status: string
+  sourceName: string | null
+  marketTimestamp: string | null
+  calculatedAt: string
+}
+
+export type TradeOutcomeSnapshot = TradeOutcomeView
+
+export interface TradeCaseSummary {
+  caseId: string
+  symbol: string
+  companyName: string
+  sourceModule: string
+  recommendationAction: string
+  recommendationScore: number | null
+  ruleVersion: string
+  recommendedPrice: number
+  recommendedAt: string
+  status: TradeCaseStatus
+  ledger: TradeLedgerSummary
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TradeCaseDetail extends TradeCaseSummary {
+  decisionId: string | null
+  recommendationPayload: unknown
+  fills: TradeFillView[]
+  outcomes: TradeOutcomeView[]
+  outcomeWarnings: string[]
+}
+
+export interface StrategyFeedbackSummary {
+  sourceModule: string
+  ruleVersion: string
+  horizon: string
+  sampleCount: number
+  positiveCount: number
+  positiveRate: number | null
+  averageReturn: number | null
+  medianReturn: number | null
+  averageRunup: number | null
+  averageDrawdown: number | null
+  averageExecutionDeviation: number | null
+  executionDeviationSampleCount: number
+  sampleStart: string | null
+  sampleEnd: string | null
+  promptEligible: boolean
+  adjustmentEligible: boolean
+  reliabilityAdjustment: number | null
+}

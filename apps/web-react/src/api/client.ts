@@ -14,6 +14,12 @@ import type {
   RuleDefinition,
   RuntimeConfigSnapshot,
   TechTrackingReport,
+  CreateTradeCaseRequest,
+  StrategyFeedbackSummary,
+  TradeCaseDetail,
+  TradeCaseStatus,
+  TradeCaseSummary,
+  UpsertTradeFillRequest,
   WatchlistEntry
 } from '../types'
 
@@ -174,4 +180,46 @@ export function fetchWatchlistHistory(symbol: string, limit = 20) {
   return http
     .get<DecisionHistoryEntry[]>(`/watchlist/${encodeURIComponent(symbol)}/history`, { params: { limit } })
     .then((res) => res.data)
+}
+
+export function fetchTradeCases(params: { status?: TradeCaseStatus; symbol?: string } = {}) {
+  return http.get<TradeCaseSummary[]>('/trade-cases', { params }).then((res) => res.data)
+}
+
+export function fetchTradeCase(caseId: string) {
+  return http.get<TradeCaseDetail>(`/trade-cases/${encodeURIComponent(caseId)}`).then((res) => res.data)
+}
+
+export function createTradeCase(request: CreateTradeCaseRequest) {
+  return http.post<TradeCaseDetail>('/trade-cases', request).then((res) => res.data)
+}
+
+export function addTradeFill(caseId: string, request: UpsertTradeFillRequest) {
+  return http
+    .post<TradeCaseDetail>(`/trade-cases/${encodeURIComponent(caseId)}/fills`, request)
+    .then((res) => res.data)
+}
+
+export function updateTradeFill(caseId: string, fillId: string, request: UpsertTradeFillRequest) {
+  return http
+    .put<TradeCaseDetail>(`/trade-cases/${encodeURIComponent(caseId)}/fills/${encodeURIComponent(fillId)}`, request)
+    .then((res) => res.data)
+}
+
+export function deleteTradeFill(caseId: string, fillId: string) {
+  return http
+    .delete<TradeCaseDetail>(`/trade-cases/${encodeURIComponent(caseId)}/fills/${encodeURIComponent(fillId)}`)
+    .then((res) => res.data)
+}
+
+export function cancelTradeCase(caseId: string) {
+  return http.post<TradeCaseDetail>(`/trade-cases/${encodeURIComponent(caseId)}/cancel`).then((res) => res.data)
+}
+
+export function refreshTradeCase(caseId: string) {
+  return http.post<TradeCaseDetail>(`/trade-cases/${encodeURIComponent(caseId)}/refresh`).then((res) => res.data)
+}
+
+export function fetchStrategyFeedback() {
+  return http.get<StrategyFeedbackSummary[]>('/strategy-feedback').then((res) => res.data)
 }
