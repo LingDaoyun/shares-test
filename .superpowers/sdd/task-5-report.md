@@ -94,5 +94,42 @@ Report:
 
 ## Concerns
 
-- `promptContext` currently returns all eligible cohorts, as required. If the number of retained rule versions grows substantially, a later explicitly specified prompt-budget cap may be needed while keeping `summaries()` complete and stable.
+- Superseded by the review fix below: `promptContext` is now capped while `summaries()` remains complete and stable.
 - The repository projection uses JPQL constructor projection supported by the current Hibernate/Spring Data stack and covered by the H2 repository test.
+
+## Review Fix: Prompt Safety, Invariants, and Cohort Cap
+
+### Status
+
+Fixed the Task 5 review findings on top of `f995ca718425a3f591d9996f5b8691a443e66409`.
+
+- Historical feedback is explicitly converted to ordered JSON-safe maps. `LocalDate` values use ISO-8601 strings, and serialization now throws a clear `IllegalStateException` instead of falling back to `String.valueOf`.
+- `promptContext` retains only the 12 strongest eligible GLOBAL cohorts, ordered by sample count descending, then source module and rule version. `summaries()` remains complete and retains its original stable order.
+- Prompt instructions disclose the 12-cohort cap.
+- Orchestration coverage now proves all deterministic report and per-opinion fields remain unchanged while only AI summary, suggested stage, and AI argument fields are enhanced.
+- The existing exactly-one feedback lookup assertions remain in place. No score, Nacos, or hard-risk production path was changed.
+
+### RED Evidence
+
+- Command: `mvn -pl apps/api -Dtest=StrategyFeedbackServiceTest,AgentCommitteePromptServiceTest,AgentCommitteeAiServiceTest test`
+  - 15 tests run; 3 failures and 1 error.
+  - The extracted feedback block was not valid JSON because serialization fell back to `StrategyFeedbackSummary.toString()`.
+  - Mapper failure did not throw because `serialize` returned `String.valueOf(value)`.
+  - Prompt text did not disclose the 12-cohort cap.
+  - `promptContext` returned all 14 eligible cohorts in alphabetical order instead of the strongest 12.
+- First implementation rerun exposed one obsolete assertion expecting the old alphabetical `FIVE, TWENTY` prompt order. It was updated to the required sample-count order `TWENTY, FIVE` without changing production behavior.
+
+### GREEN Evidence
+
+- Focused behavior slice: `mvn -pl apps/api -Dtest=StrategyFeedbackServiceTest,AgentCommitteePromptServiceTest,AgentCommitteeAiServiceTest test`
+  - 15 tests, 0 failures, 0 errors, 0 skipped.
+- Final focused Task 5 suite: `mvn -pl apps/api -Dtest=StrategyFeedbackServiceTest,StrategyFeedbackRepositoryTest,StrategyFeedbackControllerTest,TradeOutcomeSchemaMigrationTest,AgentCommitteePromptServiceTest,AgentCommitteeAiServiceTest test`
+  - 18 tests, 0 failures, 0 errors, 0 skipped.
+- Full backend: `mvn -pl apps/api test`
+  - 200 tests, 0 failures, 0 errors, 0 skipped.
+- Diff hygiene: `git diff --check`
+  - Exit 0, no whitespace errors.
+
+### Concerns
+
+- None. The cap intentionally applies only to prompt context; the API-backed `summaries()` result remains complete.

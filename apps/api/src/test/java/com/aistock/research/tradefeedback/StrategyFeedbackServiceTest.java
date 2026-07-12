@@ -49,7 +49,7 @@ class StrategyFeedbackServiceTest {
         assertThat(summary(summaries, "TWENTY", "v1").reliabilityAdjustment())
                 .isEqualByComparingTo("5.00");
         assertThat(promptContext).extracting(StrategyFeedbackSummary::sourceModule)
-                .containsExactly("FIVE", "TWENTY");
+                .containsExactly("TWENTY", "FIVE");
     }
 
     @Test
@@ -155,6 +155,40 @@ class StrategyFeedbackServiceTest {
         assertThat(service.summaries())
                 .extracting(summary -> summary.sourceModule() + "/" + summary.ruleVersion())
                 .containsExactly("ALPHA/v1", "ALPHA/v2", "ZETA/v2");
+    }
+
+    @Test
+    void capsPromptContextAtTwelveStrongestEligibleCohortsWithStableTieBreaking() {
+        List<MaturedRecommendationRow> rows = new ArrayList<>();
+        rows.addAll(rows("OMEGA", "v1", 30, decimal("1.00")));
+        rows.addAll(rows("BETA", "v2", 25, decimal("1.00")));
+        rows.addAll(rows("ALPHA", "v2", 25, decimal("1.00")));
+        rows.addAll(rows("ALPHA", "v1", 25, decimal("1.00")));
+        rows.addAll(rows("KILO", "v1", 24, decimal("1.00")));
+        rows.addAll(rows("JULIET", "v1", 23, decimal("1.00")));
+        rows.addAll(rows("INDIA", "v1", 22, decimal("1.00")));
+        rows.addAll(rows("HOTEL", "v1", 21, decimal("1.00")));
+        rows.addAll(rows("GOLF", "v1", 20, decimal("1.00")));
+        rows.addAll(rows("FOXTROT", "v1", 19, decimal("1.00")));
+        rows.addAll(rows("ECHO", "v1", 18, decimal("1.00")));
+        rows.addAll(rows("DELTA", "v1", 17, decimal("1.00")));
+        rows.addAll(rows("CHARLIE", "v1", 16, decimal("1.00")));
+        rows.addAll(rows("BRAVO", "v1", 15, decimal("1.00")));
+        when(outcomes.findMaturedRecommendationT20()).thenReturn(rows);
+        when(fills.findByCaseIdInAndSideOrderByExecutedAtAscCreatedAtAscFillIdAsc(anyCollection(), eq("BUY")))
+                .thenReturn(List.of());
+
+        List<StrategyFeedbackSummary> summaries = service.summaries();
+        List<StrategyFeedbackSummary> promptContext = service.promptContext("002714");
+
+        assertThat(summaries).hasSize(14);
+        assertThat(promptContext)
+                .extracting(summary -> summary.sourceModule() + "/" + summary.ruleVersion())
+                .containsExactly(
+                        "OMEGA/v1", "ALPHA/v1", "ALPHA/v2", "BETA/v2",
+                        "KILO/v1", "JULIET/v1", "INDIA/v1", "HOTEL/v1",
+                        "GOLF/v1", "FOXTROT/v1", "ECHO/v1", "DELTA/v1"
+                );
     }
 
     @Test

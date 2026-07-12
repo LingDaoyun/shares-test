@@ -23,12 +23,18 @@ public class StrategyFeedbackService {
     private static final String BUY = "BUY";
     private static final ZoneId SAMPLE_ZONE = ZoneId.of("Asia/Shanghai");
     private static final int METRIC_SCALE = 4;
+    private static final int PROMPT_COHORT_LIMIT = 12;
     private static final BigDecimal MIN_ADJUSTMENT = new BigDecimal("-5");
     private static final BigDecimal MAX_ADJUSTMENT = new BigDecimal("5");
     private static final Comparator<TradeFillEntity> FIRST_FILL_ORDER = Comparator
             .comparing(TradeFillEntity::getExecutedAt)
             .thenComparing(TradeFillEntity::getCreatedAt)
             .thenComparing(TradeFillEntity::getFillId);
+    private static final Comparator<StrategyFeedbackSummary> PROMPT_COHORT_ORDER = Comparator
+            .comparingInt(StrategyFeedbackSummary::sampleCount)
+            .reversed()
+            .thenComparing(StrategyFeedbackSummary::sourceModule)
+            .thenComparing(StrategyFeedbackSummary::ruleVersion);
 
     private final TradeOutcomeRepository outcomeRepository;
     private final TradeFillRepository fillRepository;
@@ -71,6 +77,8 @@ public class StrategyFeedbackService {
     public List<StrategyFeedbackSummary> promptContext(String symbol) {
         return summaries().stream()
                 .filter(StrategyFeedbackSummary::promptEligible)
+                .sorted(PROMPT_COHORT_ORDER)
+                .limit(PROMPT_COHORT_LIMIT)
                 .toList();
     }
 

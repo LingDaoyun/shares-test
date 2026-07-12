@@ -2,6 +2,7 @@ package com.aistock.research.committee;
 
 import com.aistock.research.ai.LlmChatClient;
 import com.aistock.research.ai.LlmConfigPreview;
+import com.aistock.research.evidence.AgentEvidenceCheck;
 import com.aistock.research.tradefeedback.StrategyFeedbackService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,7 +42,7 @@ class AgentCommitteeAiServiceTest {
     }
 
     @Test
-    void enhanceLooksUpFeedbackOnceAndKeepsDeterministicScoreUnchanged() throws Exception {
+    void enhanceLooksUpFeedbackOnceAndKeepsEveryDeterministicInvariantUnchanged() throws Exception {
         when(llmChatClient.currentConfig()).thenReturn(new LlmConfigPreview(
                 "test", "model", "http://localhost", "json_schema", true, true,
                 "test", null, 1000, null));
@@ -66,8 +67,41 @@ class AgentCommitteeAiServiceTest {
 
         AgentConsensusReport enhanced = service.enhance(deterministic);
 
+        assertThat(enhanced.symbol()).isEqualTo(deterministic.symbol());
+        assertThat(enhanced.companyName()).isEqualTo(deterministic.companyName());
+        assertThat(enhanced.consensusStage()).isEqualTo(deterministic.consensusStage());
+        assertThat(enhanced.consensusLabel()).isEqualTo(deterministic.consensusLabel());
         assertThat(enhanced.consensusScore()).isEqualByComparingTo(deterministic.consensusScore());
+        assertThat(enhanced.consensusReason()).isEqualTo(deterministic.consensusReason());
+        assertThat(enhanced.supportCount()).isEqualTo(deterministic.supportCount());
+        assertThat(enhanced.watchCount()).isEqualTo(deterministic.watchCount());
+        assertThat(enhanced.reviewCount()).isEqualTo(deterministic.reviewCount());
+        assertThat(enhanced.vetoCount()).isEqualTo(deterministic.vetoCount());
+        assertThat(enhanced.agreements()).isEqualTo(deterministic.agreements());
+        assertThat(enhanced.disagreements()).isEqualTo(deterministic.disagreements());
+        assertThat(enhanced.requiredEvidence()).isEqualTo(deterministic.requiredEvidence());
+        assertThat(enhanced.generatedAt()).isEqualTo(deterministic.generatedAt());
+        assertThat(enhanced.opinions()).hasSameSizeAs(deterministic.opinions());
+        for (int index = 0; index < deterministic.opinions().size(); index++) {
+            AgentOpinion before = deterministic.opinions().get(index);
+            AgentOpinion after = enhanced.opinions().get(index);
+            assertThat(after.agentCode()).isEqualTo(before.agentCode());
+            assertThat(after.agentName()).isEqualTo(before.agentName());
+            assertThat(after.perspective()).isEqualTo(before.perspective());
+            assertThat(after.vote()).isEqualTo(before.vote());
+            assertThat(after.voteLabel()).isEqualTo(before.voteLabel());
+            assertThat(after.score()).isEqualByComparingTo(before.score());
+            assertThat(after.confidence()).isEqualByComparingTo(before.confidence());
+            assertThat(after.supports()).isEqualTo(before.supports());
+            assertThat(after.objections()).isEqualTo(before.objections());
+            assertThat(after.requiredEvidence()).isEqualTo(before.requiredEvidence());
+            assertThat(after.evidenceChecks()).isEqualTo(before.evidenceChecks());
+        }
+        assertThat(enhanced.aiSummary()).isEqualTo("历史样本支持继续复核");
         assertThat(enhanced.aiSuggestedStage()).isEqualTo("WAIT_FOR_PRICE");
+        assertThat(enhanced.opinions().get(0).aiArgument()).isEqualTo("正向证据");
+        assertThat(enhanced.opinions().get(0).aiCounterEvidence()).isEqualTo("反向证据");
+        assertThat(enhanced.opinions().get(0).aiConfidenceNote()).isEqualTo("样本有限");
         verify(feedbackService, times(1)).promptContext("002714");
     }
 
@@ -93,7 +127,19 @@ class AgentCommitteeAiServiceTest {
                         new BigDecimal("75.00"),
                         List.of("政策支持"),
                         List.of("兑现待验证"),
-                        List.of("核查公告")
+                        List.of("核查公告"),
+                        List.of(new AgentEvidenceCheck(
+                                "核查公告",
+                                "FOUND",
+                                "已找到",
+                                "exchange",
+                                "公告证据",
+                                "https://example.test/disclosure",
+                                88
+                        )),
+                        null,
+                        null,
+                        null
                 )),
                 List.of("需求稳定"),
                 List.of("估值待复核"),

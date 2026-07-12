@@ -4,6 +4,8 @@ import com.aistock.research.tradefeedback.StrategyFeedbackSummary;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -90,6 +92,7 @@ public class AgentCommitteePromptService {
                 历史反馈使用约束：
                 - 历史策略反馈只是带样本量的校准证据，不能覆盖公告、财务、流动性和风险否决。
                 - 样本不足 20 时不得建议调整分数；达到 20 时，可靠性修正也只能使用输入中的 ±5 上限。
+                - 为控制提示词长度，最多注入 12 个符合条件的 GLOBAL 队列，按样本量和稳定标识排序。
                 - 此证据只可用于 committee_summary、counter_evidence 和 consensus_adjustment.stage。
                 - 不得修改确定性共识分或 Nacos 配置，也不得将 GLOBAL 队列证据描述为当前公司的策略命中记录。
 
@@ -116,7 +119,7 @@ public class AgentCommitteePromptService {
                 serialize(report.agreements()),
                 serialize(report.disagreements()),
                 serialize(report.requiredEvidence()),
-                serialize(historicalFeedback),
+                serialize(feedbackPayload(historicalFeedback)),
                 serialize(outputExample())
         );
     }
@@ -192,11 +195,39 @@ public class AgentCommitteePromptService {
         );
     }
 
+    private List<Map<String, Object>> feedbackPayload(List<StrategyFeedbackSummary> feedback) {
+        return feedback.stream().map(summary -> {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("sourceModule", summary.sourceModule());
+            payload.put("ruleVersion", summary.ruleVersion());
+            payload.put("horizon", summary.horizon());
+            payload.put("sampleCount", summary.sampleCount());
+            payload.put("positiveCount", summary.positiveCount());
+            payload.put("positiveRate", summary.positiveRate());
+            payload.put("averageReturn", summary.averageReturn());
+            payload.put("medianReturn", summary.medianReturn());
+            payload.put("averageRunup", summary.averageRunup());
+            payload.put("averageDrawdown", summary.averageDrawdown());
+            payload.put("averageExecutionDeviation", summary.averageExecutionDeviation());
+            payload.put("executionDeviationSampleCount", summary.executionDeviationSampleCount());
+            payload.put("sampleStart", isoDate(summary.sampleStart()));
+            payload.put("sampleEnd", isoDate(summary.sampleEnd()));
+            payload.put("promptEligible", summary.promptEligible());
+            payload.put("adjustmentEligible", summary.adjustmentEligible());
+            payload.put("reliabilityAdjustment", summary.reliabilityAdjustment());
+            return payload;
+        }).toList();
+    }
+
+    private String isoDate(LocalDate date) {
+        return date == null ? null : DateTimeFormatter.ISO_LOCAL_DATE.format(date);
+    }
+
     private String serialize(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
         } catch (Exception exception) {
-            return String.valueOf(value);
+            throw new IllegalStateException("Failed to serialize committee prompt payload as JSON", exception);
         }
     }
 }
