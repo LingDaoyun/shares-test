@@ -2,6 +2,8 @@ package com.aistock.research.committee;
 
 import com.aistock.research.ai.LlmChatClient;
 import com.aistock.research.ai.LlmConfigPreview;
+import com.aistock.research.tradefeedback.StrategyFeedbackService;
+import com.aistock.research.tradefeedback.StrategyFeedbackSummary;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
 
@@ -15,16 +17,23 @@ public class AgentCommitteeAiService {
 
     private final LlmChatClient llmChatClient;
     private final AgentCommitteePromptService promptService;
+    private final StrategyFeedbackService strategyFeedbackService;
 
-    public AgentCommitteeAiService(LlmChatClient llmChatClient, AgentCommitteePromptService promptService) {
+    public AgentCommitteeAiService(
+            LlmChatClient llmChatClient,
+            AgentCommitteePromptService promptService,
+            StrategyFeedbackService strategyFeedbackService
+    ) {
         this.llmChatClient = llmChatClient;
         this.promptService = promptService;
+        this.strategyFeedbackService = strategyFeedbackService;
     }
 
     public AgentConsensusReport enhance(AgentConsensusReport deterministicReport) {
         LlmConfigPreview config = llmChatClient.currentConfig();
         try {
-            AgentCommitteePromptPreview prompt = promptService.preview(deterministicReport);
+            List<StrategyFeedbackSummary> feedback = strategyFeedbackService.promptContext(deterministicReport.symbol());
+            AgentCommitteePromptPreview prompt = promptService.preview(deterministicReport, feedback);
             JsonNode json = llmChatClient.completeJson(
                     prompt.modelInstruction(),
                     prompt.userPrompt(),
@@ -46,7 +55,8 @@ public class AgentCommitteeAiService {
     }
 
     public AgentCommitteePromptPreview preview(AgentConsensusReport deterministicReport) {
-        return promptService.preview(deterministicReport);
+        List<StrategyFeedbackSummary> feedback = strategyFeedbackService.promptContext(deterministicReport.symbol());
+        return promptService.preview(deterministicReport, feedback);
     }
 
     private List<AgentOpinion> mergeOpinions(List<AgentOpinion> opinions, JsonNode argumentsNode) {

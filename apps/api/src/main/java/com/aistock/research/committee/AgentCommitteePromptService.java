@@ -1,5 +1,6 @@
 package com.aistock.research.committee;
 
+import com.aistock.research.tradefeedback.StrategyFeedbackSummary;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
@@ -17,11 +18,22 @@ public class AgentCommitteePromptService {
     }
 
     public AgentCommitteePromptPreview preview(AgentConsensusReport report) {
+        return preview(report, List.of());
+    }
+
+    public AgentCommitteePromptPreview preview(
+            AgentConsensusReport report,
+            List<StrategyFeedbackSummary> historicalFeedback
+    ) {
+        List<StrategyFeedbackSummary> feedback = historicalFeedback == null
+                ? List.of()
+                : List.copyOf(historicalFeedback);
         return new AgentCommitteePromptPreview(
                 report.symbol(),
                 report.companyName(),
                 modelInstruction(),
-                userPrompt(report),
+                userPrompt(report, feedback),
+                feedback,
                 outputSchema()
         );
     }
@@ -39,6 +51,13 @@ public class AgentCommitteePromptService {
     }
 
     public String userPrompt(AgentConsensusReport report) {
+        return userPrompt(report, List.of());
+    }
+
+    public String userPrompt(
+            AgentConsensusReport report,
+            List<StrategyFeedbackSummary> historicalFeedback
+    ) {
         return """
                 请围绕下面这家公司组织一次多 Agent 辩论，并输出 json 对象。
 
@@ -65,6 +84,15 @@ public class AgentCommitteePromptService {
                 待补证据：
                 %s
 
+                历史策略反馈（GLOBAL 策略队列证据，并非按当前 symbol 匹配）：
+                %s
+
+                历史反馈使用约束：
+                - 历史策略反馈只是带样本量的校准证据，不能覆盖公告、财务、流动性和风险否决。
+                - 样本不足 20 时不得建议调整分数；达到 20 时，可靠性修正也只能使用输入中的 ±5 上限。
+                - 此证据只可用于 committee_summary、counter_evidence 和 consensus_adjustment.stage。
+                - 不得修改确定性共识分或 Nacos 配置，也不得将 GLOBAL 队列证据描述为当前公司的策略命中记录。
+
                 输出格式要求：
                 - 必须是合法 JSON 对象。
                 - 顶层必须包含 committee_summary、agent_arguments、consensus_adjustment。
@@ -88,6 +116,7 @@ public class AgentCommitteePromptService {
                 serialize(report.agreements()),
                 serialize(report.disagreements()),
                 serialize(report.requiredEvidence()),
+                serialize(historicalFeedback),
                 serialize(outputExample())
         );
     }

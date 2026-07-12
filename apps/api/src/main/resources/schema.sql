@@ -121,6 +121,9 @@ CREATE TABLE IF NOT EXISTS strategy_trade_fill (
   CONSTRAINT ck_trade_fill_quantity CHECK (quantity > 0)
 );
 
+CREATE INDEX IF NOT EXISTS idx_trade_fill_feedback_lookup
+  ON strategy_trade_fill(case_id, side, executed_at, created_at, fill_id);
+
 CREATE TABLE IF NOT EXISTS strategy_outcome_snapshot (
   snapshot_id VARCHAR(36) PRIMARY KEY,
   case_id VARCHAR(36) NOT NULL,
@@ -139,6 +142,9 @@ CREATE TABLE IF NOT EXISTS strategy_outcome_snapshot (
   CONSTRAINT fk_trade_outcome_case FOREIGN KEY (case_id) REFERENCES strategy_trade_case(case_id),
   CONSTRAINT uk_trade_outcome_scope UNIQUE (case_id, baseline_type, horizon)
 );
+
+CREATE INDEX IF NOT EXISTS idx_trade_outcome_feedback_lookup
+  ON strategy_outcome_snapshot(baseline_type, horizon, status, case_id);
 
 ALTER TABLE strategy_outcome_snapshot ADD COLUMN IF NOT EXISTS source_name VARCHAR(128);
 ALTER TABLE strategy_outcome_snapshot ADD COLUMN IF NOT EXISTS market_timestamp TIMESTAMP WITH TIME ZONE;
