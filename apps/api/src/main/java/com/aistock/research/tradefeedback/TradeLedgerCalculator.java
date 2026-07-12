@@ -50,7 +50,9 @@ public final class TradeLedgerCalculator {
         BigDecimal unrealized = latestPrice == null
                 ? null
                 : latestPrice.subtract(averageCost).multiply(BigDecimal.valueOf(position));
-        BigDecimal total = unrealized == null ? null : realized.add(unrealized);
+        BigDecimal total = position == 0 && !orderedFills.isEmpty()
+                ? realized
+                : unrealized == null ? null : realized.add(unrealized);
         return new TradeLedgerSummary(latestPrice, position, averageCost, realized, unrealized, total);
     }
 

@@ -33,6 +33,22 @@ class TradeLedgerCalculatorTest {
     }
 
     @Test
+    void usesRealizedProfitAsTotalAfterPositionIsClosedWithoutLatestPrice() {
+        List<LedgerFill> fills = List.of(
+                new LedgerFill(BUY, at("2026-07-13T01:35:00Z"), decimal("35"), 200),
+                new LedgerFill(BUY, at("2026-07-14T01:35:00Z"), decimal("40"), 200),
+                new LedgerFill(SELL, at("2026-07-15T01:35:00Z"), decimal("45"), 150),
+                new LedgerFill(SELL, at("2026-07-16T01:35:00Z"), decimal("44"), 250));
+
+        TradeLedgerSummary result = calculator.calculate(fills, null);
+
+        assertThat(result.positionQuantity()).isZero();
+        assertThat(result.realizedProfit()).isEqualByComparingTo("2750");
+        assertThat(result.unrealizedProfit()).isNull();
+        assertThat(result.totalProfit()).isEqualByComparingTo("2750");
+    }
+
+    @Test
     void rejectsSaleAboveAvailablePosition() {
         assertThatThrownBy(() -> calculator.calculate(List.of(
                 new LedgerFill(BUY, at("2026-07-13T01:35:00Z"), decimal("30"), 100),
