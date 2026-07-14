@@ -260,3 +260,28 @@ CREATE INDEX IF NOT EXISTS idx_v2_factor_symbol_strategy
 
 CREATE INDEX IF NOT EXISTS idx_v2_factor_code_available
   ON v2_factor_snapshot(factor_code, available_at);
+
+CREATE TABLE IF NOT EXISTS v2_recommendation_ledger (
+  ledger_id VARCHAR(64) PRIMARY KEY,
+  recommendation_fingerprint VARCHAR(64) NOT NULL UNIQUE,
+  strategy_code VARCHAR(64) NOT NULL,
+  strategy_version VARCHAR(64) NOT NULL,
+  symbol VARCHAR(6) NOT NULL,
+  company_name VARCHAR(128) NOT NULL,
+  decision_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  data_cutoff_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  candidate_stage VARCHAR(32) NOT NULL,
+  action VARCHAR(32) NOT NULL,
+  rank_score NUMERIC(8, 2),
+  data_confidence NUMERIC(8, 2),
+  historical_hit_rate NUMERIC(8, 2),
+  risk_reward NUMERIC(8, 2),
+  payload_json TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_v2_ledger_symbol_time
+  ON v2_recommendation_ledger(symbol, decision_at, ledger_id);
+
+CREATE INDEX IF NOT EXISTS idx_v2_ledger_strategy_time
+  ON v2_recommendation_ledger(strategy_code, strategy_version, decision_at);
