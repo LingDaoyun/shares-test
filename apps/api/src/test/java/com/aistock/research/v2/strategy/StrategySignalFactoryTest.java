@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,13 +29,14 @@ class StrategySignalFactoryTest {
         assertThat(signal.strategyCode()).isEqualTo(StrategyCode.SHORT_RIGHT_SIDE);
         assertThat(signal.action()).isEqualTo(StrategyAction.DATA_BLOCKED);
         assertThat(signal.candidateStage()).isEqualTo(CandidateStage.BLOCKED);
-        assertThat(signal.sourceQuality()).isEqualTo(SourceQualityStatus.VERIFIED);
+        assertThat(signal.sourceQuality()).isEqualTo(SourceQualityStatus.MISSING);
         assertThat(signal.rankScore()).isNull();
         assertThat(signal.dataConfidence()).isEqualByComparingTo(new BigDecimal("0.00"));
         assertThat(signal.historicalHitRate()).isNull();
         assertThat(signal.riskReward()).isNull();
         assertThat(signal.blockedReasons()).containsExactly("QUOTE_SNAPSHOT_MISSING");
         assertThat(signal.context()).containsEntry("quoteStage", "AFTER_HOURS_1520");
+        assertThat(signal.replayPayload()).containsEntry("quoteStage", "AFTER_HOURS_1520");
     }
 
     @Test
@@ -59,6 +61,105 @@ class StrategySignalFactoryTest {
         assertThat(signal.historicalHitRate()).isNull();
         assertThat(signal.action()).isEqualTo(StrategyAction.NEXT_WATCH);
         assertThat(signal.blockedReasons()).isEmpty();
+        assertThat(signal.signalProvenance()).isEqualTo(SignalProvenance.RULE_ENGINE);
+    }
+
+    @Test
+    void copiesReplayPayloadAndKeepsItImmutable() {
+        Map<String, Object> replayPayload = new HashMap<>();
+        replayPayload.put("valuationContext", "industry-percentile");
+
+        StrategySignal signal = StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.parse("2026-07-14T07:20:00Z"),
+                Instant.parse("2026-07-14T07:19:30Z"),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                Map.of(),
+                replayPayload);
+
+        replayPayload.put("valuationContext", "changed");
+
+        assertThat(signal.replayPayload()).containsEntry("valuationContext", "industry-percentile");
+        assertThatThrownBy(() -> signal.replayPayload().put("newKey", "newValue"))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void rejectsResearchSignalWithoutDataConfidence() {
+        assertThatThrownBy(() -> StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.now(),
+                Instant.now(),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"),
+                null,
+                null,
+                null,
+                Map.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("dataConfidence");
+    }
+
+    @Test
+    void rejectsMissingSourceQualityForResearchSignal() {
+        assertThatThrownBy(() -> StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.now(),
+                Instant.now(),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                Map.of(),
+                Map.of(),
+                SourceQualityStatus.MISSING))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("DATA_BLOCKED");
+    }
+
+    @Test
+    void rejectsAiEvidenceOnlyAddSignal() {
+        assertThatThrownBy(() -> new StrategySignal(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.now(),
+                Instant.now(),
+                CandidateStage.QUALIFIED,
+                StrategyAction.ADD,
+                null,
+                "",
+                "",
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                List.of(),
+                List.of(),
+                Map.of(),
+                SourceQualityStatus.VERIFIED,
+                Map.of(),
+                SignalProvenance.AI_EVIDENCE_ONLY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("AI_EVIDENCE_ONLY");
     }
 
     @Test
@@ -184,6 +285,22 @@ class StrategySignalFactoryTest {
                 null,
                 List.of(),
                 List.of(),
+                Map.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("blockedReasons");
+    }
+
+    @Test
+    void rejectsBlankBlockedReason() {
+        assertThatThrownBy(() -> StrategySignalFactory.blocked(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.now(),
+                Instant.now(),
+                StrategyAction.DATA_BLOCKED,
+                List.of("  "),
                 Map.of()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("blockedReasons");
