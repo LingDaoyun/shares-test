@@ -16,6 +16,9 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Service
 public class V2RecommendationLedgerService {
@@ -23,6 +26,7 @@ public class V2RecommendationLedgerService {
     private final V2RecommendationLedgerRepository repository;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate createLedgerTransaction;
+    private final ConcurrentMap<String, LockHolder> fingerprintLocks = new ConcurrentHashMap<>();
 
     public V2RecommendationLedgerService(
             V2RecommendationLedgerRepository repository,
@@ -43,12 +47,43 @@ public class V2RecommendationLedgerService {
         if (existing.isPresent()) {
             return existing.get();
         }
+        LockHolder lockHolder = acquireFingerprintLock(fingerprint);
         try {
-            return createLedgerTransaction.execute(status -> createOrFind(signal, payloadJson, fingerprint));
-        } catch (DataIntegrityViolationException exception) {
-            return repository.findByRecommendationFingerprint(fingerprint)
-                    .orElseThrow(() -> exception);
+            try {
+                return createLedgerTransaction.execute(status -> createOrFind(signal, payloadJson, fingerprint));
+            } catch (DataIntegrityViolationException exception) {
+                return repository.findByRecommendationFingerprint(fingerprint)
+                        .orElseThrow(() -> exception);
+            }
+        } finally {
+            releaseFingerprintLock(fingerprint, lockHolder);
         }
+    }
+
+    private LockHolder acquireFingerprintLock(String fingerprint) {
+        LockHolder lockHolder = fingerprintLocks.compute(fingerprint, (key, current) -> {
+            LockHolder holder = current == null ? new LockHolder() : current;
+            holder.references++;
+            return holder;
+        });
+        lockHolder.lock.lock();
+        return lockHolder;
+    }
+
+    private void releaseFingerprintLock(String fingerprint, LockHolder lockHolder) {
+        lockHolder.lock.unlock();
+        fingerprintLocks.computeIfPresent(fingerprint, (key, current) -> {
+            if (current != lockHolder) {
+                return current;
+            }
+            lockHolder.references--;
+            return lockHolder.references == 0 ? null : lockHolder;
+        });
+    }
+
+    private static final class LockHolder {
+        private final ReentrantLock lock = new ReentrantLock();
+        private int references;
     }
 
     private V2RecommendationLedgerEntity createOrFind(

@@ -47,3 +47,15 @@ None.
 - The new concurrent test failed against the pre-fix service with the expected `DataIntegrityViolationException` from the unique ledger key.
 - After the isolated-insert recovery fix, `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test` passed: 3 tests, 0 failures, 0 errors, 0 skipped.
 - `git diff --check` passed.
+
+## Review Fix: Suppress Expected Same-Instance Race Noise
+
+- Added a ref-counted per-fingerprint `ReentrantLock` in `V2RecommendationLedgerService` around the existing create transaction, so concurrent callers in the same service instance re-check and create one ledger serially.
+- Kept the `DataIntegrityViolationException` lookup recovery and database unique constraint as cross-process safety nets.
+- Preserved the eight-caller concurrency test assertions: all callers return one ledger id and `repository.count()` remains 1.
+
+## Review Fix Verification
+
+- Ran `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test`: 3 tests passed, 0 failures, 0 errors, 0 skipped; output contained no SQL unique-key, constraint, duplicate, or integrity-violation diagnostics.
+- Ran `git diff --check` successfully.
+- The only remaining warning is the existing Nacos notice that `ai-stock-api-local.yml` is empty.
