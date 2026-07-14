@@ -214,3 +214,26 @@ CREATE INDEX IF NOT EXISTS idx_trade_outcome_feedback_lookup
 
 ALTER TABLE strategy_outcome_snapshot ADD COLUMN IF NOT EXISTS source_name VARCHAR(128);
 ALTER TABLE strategy_outcome_snapshot ADD COLUMN IF NOT EXISTS market_timestamp TIMESTAMP WITH TIME ZONE;
+
+CREATE TABLE IF NOT EXISTS v2_quote_snapshot (
+  snapshot_id VARCHAR(64) PRIMARY KEY,
+  symbol VARCHAR(6) NOT NULL,
+  company_name VARCHAR(128) NOT NULL,
+  quote_stage VARCHAR(32) NOT NULL,
+  last_price NUMERIC(20, 6),
+  amount NUMERIC(30, 4),
+  effective_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  available_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  ingested_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  source VARCHAR(128) NOT NULL,
+  source_version VARCHAR(128) NOT NULL,
+  quality_status VARCHAR(32) NOT NULL,
+  raw_payload_hash VARCHAR(64) NOT NULL,
+  raw_payload_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_v2_quote_visible
+  ON v2_quote_snapshot(symbol, quote_stage, available_at, ingested_at);
+
+CREATE INDEX IF NOT EXISTS idx_v2_quote_quality
+  ON v2_quote_snapshot(quality_status, symbol, available_at);
