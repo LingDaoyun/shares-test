@@ -71,3 +71,14 @@ None.
 - Ran `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test`: 3 tests passed, 0 failures, 0 errors, 0 skipped; output contained no SQL unique-key, constraint, duplicate, or integrity-violation diagnostics.
 - Ran `git diff --check` successfully.
 - The only remaining warning is the existing Nacos notice that `ai-stock-api-local.yml` is empty.
+
+## Review Fix: Canonical Numeric Fingerprinting
+
+- Canonicalized every `BigDecimal` in the serialized signal payload tree recursively by removing insignificant trailing zeros and emitting a deterministic plain decimal representation.
+- Applied the persisted ledger scales to the top-level signal values before fingerprinting: `rankScore`, `dataConfidence`, `historicalHitRate`, and `riskReward` use scale 2; optional `positionLimit` uses scale 4.
+- Added a regression that records two signals differing only by BigDecimal lexical scale, including a nested replay-payload decimal. Both calls return the same ledger id, persist one row, and retain identical deterministic `payload_json`.
+
+## Final Verification
+
+- `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test` passed: 5 tests, 0 failures, 0 errors, 0 skipped.
+- `git diff --check` passed with no whitespace errors.

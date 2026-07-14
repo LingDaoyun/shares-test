@@ -3,8 +3,12 @@ package com.aistock.research.v2.decision;
 import com.aistock.research.v2.strategy.StrategySignal;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.DecimalNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -13,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
+import java.math.BigDecimal;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -125,9 +130,49 @@ public class V2RecommendationLedgerService {
 
     private String toJson(StrategySignal signal) {
         try {
-            return canonicalObjectMapper.writeValueAsString(signal);
+            ObjectNode payload = canonicalObjectMapper.valueToTree(signal);
+            canonicalizeReplayDecimals(payload);
+            applyPersistedScale(payload, "rankScore", 2);
+            applyPersistedScale(payload, "dataConfidence", 2);
+            applyPersistedScale(payload, "historicalHitRate", 2);
+            applyPersistedScale(payload, "riskReward", 2);
+            applyPersistedScale(payload, "positionLimit", 4);
+            return canonicalObjectMapper.writeValueAsString(payload);
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Unable to serialize strategy signal", ex);
+        }
+    }
+
+    private static void canonicalizeReplayDecimals(JsonNode node) {
+        if (node instanceof ObjectNode objectNode) {
+            objectNode.fields().forEachRemaining(entry -> {
+                JsonNode value = entry.getValue();
+                if (value.isBigDecimal()) {
+                    objectNode.set(entry.getKey(), DecimalNode.valueOf(toPlainDecimal(value.decimalValue())));
+                } else {
+                    canonicalizeReplayDecimals(value);
+                }
+            });
+        } else if (node instanceof ArrayNode arrayNode) {
+            for (int index = 0; index < arrayNode.size(); index++) {
+                JsonNode value = arrayNode.get(index);
+                if (value.isBigDecimal()) {
+                    arrayNode.set(index, DecimalNode.valueOf(toPlainDecimal(value.decimalValue())));
+                } else {
+                    canonicalizeReplayDecimals(value);
+                }
+            }
+        }
+    }
+
+    private static BigDecimal toPlainDecimal(BigDecimal value) {
+        return new BigDecimal(value.stripTrailingZeros().toPlainString());
+    }
+
+    private static void applyPersistedScale(ObjectNode payload, String field, int scale) {
+        JsonNode value = payload.get(field);
+        if (value != null && !value.isNull()) {
+            payload.set(field, DecimalNode.valueOf(value.decimalValue().setScale(scale)));
         }
     }
 

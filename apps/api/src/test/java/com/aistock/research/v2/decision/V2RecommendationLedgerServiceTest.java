@@ -76,6 +76,20 @@ class V2RecommendationLedgerServiceTest {
     }
 
     @Test
+    void recordsEquivalentNumericScalesAsOneCanonicalLedgerEntry() {
+        V2RecommendationLedgerEntity first = service.record(signalWithNumericScales(false));
+        V2RecommendationLedgerEntity second = service.record(signalWithNumericScales(true));
+
+        assertThat(second.getLedgerId()).isEqualTo(first.getLedgerId());
+        assertThat(repository.count()).isEqualTo(1);
+        assertThat(second.getPayloadJson()).isEqualTo(first.getPayloadJson());
+        assertThat(first.getPayloadJson()).contains("\"rankScore\":68.25");
+        assertThat(first.getPayloadJson()).contains("\"dataConfidence\":86.00");
+        assertThat(first.getPayloadJson()).contains("\"positionLimit\":0.1000");
+        assertThat(first.getPayloadJson()).contains("\"threshold\":12.34");
+    }
+
+    @Test
     void concurrentRecordingReturnsTheSameLedgerEntry() throws Exception {
         int callers = 8;
         CountDownLatch ready = new CountDownLatch(callers);
@@ -155,6 +169,21 @@ class V2RecommendationLedgerServiceTest {
                 "PB low percentile", "ROE deterioration",
                 new BigDecimal("68.25"), new BigDecimal("86.00"), null, null,
                 List.of("行业估值低位"), List.of(), context,
+                SourceQualityStatus.VERIFIED, replayPayload, SignalProvenance.RULE_ENGINE);
+    }
+
+    private StrategySignal signalWithNumericScales(boolean expandedScale) {
+        Map<String, Object> replayPayload = Map.of(
+                "analysis", Map.of("threshold", new BigDecimal(expandedScale ? "12.3400" : "12.34")));
+        return new StrategySignal(
+                StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",
+                Instant.parse("2026-07-14T07:20:00Z"), Instant.parse("2026-07-14T07:19:30Z"),
+                CandidateStage.RESEARCH, StrategyAction.LIGHT_TRIAL,
+                new BigDecimal(expandedScale ? "0.1000" : "0.1"),
+                "PB low percentile", "ROE deterioration",
+                new BigDecimal(expandedScale ? "68.250" : "68.25"),
+                new BigDecimal(expandedScale ? "86.00" : "86.0"), null, null,
+                List.of("行业估值低位"), List.of(), Map.of("valuation", "context-pb-percentile"),
                 SourceQualityStatus.VERIFIED, replayPayload, SignalProvenance.RULE_ENGINE);
     }
 
