@@ -20,7 +20,9 @@ import type {
   TradeCaseStatus,
   TradeCaseSummary,
   UpsertTradeFillRequest,
-  WatchlistEntry
+  WatchlistEntry,
+  V2SampleSignalParams,
+  V2SignalResponse
 } from '../types'
 
 const http = axios.create({
@@ -228,4 +230,12 @@ export function refreshTradeCase(caseId: string) {
 
 export function fetchStrategyFeedback() {
   return http.get<StrategyFeedbackSummary[]>('/strategy-feedback').then((res) => res.data)
+}
+
+export async function fetchV2SampleSignal(params: V2SampleSignalParams): Promise<V2SignalResponse> {
+  const search = new URLSearchParams()
+  search.set('symbol', params.symbol)
+  if (params.companyName) search.set('companyName', params.companyName)
+  if (params.strategyCode) search.set('strategyCode', params.strategyCode)
+  return http.get<V2SignalResponse>(`/v2/signals/sample?${search.toString()}`).then((res) => res.data)
 }

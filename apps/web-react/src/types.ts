@@ -1027,3 +1027,31 @@ export interface StrategyFeedbackSummary {
   adjustmentEligible: boolean
   reliabilityAdjustment: number | null
 }
+
+export interface V2SignalResponse {
+  ledgerId: string
+  strategyCode: string
+  strategyVersion: string
+  symbol: string
+  companyName: string
+  decisionAt: string
+  dataCutoffAt: string
+  candidateStage: string
+  action: string
+  positionLimit: number | null
+  entryCondition: string
+  invalidCondition: string
+  rankScore: number | null
+  dataConfidence: number | null
+  historicalHitRate: number | null
+  riskReward: number | null
+  evidenceSummary: string[]
+  blockedReasons: string[]
+  context: Record<string, string>
+}
+
+export interface V2SampleSignalParams {
+  symbol: string
+  companyName?: string
+  strategyCode?: string
+}
