@@ -6,6 +6,8 @@ import com.aistock.research.v2.strategy.SourceQualityStatus;
 import com.aistock.research.v2.strategy.StrategyAction;
 import com.aistock.research.v2.strategy.StrategyCode;
 import com.aistock.research.v2.strategy.StrategySignal;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,6 +16,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -33,6 +36,9 @@ class V2RecommendationLedgerServiceTest {
     @Autowired
     private V2RecommendationLedgerService service;
 
+    @Autowired
+    private ObjectMapper objectMapper;
+
     @AfterEach
     void clean() {
         repository.deleteAll();
@@ -50,11 +56,23 @@ class V2RecommendationLedgerServiceTest {
         assertThat(first.getRecommendationFingerprint()).hasSize(64);
         assertThat(first.getStrategyCode()).isEqualTo("VALUE_REVERSION");
         assertThat(first.getAction()).isEqualTo("LIGHT_TRIAL");
-        assertThat(first.getPayloadJson()).contains("\"rankScore\":68.25");
-        assertThat(first.getPayloadJson()).contains("\"blockedReasons\":[]");
-        assertThat(first.getPayloadJson()).contains("\"valuation\":\"pb-percentile\"");
-        assertThat(first.getPayloadJson()).contains("\"sourceQuality\":\"VERIFIED\"");
-        assertThat(first.getPayloadJson()).contains("\"signalProvenance\":\"RULE_ENGINE\"");
+        JsonNode payload = readPayload(first);
+        assertThat(payload.path("rankScore").decimalValue()).isEqualByComparingTo("68.25");
+        assertThat(payload.path("blockedReasons")).isEmpty();
+        assertThat(payload.path("context").path("valuation").asText()).isEqualTo("context-pb-percentile");
+        assertThat(payload.path("replayPayload").path("valuation").asText()).isEqualTo("replay-sector-percentile");
+        assertThat(payload.path("sourceQuality").asText()).isEqualTo("VERIFIED");
+        assertThat(payload.path("signalProvenance").asText()).isEqualTo("RULE_ENGINE");
+    }
+
+    @Test
+    void recordsEquivalentMapOrdersAsOneCanonicalLedgerEntry() {
+        V2RecommendationLedgerEntity first = service.record(signalWithMapOrder(false));
+        V2RecommendationLedgerEntity second = service.record(signalWithMapOrder(true));
+
+        assertThat(second.getLedgerId()).isEqualTo(first.getLedgerId());
+        assertThat(repository.count()).isEqualTo(1);
+        assertThat(second.getPayloadJson()).isEqualTo(first.getPayloadJson());
     }
 
     @Test
@@ -110,9 +128,41 @@ class V2RecommendationLedgerServiceTest {
                 CandidateStage.RESEARCH, StrategyAction.LIGHT_TRIAL, new BigDecimal("0.10"),
                 "PB low percentile", "ROE deterioration",
                 new BigDecimal("68.25"), new BigDecimal("86.00"), null, null,
-                List.of("行业估值低位"), List.of(), Map.of("valuation", "pb-percentile"),
+                List.of("行业估值低位"), List.of(), Map.of("valuation", "context-pb-percentile"),
                 SourceQualityStatus.VERIFIED,
-                Map.of("valuation", "pb-percentile"),
+                Map.of("valuation", "replay-sector-percentile"),
                 SignalProvenance.RULE_ENGINE);
+    }
+
+    private StrategySignal signalWithMapOrder(boolean reverseOrder) {
+        Map<String, String> context = new LinkedHashMap<>();
+        Map<String, Object> replayPayload = new LinkedHashMap<>();
+        if (reverseOrder) {
+            context.put("region", "CN");
+            context.put("valuation", "context-pb-percentile");
+            replayPayload.put("source", "replay-research-feed");
+            replayPayload.put("valuation", "replay-sector-percentile");
+        } else {
+            context.put("valuation", "context-pb-percentile");
+            context.put("region", "CN");
+            replayPayload.put("valuation", "replay-sector-percentile");
+            replayPayload.put("source", "replay-research-feed");
+        }
+        return new StrategySignal(
+                StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",
+                Instant.parse("2026-07-14T07:20:00Z"), Instant.parse("2026-07-14T07:19:30Z"),
+                CandidateStage.RESEARCH, StrategyAction.LIGHT_TRIAL, new BigDecimal("0.10"),
+                "PB low percentile", "ROE deterioration",
+                new BigDecimal("68.25"), new BigDecimal("86.00"), null, null,
+                List.of("行业估值低位"), List.of(), context,
+                SourceQualityStatus.VERIFIED, replayPayload, SignalProvenance.RULE_ENGINE);
+    }
+
+    private JsonNode readPayload(V2RecommendationLedgerEntity entity) {
+        try {
+            return objectMapper.readTree(entity.getPayloadJson());
+        } catch (Exception ex) {
+            throw new AssertionError("Ledger payload must be valid JSON", ex);
+        }
     }
 }

@@ -2,7 +2,9 @@ package com.aistock.research.v2.decision;
 
 import com.aistock.research.v2.strategy.StrategySignal;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -24,7 +26,7 @@ import java.util.concurrent.locks.ReentrantLock;
 public class V2RecommendationLedgerService {
 
     private final V2RecommendationLedgerRepository repository;
-    private final ObjectMapper objectMapper;
+    private final ObjectMapper canonicalObjectMapper;
     private final TransactionTemplate createLedgerTransaction;
     private final ConcurrentMap<String, LockHolder> fingerprintLocks = new ConcurrentHashMap<>();
 
@@ -34,7 +36,9 @@ public class V2RecommendationLedgerService {
             PlatformTransactionManager transactionManager
     ) {
         this.repository = repository;
-        this.objectMapper = objectMapper;
+        this.canonicalObjectMapper = objectMapper.copy()
+                .configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true)
+                .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
         this.createLedgerTransaction = new TransactionTemplate(transactionManager);
         this.createLedgerTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -121,7 +125,7 @@ public class V2RecommendationLedgerService {
 
     private String toJson(StrategySignal signal) {
         try {
-            return objectMapper.writeValueAsString(signal);
+            return canonicalObjectMapper.writeValueAsString(signal);
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Unable to serialize strategy signal", ex);
         }

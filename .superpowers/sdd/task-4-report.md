@@ -35,6 +35,18 @@
 
 None.
 
+## Re-Review Fix: Canonical Ledger Payload JSON
+
+- Configured the ledger serializer with deterministic object-property and map-entry ordering before deriving `payload_json` and the recommendation fingerprint.
+- Added a regression test that records two semantically identical signals whose `context` and replay-payload maps have opposite insertion orders; both return one ledger id and persist one row.
+- Strengthened replay-payload verification by parsing `payload_json` with `ObjectMapper` and asserting distinct `context` and `replayPayload` values, plus `sourceQuality` and `signalProvenance`.
+
+## Re-Review Fix Verification
+
+- The new map-order regression failed before the serialization fix because the two recordings generated different ledger ids.
+- `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test` passed after the fix: 4 tests, 0 failures, 0 errors, 0 skipped.
+- `git diff --check` passed with no trailing-whitespace errors.
+
 ## Review Fix: Concurrent Ledger Recording
 
 - Changed `V2RecommendationLedgerService.record` to perform creation in a `REQUIRES_NEW` transaction with `saveAndFlush`.
