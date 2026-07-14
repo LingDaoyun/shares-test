@@ -107,6 +107,35 @@ Result: `Tests run: 12, Failures: 0, Errors: 0, Skipped: 0`; Maven `BUILD SUCCES
 
 The unrelated pre-existing modification to `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` remains untouched.
 
+## Fourth Review Fix Report
+
+### Status
+
+Complete.
+
+### Changes
+
+- Compatibility and direct constructors now derive a non-empty replay payload from core decision fields whenever the supplied payload is null or empty, including `strategyVersion`, `symbol`, decision metadata, source quality, provenance, and context.
+- JSON replay payload validation now rejects non-finite `Double` and `Float` values, including `NaN` and positive infinity.
+- Added regression coverage for empty-context compatibility construction and both required non-finite numeric cases.
+
+### Verification
+
+```bash
+mvn -pl apps/api -Dtest=StrategySignalFactoryTest test
+git diff --check
+```
+
+Result: `Tests run: 16, Failures: 0, Errors: 0, Skipped: 0`; Maven `BUILD SUCCESS`; diff check passed.
+
+### Commit
+
+`fix: close fourth review of strategy signal contract`
+
+### Concerns
+
+The unrelated pre-existing modification to `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` remains untouched.
+
 ## Third Review Fix Report
 
 ### Status

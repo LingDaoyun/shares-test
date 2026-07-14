@@ -46,7 +46,9 @@ public record StrategySignal(
         evidenceSummary = evidenceSummary == null ? List.of() : List.copyOf(evidenceSummary);
         blockedReasons = blockedReasons == null ? List.of() : List.copyOf(blockedReasons);
         context = context == null ? Map.of() : Map.copyOf(context);
-        replayPayload = replayPayload == null ? Map.of() : freezeReplayPayload(replayPayload);
+        replayPayload = freezeReplayPayload(normalizeReplayPayload(replayPayload, strategyCode, strategyVersion,
+                symbol, companyName, decisionAt, dataCutoffAt, candidateStage, action, context, sourceQuality,
+                signalProvenance));
         validateStageAndAction(candidateStage, action, blockedReasons);
         validateSourceQuality(candidateStage, action, sourceQuality, dataConfidence);
         validateProvenance(action, signalProvenance);
@@ -124,8 +126,49 @@ public record StrategySignal(
         return (Map<String, Object>) freezeJsonValue(replayPayload, new IdentityHashMap<>());
     }
 
+    private static Map<?, ?> normalizeReplayPayload(
+            Map<String, Object> replayPayload,
+            StrategyCode strategyCode,
+            String strategyVersion,
+            String symbol,
+            String companyName,
+            Instant decisionAt,
+            Instant dataCutoffAt,
+            CandidateStage candidateStage,
+            StrategyAction action,
+            Map<String, String> context,
+            SourceQualityStatus sourceQuality,
+            SignalProvenance signalProvenance
+    ) {
+        if (replayPayload != null && !replayPayload.isEmpty()) {
+            return replayPayload;
+        }
+        Map<String, Object> fallback = new LinkedHashMap<>();
+        fallback.put("strategyCode", strategyCode.name());
+        fallback.put("strategyVersion", strategyVersion);
+        fallback.put("symbol", symbol);
+        fallback.put("companyName", companyName);
+        fallback.put("decisionAt", decisionAt.toString());
+        fallback.put("dataCutoffAt", dataCutoffAt.toString());
+        fallback.put("candidateStage", candidateStage.name());
+        fallback.put("action", action.name());
+        fallback.put("sourceQuality", sourceQuality.name());
+        fallback.put("signalProvenance", signalProvenance.name());
+        fallback.put("context", new LinkedHashMap<>(context));
+        return fallback;
+    }
+
     private static Object freezeJsonValue(Object value, IdentityHashMap<Object, Boolean> ancestors) {
-        if (value == null || value instanceof String || value instanceof Number || value instanceof Boolean) {
+        if (value == null || value instanceof String || value instanceof Boolean) {
+            return value;
+        }
+        if (value instanceof Double doubleValue && !Double.isFinite(doubleValue)) {
+            throw invalidReplayPayload("numeric values must be finite");
+        }
+        if (value instanceof Float floatValue && !Float.isFinite(floatValue)) {
+            throw invalidReplayPayload("numeric values must be finite");
+        }
+        if (value instanceof Number) {
             return value;
         }
         if (value instanceof Map<?, ?> map) {

@@ -66,6 +66,72 @@ class StrategySignalFactoryTest {
     }
 
     @Test
+    void compatibilityConstructorDerivesReplayPayloadFromCoreDecisionFields() {
+        StrategySignal signal = new StrategySignal(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.parse("2026-07-14T07:20:00Z"),
+                Instant.parse("2026-07-14T07:19:30Z"),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                null,
+                "",
+                "",
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                List.of(),
+                List.of(),
+                Map.of());
+
+        assertThat(signal.replayPayload()).isNotEmpty()
+                .containsEntry("strategyVersion", "value-reversion-v2.0.0")
+                .containsEntry("symbol", "600036");
+    }
+
+    @Test
+    void rejectsNonFiniteJsonNumbers() {
+        assertThatThrownBy(() -> StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.now(),
+                Instant.now(),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                Map.of(),
+                Map.of("nan", Double.NaN)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("replayPayload");
+
+        assertThatThrownBy(() -> StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.now(),
+                Instant.now(),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                Map.of(),
+                Map.of("infinity", Float.POSITIVE_INFINITY)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("replayPayload");
+    }
+
+    @Test
     void copiesReplayPayloadAndKeepsItImmutable() {
         Map<String, Object> replayPayload = new HashMap<>();
         replayPayload.put("valuationContext", "industry-percentile");
