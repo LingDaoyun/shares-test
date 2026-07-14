@@ -237,3 +237,26 @@ CREATE INDEX IF NOT EXISTS idx_v2_quote_visible
 
 CREATE INDEX IF NOT EXISTS idx_v2_quote_quality
   ON v2_quote_snapshot(quality_status, symbol, available_at);
+
+CREATE TABLE IF NOT EXISTS v2_factor_snapshot (
+  snapshot_id VARCHAR(64) PRIMARY KEY,
+  strategy_code VARCHAR(64) NOT NULL,
+  strategy_version VARCHAR(64) NOT NULL,
+  factor_code VARCHAR(64) NOT NULL,
+  symbol VARCHAR(6) NOT NULL,
+  raw_value NUMERIC(24, 8),
+  normalized_value NUMERIC(8, 2),
+  data_confidence_impact NUMERIC(8, 2) NOT NULL,
+  value_unit VARCHAR(32) NOT NULL,
+  missing_reason VARCHAR(255) NOT NULL,
+  available_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  calculated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  source_snapshot_id VARCHAR(64),
+  payload_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_v2_factor_symbol_strategy
+  ON v2_factor_snapshot(symbol, strategy_code, strategy_version, available_at);
+
+CREATE INDEX IF NOT EXISTS idx_v2_factor_code_available
+  ON v2_factor_snapshot(factor_code, available_at);
