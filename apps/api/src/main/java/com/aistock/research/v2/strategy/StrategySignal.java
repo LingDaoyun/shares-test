@@ -92,7 +92,7 @@ public record StrategySignal(
                 candidateStage, action, positionLimit, entryCondition, invalidCondition,
                 rankScore, dataConfidence, historicalHitRate, riskReward, evidenceSummary,
                 blockedReasons, context, SourceQualityStatus.SINGLE_SOURCE, Map.of(),
-                SignalProvenance.COMPATIBILITY_PROBE);
+                SignalProvenance.RULE_ENGINE);
     }
 
     public StrategySignal(
@@ -120,7 +120,7 @@ public record StrategySignal(
                 candidateStage, action, positionLimit, entryCondition, invalidCondition,
                 rankScore, dataConfidence, historicalHitRate, riskReward, evidenceSummary,
                 blockedReasons, context, sourceQuality, Map.of(),
-                SignalProvenance.COMPATIBILITY_PROBE);
+                SignalProvenance.RULE_ENGINE);
     }
 
     private static void requireNonNull(Object value, String field) {

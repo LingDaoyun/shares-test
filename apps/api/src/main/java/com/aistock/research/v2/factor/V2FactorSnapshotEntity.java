@@ -7,6 +7,7 @@ import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Objects;
 
 @Entity
 @Table(name = "v2_factor_snapshot")
@@ -63,6 +64,10 @@ public class V2FactorSnapshotEntity {
                                   BigDecimal dataConfidenceImpact, String valueUnit, String missingReason,
                                   Instant availableAt, Instant calculatedAt, String sourceSnapshotId,
                                   String payloadJson) {
+        if (Objects.requireNonNull(availableAt, "availableAt must not be null")
+                .isAfter(Objects.requireNonNull(calculatedAt, "calculatedAt must not be null"))) {
+            throw new IllegalArgumentException("factor snapshot chronology must satisfy availableAt <= calculatedAt");
+        }
         this.snapshotId = snapshotId;
         this.strategyCode = strategyCode;
         this.strategyVersion = strategyVersion;

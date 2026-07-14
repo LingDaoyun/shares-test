@@ -89,6 +89,31 @@ class V2QuoteSnapshotServiceTest {
     }
 
     @Test
+    void resolvesEqualTimeCapturesByDescendingSnapshotId() {
+        V2QuoteSnapshotEntity first = recordTie("source-a");
+        V2QuoteSnapshotEntity second = recordTie("source-b");
+        String lowerSource = first.getSnapshotId().compareTo(second.getSnapshotId()) < 0 ? "source-a" : "source-b";
+        String higherSource = lowerSource.equals("source-a") ? "source-b" : "source-a";
+        String expectedSnapshotId = first.getSnapshotId().compareTo(second.getSnapshotId()) < 0
+                ? second.getSnapshotId() : first.getSnapshotId();
+        repository.deleteAll();
+
+        recordTie(lowerSource);
+        recordTie(higherSource);
+
+        assertThat(service.latestVisible("002714", QuoteStage.CLOSE_1500, Instant.parse("2026-07-14T07:05:00Z")))
+                .map(V2QuoteSnapshotEntity::getSnapshotId)
+                .contains(expectedSnapshotId);
+    }
+
+    private V2QuoteSnapshotEntity recordTie(String source) {
+        return service.record("002714", "牧原股份", QuoteStage.CLOSE_1500,
+                new BigDecimal("35.10"), new BigDecimal("123456789.00"),
+                Instant.parse("2026-07-14T07:00:00Z"), Instant.parse("2026-07-14T07:01:00Z"),
+                Instant.parse("2026-07-14T07:01:05Z"), source, "request-tie", DataQualityStatus.VERIFIED, "{}");
+    }
+
+    @Test
     void rejectsSnapshotChronologyThatCannotBeReplayedSafely() {
         assertThatThrownBy(() -> service.record("002714", "牧原股份", QuoteStage.CLOSE_1500,
                 new BigDecimal("35.10"), new BigDecimal("123456789.00"),

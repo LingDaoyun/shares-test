@@ -55,7 +55,7 @@ public class V2QuoteSnapshotService {
 
     @Transactional(readOnly = true)
     public Optional<V2QuoteSnapshotEntity> latestVisible(String symbol, QuoteStage quoteStage, Instant decisionAt) {
-        return repository.findFirstBySymbolAndQuoteStageAndAvailableAtLessThanEqualAndIngestedAtLessThanEqualOrderByAvailableAtDescIngestedAtDesc(
+        return repository.findFirstBySymbolAndQuoteStageAndAvailableAtLessThanEqualAndIngestedAtLessThanEqualOrderByAvailableAtDescIngestedAtDescSnapshotIdDesc(
                 symbol, quoteStage, decisionAt, decisionAt);
     }
 

@@ -7,10 +7,11 @@ import java.util.List;
 
 public interface V2FactorSnapshotRepository extends JpaRepository<V2FactorSnapshotEntity, String> {
 
-    List<V2FactorSnapshotEntity> findBySymbolAndStrategyCodeAndStrategyVersionAndAvailableAtLessThanEqualOrderByAvailableAtDesc(
+    List<V2FactorSnapshotEntity> findBySymbolAndStrategyCodeAndStrategyVersionAndAvailableAtLessThanEqualAndCalculatedAtLessThanEqualOrderByAvailableAtDescCalculatedAtDesc(
             String symbol,
             String strategyCode,
             String strategyVersion,
-            Instant decisionAt
+            Instant availableAtCutoff,
+            Instant calculatedAtCutoff
     );
 }

@@ -60,6 +60,7 @@ class V2RecommendationLedgerServiceTest {
         assertThat(first.getRecommendationFingerprint()).hasSize(64);
         assertThat(first.getStrategyCode()).isEqualTo("VALUE_REVERSION");
         assertThat(first.getAction()).isEqualTo("LIGHT_TRIAL");
+        assertThat(first.getSignalProvenance()).isEqualTo("RULE_ENGINE");
         JsonNode payload = readPayload(first);
         assertThat(payload.path("rankScore").decimalValue()).isEqualByComparingTo("68.25");
         assertThat(payload.path("blockedReasons")).isEmpty();
@@ -168,6 +169,24 @@ class V2RecommendationLedgerServiceTest {
 
         assertThat(service.latest("600036")).isPresent();
         assertThat(service.latest("600036").get().getAction()).isEqualTo("NEXT_WATCH");
+    }
+
+    @Test
+    void latestExcludesLaterCompatibilityProbeButKeepsItForAudit() {
+        V2RecommendationLedgerEntity realDecision = service.record(signal());
+        StrategySignal probe = new StrategySignal(
+                StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",
+                Instant.parse("2026-07-15T07:20:00Z"), Instant.parse("2026-07-15T07:19:30Z"),
+                CandidateStage.WATCH, StrategyAction.NEXT_WATCH, null, "", "",
+                new BigDecimal("61.00"), new BigDecimal("82.00"), null, null,
+                List.of("compatibility probe"), List.of(), Map.of("source", "probe"),
+                SourceQualityStatus.SINGLE_SOURCE, Map.of("source", "probe"), SignalProvenance.COMPATIBILITY_PROBE);
+        V2RecommendationLedgerEntity compatibilityProbe = service.record(probe);
+
+        assertThat(compatibilityProbe.getSignalProvenance()).isEqualTo("COMPATIBILITY_PROBE");
+        assertThat(repository.count()).isEqualTo(2);
+        assertThat(service.latest("600036").map(V2RecommendationLedgerEntity::getLedgerId))
+                .contains(realDecision.getLedgerId());
     }
 
     private StrategySignal signal() {

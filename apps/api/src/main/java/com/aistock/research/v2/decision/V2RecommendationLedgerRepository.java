@@ -8,5 +8,8 @@ public interface V2RecommendationLedgerRepository extends JpaRepository<V2Recomm
 
     Optional<V2RecommendationLedgerEntity> findByRecommendationFingerprint(String recommendationFingerprint);
 
-    Optional<V2RecommendationLedgerEntity> findFirstBySymbolOrderByDecisionAtDescLedgerIdDesc(String symbol);
+    Optional<V2RecommendationLedgerEntity> findFirstBySymbolAndSignalProvenanceNotOrderByDecisionAtDescLedgerIdDesc(
+            String symbol,
+            String excludedProvenance
+    );
 }

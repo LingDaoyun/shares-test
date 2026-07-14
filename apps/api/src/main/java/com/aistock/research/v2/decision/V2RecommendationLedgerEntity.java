@@ -43,6 +43,9 @@ public class V2RecommendationLedgerEntity {
     @Column(name = "action", nullable = false, length = 32)
     private String action;
 
+    @Column(name = "signal_provenance", nullable = false, length = 32)
+    private String signalProvenance;
+
     @Column(name = "rank_score", precision = 8, scale = 2)
     private BigDecimal rankScore;
 
@@ -67,7 +70,7 @@ public class V2RecommendationLedgerEntity {
     public V2RecommendationLedgerEntity(String ledgerId, String recommendationFingerprint, String strategyCode,
                                         String strategyVersion, String symbol, String companyName,
                                         Instant decisionAt, Instant dataCutoffAt, String candidateStage,
-                                        String action, BigDecimal rankScore, BigDecimal dataConfidence,
+                                        String action, String signalProvenance, BigDecimal rankScore, BigDecimal dataConfidence,
                                         BigDecimal historicalHitRate, BigDecimal riskReward,
                                         String payloadJson, Instant createdAt) {
         this.ledgerId = ledgerId;
@@ -80,6 +83,7 @@ public class V2RecommendationLedgerEntity {
         this.dataCutoffAt = dataCutoffAt;
         this.candidateStage = candidateStage;
         this.action = action;
+        this.signalProvenance = signalProvenance;
         this.rankScore = rankScore;
         this.dataConfidence = dataConfidence;
         this.historicalHitRate = historicalHitRate;
@@ -98,6 +102,7 @@ public class V2RecommendationLedgerEntity {
     public Instant getDataCutoffAt() { return dataCutoffAt; }
     public String getCandidateStage() { return candidateStage; }
     public String getAction() { return action; }
+    public String getSignalProvenance() { return signalProvenance; }
     public BigDecimal getRankScore() { return rankScore; }
     public BigDecimal getDataConfidence() { return dataConfidence; }
     public BigDecimal getHistoricalHitRate() { return historicalHitRate; }

@@ -16,6 +16,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class StrategySignalFactoryTest {
 
     @Test
+    void convenienceConstructorsDefaultToRuleEngineProvenance() {
+        StrategySignal signal = new StrategySignal(
+                StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",
+                Instant.parse("2026-07-14T07:20:00Z"), Instant.parse("2026-07-14T07:19:30Z"),
+                CandidateStage.WATCH, StrategyAction.NEXT_WATCH, null, "", "",
+                new BigDecimal("61.00"), new BigDecimal("82.00"), null, null,
+                List.of(), List.of(), Map.of("source", "constructor"));
+
+        assertThat(signal.signalProvenance()).isEqualTo(SignalProvenance.RULE_ENGINE);
+    }
+
+    @Test
     void createsBlockedSignalWithSeparatedScoresAndReasons() {
         StrategySignal signal = StrategySignalFactory.blocked(
                 StrategyCode.SHORT_RIGHT_SIDE,

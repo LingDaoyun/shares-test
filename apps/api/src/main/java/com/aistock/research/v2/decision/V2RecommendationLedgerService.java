@@ -1,6 +1,7 @@
 package com.aistock.research.v2.decision;
 
 import com.aistock.research.v2.strategy.StrategySignal;
+import com.aistock.research.v2.strategy.SignalProvenance;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -115,6 +116,7 @@ public class V2RecommendationLedgerService {
                 signal.dataCutoffAt(),
                 signal.candidateStage().name(),
                 signal.action().name(),
+                signal.signalProvenance().name(),
                 signal.rankScore(),
                 signal.dataConfidence(),
                 signal.historicalHitRate(),
@@ -125,7 +127,8 @@ public class V2RecommendationLedgerService {
 
     @Transactional(readOnly = true)
     public Optional<V2RecommendationLedgerEntity> latest(String symbol) {
-        return repository.findFirstBySymbolOrderByDecisionAtDescLedgerIdDesc(symbol);
+        return repository.findFirstBySymbolAndSignalProvenanceNotOrderByDecisionAtDescLedgerIdDesc(
+                symbol, SignalProvenance.COMPATIBILITY_PROBE.name());
     }
 
     private String toJson(StrategySignal signal) {

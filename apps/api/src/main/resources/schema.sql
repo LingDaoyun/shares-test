@@ -272,6 +272,7 @@ CREATE TABLE IF NOT EXISTS v2_recommendation_ledger (
   data_cutoff_at TIMESTAMP WITH TIME ZONE NOT NULL,
   candidate_stage VARCHAR(32) NOT NULL,
   action VARCHAR(32) NOT NULL,
+  signal_provenance VARCHAR(32) NOT NULL,
   rank_score NUMERIC(8, 2),
   data_confidence NUMERIC(8, 2),
   historical_hit_rate NUMERIC(8, 2),
@@ -280,8 +281,14 @@ CREATE TABLE IF NOT EXISTS v2_recommendation_ledger (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
+ALTER TABLE v2_recommendation_ledger
+  ADD COLUMN IF NOT EXISTS signal_provenance VARCHAR(32) NOT NULL DEFAULT 'RULE_ENGINE';
+
 CREATE INDEX IF NOT EXISTS idx_v2_ledger_symbol_time
   ON v2_recommendation_ledger(symbol, decision_at, ledger_id);
+
+CREATE INDEX IF NOT EXISTS idx_v2_ledger_symbol_provenance_time
+  ON v2_recommendation_ledger(symbol, signal_provenance, decision_at, ledger_id);
 
 CREATE INDEX IF NOT EXISTS idx_v2_ledger_strategy_time
   ON v2_recommendation_ledger(strategy_code, strategy_version, decision_at);
