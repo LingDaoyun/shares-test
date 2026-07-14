@@ -1,6 +1,8 @@
 package com.aistock.research.v2.decision;
 
 import com.aistock.research.v2.strategy.CandidateStage;
+import com.aistock.research.v2.strategy.SignalProvenance;
+import com.aistock.research.v2.strategy.SourceQualityStatus;
 import com.aistock.research.v2.strategy.StrategyAction;
 import com.aistock.research.v2.strategy.StrategyCode;
 import com.aistock.research.v2.strategy.StrategySignal;
@@ -11,8 +13,14 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,6 +52,40 @@ class V2RecommendationLedgerServiceTest {
         assertThat(first.getAction()).isEqualTo("LIGHT_TRIAL");
         assertThat(first.getPayloadJson()).contains("\"rankScore\":68.25");
         assertThat(first.getPayloadJson()).contains("\"blockedReasons\":[]");
+        assertThat(first.getPayloadJson()).contains("\"valuation\":\"pb-percentile\"");
+        assertThat(first.getPayloadJson()).contains("\"sourceQuality\":\"VERIFIED\"");
+        assertThat(first.getPayloadJson()).contains("\"signalProvenance\":\"RULE_ENGINE\"");
+    }
+
+    @Test
+    void concurrentRecordingReturnsTheSameLedgerEntry() throws Exception {
+        int callers = 8;
+        CountDownLatch ready = new CountDownLatch(callers);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(callers);
+        try {
+            List<Future<V2RecommendationLedgerEntity>> futures = new ArrayList<>();
+            for (int i = 0; i < callers; i++) {
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    assertThat(start.await(10, TimeUnit.SECONDS)).isTrue();
+                    return service.record(signal());
+                }));
+            }
+
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            List<String> ledgerIds = new ArrayList<>();
+            for (Future<V2RecommendationLedgerEntity> future : futures) {
+                ledgerIds.add(future.get(20, TimeUnit.SECONDS).getLedgerId());
+            }
+            assertThat(ledgerIds).hasSize(callers).containsOnly(ledgerIds.get(0));
+            assertThat(repository.count()).isEqualTo(1);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
     }
 
     @Test
@@ -68,6 +110,9 @@ class V2RecommendationLedgerServiceTest {
                 CandidateStage.RESEARCH, StrategyAction.LIGHT_TRIAL, new BigDecimal("0.10"),
                 "PB low percentile", "ROE deterioration",
                 new BigDecimal("68.25"), new BigDecimal("86.00"), null, null,
-                List.of("行业估值低位"), List.of(), Map.of("valuation", "pb-percentile"));
+                List.of("行业估值低位"), List.of(), Map.of("valuation", "pb-percentile"),
+                SourceQualityStatus.VERIFIED,
+                Map.of("valuation", "pb-percentile"),
+                SignalProvenance.RULE_ENGINE);
     }
 }

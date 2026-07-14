@@ -3,8 +3,12 @@ package com.aistock.research.v2.decision;
 import com.aistock.research.v2.strategy.StrategySignal;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -18,13 +22,19 @@ public class V2RecommendationLedgerService {
 
     private final V2RecommendationLedgerRepository repository;
     private final ObjectMapper objectMapper;
+    private final TransactionTemplate createLedgerTransaction;
 
-    public V2RecommendationLedgerService(V2RecommendationLedgerRepository repository, ObjectMapper objectMapper) {
+    public V2RecommendationLedgerService(
+            V2RecommendationLedgerRepository repository,
+            ObjectMapper objectMapper,
+            PlatformTransactionManager transactionManager
+    ) {
         this.repository = repository;
         this.objectMapper = objectMapper;
+        this.createLedgerTransaction = new TransactionTemplate(transactionManager);
+        this.createLedgerTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    @Transactional
     public V2RecommendationLedgerEntity record(StrategySignal signal) {
         String payloadJson = toJson(signal);
         String fingerprint = sha256(signal.strategyCode() + "|" + signal.strategyVersion() + "|"
@@ -33,7 +43,24 @@ public class V2RecommendationLedgerService {
         if (existing.isPresent()) {
             return existing.get();
         }
-        return repository.save(new V2RecommendationLedgerEntity(
+        try {
+            return createLedgerTransaction.execute(status -> createOrFind(signal, payloadJson, fingerprint));
+        } catch (DataIntegrityViolationException exception) {
+            return repository.findByRecommendationFingerprint(fingerprint)
+                    .orElseThrow(() -> exception);
+        }
+    }
+
+    private V2RecommendationLedgerEntity createOrFind(
+            StrategySignal signal,
+            String payloadJson,
+            String fingerprint
+    ) {
+        Optional<V2RecommendationLedgerEntity> existing = repository.findByRecommendationFingerprint(fingerprint);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        return repository.saveAndFlush(new V2RecommendationLedgerEntity(
                 sha256("ledger|" + fingerprint),
                 fingerprint,
                 signal.strategyCode().name(),

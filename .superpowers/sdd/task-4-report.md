@@ -34,3 +34,16 @@
 ## Concerns
 
 None.
+
+## Review Fix: Concurrent Ledger Recording
+
+- Changed `V2RecommendationLedgerService.record` to perform creation in a `REQUIRES_NEW` transaction with `saveAndFlush`.
+- When the database rejects a duplicate ledger fingerprint/identifier, the service now re-reads and returns the committed ledger entry instead of surfacing the race failure.
+- Added an eight-caller `CountDownLatch` concurrency test. Every future completes with the same ledger id and the repository retains exactly one row.
+- Extended replay-payload assertions to cover the canonical Task 1 context value (`valuation=pb-percentile`), `sourceQuality=VERIFIED`, and `signalProvenance=RULE_ENGINE`.
+
+## Review Fix Verification
+
+- The new concurrent test failed against the pre-fix service with the expected `DataIntegrityViolationException` from the unique ledger key.
+- After the isolated-insert recovery fix, `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test` passed: 3 tests, 0 failures, 0 errors, 0 skipped.
+- `git diff --check` passed.
