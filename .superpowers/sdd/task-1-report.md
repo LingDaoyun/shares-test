@@ -101,7 +101,37 @@ Result: `Tests run: 12, Failures: 0, Errors: 0, Skipped: 0`; Maven `BUILD SUCCES
 
 ### Commit
 
-`b42a135 fix: address second review of strategy signal contract`
+`5bedfd6 fix: address second review of strategy signal contract`
+
+### Concerns
+
+The unrelated pre-existing modification to `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` remains untouched.
+
+## Third Review Fix Report
+
+### Status
+
+Complete.
+
+### Changes
+
+- Made `replayPayload` recursively JSON-safe while retaining the public `Map<String, Object>` type.
+- Deep-copied and unmodifiable-wrapped nested maps and lists so source or returned collections cannot mutate the signal.
+- Rejected unsupported values, non-string map keys, and cyclic map/list references with `IllegalArgumentException` messages containing `replayPayload`.
+- Added regression tests for nested immutability and unsupported values.
+
+### Verification
+
+```bash
+mvn -pl apps/api -Dtest=StrategySignalFactoryTest test
+git diff --check
+```
+
+Result: `Tests run: 14, Failures: 0, Errors: 0, Skipped: 0`; Maven `BUILD SUCCESS`; diff check passed.
+
+### Commit
+
+`a252f0f fix: make replay payload deeply immutable`
 
 ### Concerns
 
