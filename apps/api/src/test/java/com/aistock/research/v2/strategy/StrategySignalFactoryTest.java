@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -69,6 +70,19 @@ class StrategySignalFactoryTest {
                 .containsEntry("action", "NEXT_WATCH")
                 .containsEntry("dataConfidence", new BigDecimal("84.00"))
                 .containsEntry("context", Map.of("valuationContext", "industry-percentile"));
+    }
+
+    @Test
+    void createsCompatibilityProbeOnlyWhenProvenanceIsExplicitlyRequested() {
+        StrategySignal signal = StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",
+                Instant.parse("2026-07-14T07:20:00Z"), Instant.parse("2026-07-14T07:19:30Z"),
+                CandidateStage.RESEARCH, StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"), new BigDecimal("84.00"), null, null, Map.of(), Map.of(),
+                SourceQualityStatus.SINGLE_SOURCE, SignalProvenance.COMPATIBILITY_PROBE);
+
+        assertThat(signal.signalProvenance()).isEqualTo(SignalProvenance.COMPATIBILITY_PROBE);
+        assertThat(signal.replayPayload()).containsEntry("signalProvenance", "COMPATIBILITY_PROBE");
     }
 
     @Test
@@ -202,6 +216,52 @@ class StrategySignalFactoryTest {
                 Map.of("infinity", Float.POSITIVE_INFINITY)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("replayPayload");
+    }
+
+    @Test
+    void rejectsMutableNumericReplayPayloadValues() {
+        AtomicInteger mutableNumber = new AtomicInteger(7);
+
+        assertThatThrownBy(() -> StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",
+                Instant.now(), Instant.now(), CandidateStage.RESEARCH, StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"), new BigDecimal("84.00"), null, null, Map.of(),
+                Map.of("mutable", mutableNumber)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unsupported numeric type");
+    }
+
+    @Test
+    void normalizesDecisionMetricsAtSignalConstructionWithDeterministicRounding() {
+        StrategySignal signal = StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",
+                Instant.parse("2026-07-14T07:20:00Z"), Instant.parse("2026-07-14T07:19:30Z"),
+                CandidateStage.RESEARCH, StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.345"), new BigDecimal("84.005"), new BigDecimal("63.995"),
+                new BigDecimal("2.345"), Map.of(), Map.of(), SourceQualityStatus.SINGLE_SOURCE);
+
+        assertThat(signal.rankScore()).isEqualByComparingTo("72.35");
+        assertThat(signal.dataConfidence()).isEqualByComparingTo("84.01");
+        assertThat(signal.historicalHitRate()).isEqualByComparingTo("64.00");
+        assertThat(signal.riskReward()).isEqualByComparingTo("2.35");
+    }
+
+    @Test
+    void rejectsDecisionMetricsOutsideTheirSignalBoundaryRanges() {
+        assertThatThrownBy(() -> StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",
+                Instant.now(), Instant.now(), CandidateStage.RESEARCH, StrategyAction.NEXT_WATCH,
+                new BigDecimal("100.01"), new BigDecimal("84.00"), null, null, Map.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rankScore must be between 0 and 100");
+        assertThatThrownBy(() -> new StrategySignal(
+                StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",
+                Instant.now(), Instant.now(), CandidateStage.RESEARCH, StrategyAction.NEXT_WATCH,
+                new BigDecimal("1.00001"), "", "", new BigDecimal("72.35"), new BigDecimal("84.00"),
+                null, null, List.of(), List.of(), Map.of(), SourceQualityStatus.SINGLE_SOURCE, Map.of(),
+                SignalProvenance.RULE_ENGINE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("positionLimit must be between 0 and 1");
     }
 
     @Test

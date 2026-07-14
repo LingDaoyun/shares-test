@@ -51,7 +51,7 @@ class V2SignalControllerTest {
                 .andExpect(jsonPath("$.rankScore").value(50.0))
                 .andExpect(jsonPath("$.dataConfidence").value(40.0))
                 .andExpect(jsonPath("$.sourceQuality").value("SINGLE_SOURCE"))
-                .andExpect(jsonPath("$.signalProvenance").value("RULE_ENGINE"))
+                .andExpect(jsonPath("$.signalProvenance").value("COMPATIBILITY_PROBE"))
                 .andExpect(jsonPath("$.replayPayload.source").value("v2-compatibility-probe"))
                 .andExpect(jsonPath("$.replayPayload.sourceQualityReason").value("compatibility probe"))
                 .andExpect(jsonPath("$.ledgerId").isNotEmpty())
@@ -71,7 +71,7 @@ class V2SignalControllerTest {
 
         JsonNode payload = objectMapper.readTree(ledger.getPayloadJson());
         assertThat(payload.path("sourceQuality").asText()).isEqualTo("SINGLE_SOURCE");
-        assertThat(payload.path("signalProvenance").asText()).isEqualTo("RULE_ENGINE");
+        assertThat(payload.path("signalProvenance").asText()).isEqualTo("COMPATIBILITY_PROBE");
         assertThat(payload.path("replayPayload").isObject()).isTrue();
         assertThat(payload.path("replayPayload").path("sourceQuality").asText())
                 .isEqualTo("SINGLE_SOURCE");

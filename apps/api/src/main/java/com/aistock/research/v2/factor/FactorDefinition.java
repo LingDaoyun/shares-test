@@ -10,4 +10,7 @@ public record FactorDefinition(
         FactorMissingPolicy missingPolicy,
         String version
 ) {
+    public boolean hasNormalizedScoringUnit() {
+        return "ratio".equals(valueUnit) || "percentile".equals(valueUnit);
+    }
 }

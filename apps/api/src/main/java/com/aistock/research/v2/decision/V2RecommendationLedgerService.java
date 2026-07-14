@@ -131,12 +131,12 @@ public class V2RecommendationLedgerService {
     private String toJson(StrategySignal signal) {
         try {
             ObjectNode payload = canonicalObjectMapper.valueToTree(signal);
-            canonicalizeReplayDecimals(payload);
-            applyPersistedScale(payload, "rankScore", 2);
-            applyPersistedScale(payload, "dataConfidence", 2);
-            applyPersistedScale(payload, "historicalHitRate", 2);
-            applyPersistedScale(payload, "riskReward", 2);
-            applyPersistedScale(payload, "positionLimit", 4);
+            canonicalizeReplayDecimals(payload.path("replayPayload"));
+            formatPersistedScale(payload, "rankScore", 2);
+            formatPersistedScale(payload, "dataConfidence", 2);
+            formatPersistedScale(payload, "historicalHitRate", 2);
+            formatPersistedScale(payload, "riskReward", 2);
+            formatPersistedScale(payload, "positionLimit", 4);
             return canonicalObjectMapper.writeValueAsString(payload);
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Unable to serialize strategy signal", ex);
@@ -169,7 +169,7 @@ public class V2RecommendationLedgerService {
         return new BigDecimal(value.stripTrailingZeros().toPlainString());
     }
 
-    private static void applyPersistedScale(ObjectNode payload, String field, int scale) {
+    private static void formatPersistedScale(ObjectNode payload, String field, int scale) {
         JsonNode value = payload.get(field);
         if (value != null && !value.isNull()) {
             payload.set(field, DecimalNode.valueOf(value.decimalValue().setScale(scale)));

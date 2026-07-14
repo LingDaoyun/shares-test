@@ -131,6 +131,29 @@ public final class StrategySignalFactory {
             Map<String, Object> replayPayload,
             SourceQualityStatus sourceQuality
     ) {
+        return research(strategyCode, strategyVersion, symbol, companyName, decisionAt, dataCutoffAt,
+                candidateStage, action, rankScore, dataConfidence, historicalHitRate, riskReward,
+                context, replayPayload, sourceQuality, SignalProvenance.RULE_ENGINE);
+    }
+
+    public static StrategySignal research(
+            StrategyCode strategyCode,
+            String strategyVersion,
+            String symbol,
+            String companyName,
+            Instant decisionAt,
+            Instant dataCutoffAt,
+            CandidateStage candidateStage,
+            StrategyAction action,
+            BigDecimal rankScore,
+            BigDecimal dataConfidence,
+            BigDecimal historicalHitRate,
+            BigDecimal riskReward,
+            Map<String, String> context,
+            Map<String, Object> replayPayload,
+            SourceQualityStatus sourceQuality,
+            SignalProvenance signalProvenance
+    ) {
         return new StrategySignal(
                 strategyCode,
                 strategyVersion,
@@ -152,6 +175,6 @@ public final class StrategySignalFactory {
                 context,
                 sourceQuality,
                 replayPayload,
-                SignalProvenance.RULE_ENGINE);
+                signalProvenance);
     }
 }

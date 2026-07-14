@@ -74,4 +74,41 @@ class FactorEngineTest {
         assertThat(value.dataConfidenceImpact()).isEqualByComparingTo(new BigDecimal("0.00"));
         assertThat(value.missingReason()).isEmpty();
     }
+
+    @Test
+    void rejectsAbsoluteUnitsInsteadOfClampingThemIntoPerfectScores() {
+        FactorDefinition definition = new FactorDefinition(
+                "AMOUNT_20D_MEDIAN",
+                "20日成交额中位数",
+                "SHORT_RIGHT_SIDE",
+                "cny",
+                FactorDirection.HIGHER_IS_BETTER,
+                "amount_20d_median",
+                FactorMissingPolicy.BLOCK,
+                "v2.0.0");
+
+        assertThatThrownBy(() -> engine.evaluate(definition, new FactorInput("002714", Map.of(
+                "amount_20d_median", new FactorInput.Measure(new BigDecimal("300000000"), "cny")))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("UNSUPPORTED_SCORING_UNIT:AMOUNT_20D_MEDIAN cny");
+    }
+
+    @Test
+    void rejectsOutOfRangeNormalizedValuesInsteadOfSilentlyClampingThem() {
+        FactorDefinition ratio = new FactorDefinition(
+                "RELATIVE_STRENGTH_20D", "20日相对强度", "SHORT_RIGHT_SIDE", "ratio",
+                FactorDirection.HIGHER_IS_BETTER, "rs_20d", FactorMissingPolicy.REDUCE_CONFIDENCE, "v2.0.0");
+        FactorDefinition percentile = new FactorDefinition(
+                "PB_PERCENTILE", "PB分位", "VALUE_REVERSION", "percentile",
+                FactorDirection.LOWER_IS_BETTER, "pb_percentile", FactorMissingPolicy.BLOCK, "v2.0.0");
+
+        assertThatThrownBy(() -> engine.evaluate(ratio, new FactorInput("002714", Map.of(
+                "rs_20d", new FactorInput.Measure(new BigDecimal("1.01"), "ratio")))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("NORMALIZED_VALUE_OUT_OF_RANGE:RELATIVE_STRENGTH_20D ratio");
+        assertThatThrownBy(() -> engine.evaluate(percentile, new FactorInput("002714", Map.of(
+                "pb_percentile", new FactorInput.Measure(new BigDecimal("100.01"), "percentile")))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("NORMALIZED_VALUE_OUT_OF_RANGE:PB_PERCENTILE percentile");
+    }
 }

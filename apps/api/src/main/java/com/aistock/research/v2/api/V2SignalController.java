@@ -8,6 +8,7 @@ import com.aistock.research.v2.strategy.StrategyCode;
 import com.aistock.research.v2.strategy.StrategySignal;
 import com.aistock.research.v2.strategy.StrategySignalFactory;
 import com.aistock.research.v2.strategy.SourceQualityStatus;
+import com.aistock.research.v2.strategy.SignalProvenance;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -49,7 +50,8 @@ public class V2SignalController {
                 null,
                 Map.of("source", "v2-compatibility-probe", "sourceQualityReason", "compatibility probe"),
                 Map.of("source", "v2-compatibility-probe", "sourceQualityReason", "compatibility probe"),
-                SourceQualityStatus.SINGLE_SOURCE);
+                SourceQualityStatus.SINGLE_SOURCE,
+                SignalProvenance.COMPATIBILITY_PROBE);
         V2RecommendationLedgerEntity ledger = ledgerService.record(signal);
         return V2SignalResponse.from(signal, ledger);
     }

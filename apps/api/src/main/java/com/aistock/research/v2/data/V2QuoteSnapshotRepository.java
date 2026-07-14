@@ -7,9 +7,10 @@ import java.util.Optional;
 
 public interface V2QuoteSnapshotRepository extends JpaRepository<V2QuoteSnapshotEntity, String> {
 
-    Optional<V2QuoteSnapshotEntity> findFirstBySymbolAndQuoteStageAndAvailableAtLessThanEqualOrderByAvailableAtDescIngestedAtDesc(
+    Optional<V2QuoteSnapshotEntity> findFirstBySymbolAndQuoteStageAndAvailableAtLessThanEqualAndIngestedAtLessThanEqualOrderByAvailableAtDescIngestedAtDesc(
             String symbol,
             QuoteStage quoteStage,
-            Instant decisionAt
+            Instant availableAtCutoff,
+            Instant ingestedAtCutoff
     );
 }

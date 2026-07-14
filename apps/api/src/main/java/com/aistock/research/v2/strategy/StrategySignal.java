@@ -1,6 +1,8 @@
 package com.aistock.research.v2.strategy;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -32,6 +34,9 @@ public record StrategySignal(
         Map<String, Object> replayPayload,
         SignalProvenance signalProvenance
 ) {
+    private static final BigDecimal HUNDRED = new BigDecimal("100");
+    private static final BigDecimal MAX_RISK_REWARD = new BigDecimal("999999.99");
+
     public StrategySignal {
         requireNonNull(strategyCode, "strategyCode");
         requireNonBlank(strategyVersion, "strategyVersion");
@@ -43,6 +48,11 @@ public record StrategySignal(
         requireNonNull(action, "action");
         requireNonNull(sourceQuality, "sourceQuality");
         requireNonNull(signalProvenance, "signalProvenance");
+        positionLimit = normalizeBoundedDecimal(positionLimit, "positionLimit", BigDecimal.ZERO, BigDecimal.ONE, 4);
+        rankScore = normalizeBoundedDecimal(rankScore, "rankScore", BigDecimal.ZERO, HUNDRED, 2);
+        dataConfidence = normalizeBoundedDecimal(dataConfidence, "dataConfidence", BigDecimal.ZERO, HUNDRED, 2);
+        historicalHitRate = normalizeBoundedDecimal(historicalHitRate, "historicalHitRate", BigDecimal.ZERO, HUNDRED, 2);
+        riskReward = normalizeBoundedDecimal(riskReward, "riskReward", BigDecimal.ZERO, MAX_RISK_REWARD, 2);
         evidenceSummary = evidenceSummary == null ? List.of() : List.copyOf(evidenceSummary);
         blockedReasons = blockedReasons == null ? List.of() : List.copyOf(blockedReasons);
         context = context == null ? Map.of() : Map.copyOf(context);
@@ -184,14 +194,8 @@ public record StrategySignal(
         if (value == null || value instanceof String || value instanceof Boolean) {
             return value;
         }
-        if (value instanceof Double doubleValue && !Double.isFinite(doubleValue)) {
-            throw invalidReplayPayload("numeric values must be finite");
-        }
-        if (value instanceof Float floatValue && !Float.isFinite(floatValue)) {
-            throw invalidReplayPayload("numeric values must be finite");
-        }
-        if (value instanceof Number) {
-            return value;
+        if (value instanceof Number number) {
+            return freezeJsonNumber(number);
         }
         if (value instanceof Map<?, ?> map) {
             enterReplayContainer(value, ancestors);
@@ -231,6 +235,48 @@ public record StrategySignal(
 
     private static IllegalArgumentException invalidReplayPayload(String detail) {
         return new IllegalArgumentException("replayPayload " + detail);
+    }
+
+    private static BigDecimal freezeJsonNumber(Number value) {
+        if (value instanceof BigDecimal decimal) {
+            return decimal;
+        }
+        if (value instanceof BigInteger integer) {
+            return new BigDecimal(integer);
+        }
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            return BigDecimal.valueOf(value.longValue());
+        }
+        if (value instanceof Double doubleValue) {
+            if (!Double.isFinite(doubleValue)) {
+                throw invalidReplayPayload("numeric values must be finite");
+            }
+            return new BigDecimal(doubleValue.toString());
+        }
+        if (value instanceof Float floatValue) {
+            if (!Float.isFinite(floatValue)) {
+                throw invalidReplayPayload("numeric values must be finite");
+            }
+            return new BigDecimal(floatValue.toString());
+        }
+        throw invalidReplayPayload("unsupported numeric type: " + value.getClass().getName());
+    }
+
+    private static BigDecimal normalizeBoundedDecimal(
+            BigDecimal value,
+            String field,
+            BigDecimal minimum,
+            BigDecimal maximum,
+            int scale
+    ) {
+        if (value == null) {
+            return null;
+        }
+        if (value.compareTo(minimum) < 0 || value.compareTo(maximum) > 0) {
+            throw new IllegalArgumentException(field + " must be between "
+                    + minimum.toPlainString() + " and " + maximum.toPlainString());
+        }
+        return value.setScale(scale, RoundingMode.HALF_UP);
     }
 
     private static void validateStageAndAction(

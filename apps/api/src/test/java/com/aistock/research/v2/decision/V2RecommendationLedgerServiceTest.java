@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -38,6 +39,9 @@ class V2RecommendationLedgerServiceTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @AfterEach
     void clean() {
@@ -113,6 +117,37 @@ class V2RecommendationLedgerServiceTest {
                 ledgerIds.add(future.get(20, TimeUnit.SECONDS).getLedgerId());
             }
             assertThat(ledgerIds).hasSize(callers).containsOnly(ledgerIds.get(0));
+            assertThat(repository.count()).isEqualTo(1);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
+    void concurrentIndependentServiceInstancesRecoverToTheSameLedgerEntry() throws Exception {
+        V2RecommendationLedgerService secondService = new V2RecommendationLedgerService(
+                repository, objectMapper, transactionManager);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<V2RecommendationLedgerEntity> first = executor.submit(() -> {
+                ready.countDown();
+                assertThat(start.await(10, TimeUnit.SECONDS)).isTrue();
+                return service.record(signal());
+            });
+            Future<V2RecommendationLedgerEntity> second = executor.submit(() -> {
+                ready.countDown();
+                assertThat(start.await(10, TimeUnit.SECONDS)).isTrue();
+                return secondService.record(signal());
+            });
+
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            assertThat(first.get(20, TimeUnit.SECONDS).getLedgerId())
+                    .isEqualTo(second.get(20, TimeUnit.SECONDS).getLedgerId());
             assertThat(repository.count()).isEqualTo(1);
         } finally {
             executor.shutdownNow();
