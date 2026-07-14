@@ -232,6 +232,20 @@ class StrategySignalFactoryTest {
     }
 
     @Test
+    void rejectsBigDecimalSubclassReplayPayloadValues() {
+        BigDecimal subclassValue = new BigDecimal("12.34") {
+        };
+
+        assertThatThrownBy(() -> StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",
+                Instant.now(), Instant.now(), CandidateStage.RESEARCH, StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"), new BigDecimal("84.00"), null, null, Map.of(),
+                Map.of("subclass", subclassValue)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unsupported numeric type");
+    }
+
+    @Test
     void normalizesDecisionMetricsAtSignalConstructionWithDeterministicRounding() {
         StrategySignal signal = StrategySignalFactory.research(
                 StrategyCode.VALUE_REVERSION, "value-reversion-v2.0.0", "600036", "招商银行",

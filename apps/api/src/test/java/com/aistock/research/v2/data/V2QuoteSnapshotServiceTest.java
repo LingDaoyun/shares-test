@@ -4,10 +4,18 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -20,6 +28,9 @@ class V2QuoteSnapshotServiceTest {
 
     @Autowired
     private V2QuoteSnapshotService service;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @AfterEach
     void clean() {
@@ -124,5 +135,58 @@ class V2QuoteSnapshotServiceTest {
         assertThat(repository.count()).isEqualTo(2);
         assertThat(repository.findById(first.getSnapshotId()).orElseThrow().getQualityStatus())
                 .isEqualTo(DataQualityStatus.VERIFIED);
+    }
+
+    @Test
+    void assignsDistinctSnapshotIdsToDelimiterAmbiguousSourceMetadata() {
+        V2QuoteSnapshotEntity first = service.record("002714", "牧原股份", QuoteStage.CLOSE_1500,
+                new BigDecimal("35.10"), new BigDecimal("123456789.00"),
+                Instant.parse("2026-07-14T07:00:00Z"),
+                Instant.parse("2026-07-14T07:01:00Z"), Instant.parse("2026-07-14T07:01:05Z"),
+                "feed|v1", "r7", DataQualityStatus.VERIFIED, "{\"price\":35.10}");
+        V2QuoteSnapshotEntity second = service.record("002714", "牧原股份", QuoteStage.CLOSE_1500,
+                new BigDecimal("35.10"), new BigDecimal("123456789.00"),
+                Instant.parse("2026-07-14T07:00:00Z"),
+                Instant.parse("2026-07-14T07:01:00Z"), Instant.parse("2026-07-14T07:01:05Z"),
+                "feed", "v1|r7", DataQualityStatus.VERIFIED, "{\"price\":35.10}");
+
+        assertThat(second.getSnapshotId()).isNotEqualTo(first.getSnapshotId());
+        assertThat(repository.count()).isEqualTo(2);
+    }
+
+    @Test
+    void concurrentDuplicateCapturesReturnTheExistingSnapshot() throws Exception {
+        int callers = 8;
+        CountDownLatch ready = new CountDownLatch(callers);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(callers);
+        try {
+            List<Future<V2QuoteSnapshotEntity>> futures = new ArrayList<>();
+            for (int index = 0; index < callers; index++) {
+                V2QuoteSnapshotService isolatedService = new V2QuoteSnapshotService(repository, transactionManager);
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    assertThat(start.await(10, TimeUnit.SECONDS)).isTrue();
+                    return isolatedService.record("002714", "牧原股份", QuoteStage.CLOSE_1500,
+                            new BigDecimal("35.10"), new BigDecimal("123456789.00"),
+                            Instant.parse("2026-07-14T07:00:00Z"),
+                            Instant.parse("2026-07-14T07:01:00Z"), Instant.parse("2026-07-14T07:01:05Z"),
+                            "EAST_MONEY", "request-concurrent", DataQualityStatus.VERIFIED, "{\"price\":35.10}");
+                }));
+            }
+
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            List<String> snapshotIds = new ArrayList<>();
+            for (Future<V2QuoteSnapshotEntity> future : futures) {
+                snapshotIds.add(future.get(20, TimeUnit.SECONDS).getSnapshotId());
+            }
+            assertThat(snapshotIds).hasSize(callers).containsOnly(snapshotIds.get(0));
+            assertThat(repository.count()).isEqualTo(1);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
     }
 }

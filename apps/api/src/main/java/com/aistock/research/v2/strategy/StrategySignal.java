@@ -238,8 +238,11 @@ public record StrategySignal(
     }
 
     private static BigDecimal freezeJsonNumber(Number value) {
-        if (value instanceof BigDecimal decimal) {
-            return decimal;
+        if (value.getClass() == BigDecimal.class) {
+            return new BigDecimal(((BigDecimal) value).toPlainString());
+        }
+        if (value instanceof BigDecimal) {
+            throw invalidReplayPayload("unsupported numeric type: " + value.getClass().getName());
         }
         if (value instanceof BigInteger integer) {
             return new BigDecimal(integer);
