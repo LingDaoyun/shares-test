@@ -107,6 +107,36 @@ Result: `Tests run: 12, Failures: 0, Errors: 0, Skipped: 0`; Maven `BUILD SUCCES
 
 The unrelated pre-existing modification to `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` remains untouched.
 
+## Fifth Review Fix Report
+
+### Status
+
+Complete.
+
+### Changes
+
+- Replay payloads now always contain the canonical decision envelope, including decision metadata, scores, source/provenance, evidence, blocked reasons, context, and execution conditions. Canonical values override conflicting caller payload values while preserving additional caller fields.
+- Ordinary blocked, research, and compatibility construction now defaults to `SourceQualityStatus.SINGLE_SOURCE`; explicit source-quality overloads remain available.
+- Signals now reject a `dataCutoffAt` later than `decisionAt` with an error containing `dataCutoffAt`.
+- Added regression tests for nonempty context-derived payloads, canonical replay-field precedence, default source quality, compatibility defaults, and future-data rejection.
+
+### Verification
+
+```bash
+mvn -pl apps/api -Dtest=StrategySignalFactoryTest test
+git diff --check
+```
+
+Result: `Tests run: 19, Failures: 0, Errors: 0, Skipped: 0`; Maven `BUILD SUCCESS`; diff check passed.
+
+### Commit
+
+`c5044a7 fix: address fifth review of strategy signal contract`
+
+### Concerns
+
+The unrelated pre-existing modification to `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` remains untouched.
+
 ## Fourth Review Fix Report
 
 ### Status

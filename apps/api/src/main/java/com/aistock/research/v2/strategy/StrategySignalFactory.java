@@ -24,7 +24,7 @@ public final class StrategySignalFactory {
     ) {
         SourceQualityStatus sourceQuality = action == StrategyAction.DATA_BLOCKED
                 ? SourceQualityStatus.MISSING
-                : SourceQualityStatus.VERIFIED;
+                : SourceQualityStatus.SINGLE_SOURCE;
         return blocked(strategyCode, strategyVersion, symbol, companyName, decisionAt, dataCutoffAt,
                 action, blockedReasons, context, sourceQuality, replayPayloadFromContext(context));
     }
@@ -83,7 +83,7 @@ public final class StrategySignalFactory {
     ) {
         return research(strategyCode, strategyVersion, symbol, companyName, decisionAt, dataCutoffAt,
                 candidateStage, action, rankScore, dataConfidence, historicalHitRate, riskReward,
-                context, replayPayloadFromContext(context), SourceQualityStatus.VERIFIED);
+                context, replayPayloadFromContext(context), SourceQualityStatus.SINGLE_SOURCE);
     }
 
     public static StrategySignal research(
@@ -104,7 +104,7 @@ public final class StrategySignalFactory {
     ) {
         return research(strategyCode, strategyVersion, symbol, companyName, decisionAt, dataCutoffAt,
                 candidateStage, action, rankScore, dataConfidence, historicalHitRate, riskReward,
-                context, replayPayload, SourceQualityStatus.VERIFIED);
+                context, replayPayload, SourceQualityStatus.SINGLE_SOURCE);
     }
 
     private static Map<String, Object> replayPayloadFromContext(Map<String, String> context) {

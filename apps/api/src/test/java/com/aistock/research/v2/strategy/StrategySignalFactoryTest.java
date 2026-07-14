@@ -63,6 +63,12 @@ class StrategySignalFactoryTest {
         assertThat(signal.action()).isEqualTo(StrategyAction.NEXT_WATCH);
         assertThat(signal.blockedReasons()).isEmpty();
         assertThat(signal.signalProvenance()).isEqualTo(SignalProvenance.RULE_ENGINE);
+        assertThat(signal.sourceQuality()).isEqualTo(SourceQualityStatus.SINGLE_SOURCE);
+        assertThat(signal.replayPayload())
+                .containsEntry("strategyVersion", "value-reversion-v2.0.0")
+                .containsEntry("action", "NEXT_WATCH")
+                .containsEntry("dataConfidence", new BigDecimal("84.00"))
+                .containsEntry("context", Map.of("valuationContext", "industry-percentile"));
     }
 
     @Test
@@ -90,6 +96,73 @@ class StrategySignalFactoryTest {
         assertThat(signal.replayPayload()).isNotEmpty()
                 .containsEntry("strategyVersion", "value-reversion-v2.0.0")
                 .containsEntry("symbol", "600036");
+        assertThat(signal.sourceQuality()).isEqualTo(SourceQualityStatus.SINGLE_SOURCE);
+    }
+
+    @Test
+    void canonicalStrategyVersionOverridesCallerReplayPayload() {
+        StrategySignal signal = StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.parse("2026-07-14T07:20:00Z"),
+                Instant.parse("2026-07-14T07:19:30Z"),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                Map.of("valuationContext", "industry-percentile"),
+                Map.of("strategyVersion", "caller-version"));
+
+        assertThat(signal.replayPayload()).containsEntry("strategyVersion", "value-reversion-v2.0.0");
+    }
+
+    @Test
+    void directCompatibilityConstructorDefaultsToSingleSource() {
+        StrategySignal signal = new StrategySignal(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.parse("2026-07-14T07:20:00Z"),
+                Instant.parse("2026-07-14T07:19:30Z"),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                null,
+                "",
+                "",
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                List.of(),
+                List.of(),
+                Map.of());
+
+        assertThat(signal.sourceQuality()).isEqualTo(SourceQualityStatus.SINGLE_SOURCE);
+    }
+
+    @Test
+    void rejectsDataCutoffAfterDecision() {
+        assertThatThrownBy(() -> StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.parse("2026-07-14T07:19:30Z"),
+                Instant.parse("2026-07-14T07:20:00Z"),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                Map.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("dataCutoffAt");
     }
 
     @Test

@@ -47,11 +47,15 @@ public record StrategySignal(
         blockedReasons = blockedReasons == null ? List.of() : List.copyOf(blockedReasons);
         context = context == null ? Map.of() : Map.copyOf(context);
         replayPayload = freezeReplayPayload(normalizeReplayPayload(replayPayload, strategyCode, strategyVersion,
-                symbol, companyName, decisionAt, dataCutoffAt, candidateStage, action, context, sourceQuality,
-                signalProvenance));
+                symbol, companyName, decisionAt, dataCutoffAt, candidateStage, action, positionLimit,
+                entryCondition, invalidCondition, rankScore, dataConfidence, historicalHitRate, riskReward,
+                evidenceSummary, blockedReasons, context, sourceQuality, signalProvenance));
         validateStageAndAction(candidateStage, action, blockedReasons);
         validateSourceQuality(candidateStage, action, sourceQuality, dataConfidence);
         validateProvenance(action, signalProvenance);
+        if (dataCutoffAt.isAfter(decisionAt)) {
+            throw new IllegalArgumentException("dataCutoffAt must not be after decisionAt");
+        }
     }
 
     public StrategySignal(
@@ -77,7 +81,7 @@ public record StrategySignal(
         this(strategyCode, strategyVersion, symbol, companyName, decisionAt, dataCutoffAt,
                 candidateStage, action, positionLimit, entryCondition, invalidCondition,
                 rankScore, dataConfidence, historicalHitRate, riskReward, evidenceSummary,
-                blockedReasons, context, SourceQualityStatus.VERIFIED, Map.of(),
+                blockedReasons, context, SourceQualityStatus.SINGLE_SOURCE, Map.of(),
                 SignalProvenance.COMPATIBILITY_PROBE);
     }
 
@@ -136,26 +140,44 @@ public record StrategySignal(
             Instant dataCutoffAt,
             CandidateStage candidateStage,
             StrategyAction action,
+            BigDecimal positionLimit,
+            String entryCondition,
+            String invalidCondition,
+            BigDecimal rankScore,
+            BigDecimal dataConfidence,
+            BigDecimal historicalHitRate,
+            BigDecimal riskReward,
+            List<String> evidenceSummary,
+            List<String> blockedReasons,
             Map<String, String> context,
             SourceQualityStatus sourceQuality,
             SignalProvenance signalProvenance
     ) {
-        if (replayPayload != null && !replayPayload.isEmpty()) {
-            return replayPayload;
+        Map<String, Object> merged = new LinkedHashMap<>();
+        if (replayPayload != null) {
+            merged.putAll(replayPayload);
         }
-        Map<String, Object> fallback = new LinkedHashMap<>();
-        fallback.put("strategyCode", strategyCode.name());
-        fallback.put("strategyVersion", strategyVersion);
-        fallback.put("symbol", symbol);
-        fallback.put("companyName", companyName);
-        fallback.put("decisionAt", decisionAt.toString());
-        fallback.put("dataCutoffAt", dataCutoffAt.toString());
-        fallback.put("candidateStage", candidateStage.name());
-        fallback.put("action", action.name());
-        fallback.put("sourceQuality", sourceQuality.name());
-        fallback.put("signalProvenance", signalProvenance.name());
-        fallback.put("context", new LinkedHashMap<>(context));
-        return fallback;
+        merged.put("strategyCode", strategyCode.name());
+        merged.put("strategyVersion", strategyVersion);
+        merged.put("symbol", symbol);
+        merged.put("companyName", companyName);
+        merged.put("decisionAt", decisionAt.toString());
+        merged.put("dataCutoffAt", dataCutoffAt.toString());
+        merged.put("candidateStage", candidateStage.name());
+        merged.put("action", action.name());
+        merged.put("rankScore", rankScore);
+        merged.put("dataConfidence", dataConfidence);
+        merged.put("historicalHitRate", historicalHitRate);
+        merged.put("riskReward", riskReward);
+        merged.put("sourceQuality", sourceQuality.name());
+        merged.put("signalProvenance", signalProvenance.name());
+        merged.put("evidenceSummary", evidenceSummary);
+        merged.put("blockedReasons", blockedReasons);
+        merged.put("context", new LinkedHashMap<>(context));
+        merged.put("entryCondition", entryCondition);
+        merged.put("invalidCondition", invalidCondition);
+        merged.put("positionLimit", positionLimit);
+        return merged;
     }
 
     private static Object freezeJsonValue(Object value, IdentityHashMap<Object, Boolean> ancestors) {
