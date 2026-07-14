@@ -1048,6 +1048,9 @@ export interface V2SignalResponse {
   evidenceSummary: string[]
   blockedReasons: string[]
   context: Record<string, string>
+  sourceQuality: string
+  signalProvenance: string
+  replayPayload: Record<string, unknown>
 }
 
 export interface V2SampleSignalParams {

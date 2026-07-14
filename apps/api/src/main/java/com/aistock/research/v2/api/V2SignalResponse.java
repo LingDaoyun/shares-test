@@ -27,7 +27,10 @@ public record V2SignalResponse(
         BigDecimal riskReward,
         List<String> evidenceSummary,
         List<String> blockedReasons,
-        Map<String, String> context
+        Map<String, String> context,
+        String sourceQuality,
+        String signalProvenance,
+        Map<String, Object> replayPayload
 ) {
     public static V2SignalResponse from(StrategySignal signal, V2RecommendationLedgerEntity ledger) {
         return new V2SignalResponse(
@@ -49,6 +52,9 @@ public record V2SignalResponse(
                 signal.riskReward(),
                 signal.evidenceSummary(),
                 signal.blockedReasons(),
-                signal.context());
+                signal.context(),
+                signal.sourceQuality().name(),
+                signal.signalProvenance().name(),
+                signal.replayPayload());
     }
 }

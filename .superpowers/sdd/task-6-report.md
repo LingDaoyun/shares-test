@@ -1,72 +1,61 @@
-# Task 6 Report: Trade Feedback Capture UI
+# Task 6 Report: Frontend V2 Client Types
 
 ## Status
 
-Implemented typed trade-feedback contracts, REST client helpers, a Zustand review-case store, and the reusable compact `TradeReviewButton` control.
+DONE
 
-## Build Evidence
+## Scope
 
-Ran from `/Users/mac/Documents/shares-test`:
+Implemented only the frontend V2 response contract and API client requested by Task 6.
 
-```text
-npm run build --prefix apps/web-react
-```
-
-Result: exit code 0. TypeScript completed and Vite built the production bundle successfully (`1667 modules transformed`, `built in 1.51s`).
-
-Also ran:
-
-```text
-git diff --check
-```
-
-Result: exit code 0 with no whitespace errors.
-
-## Changed Files
+Modified files:
 
 - `apps/web-react/src/types.ts`
 - `apps/web-react/src/api/client.ts`
-- `apps/web-react/src/store/tradeFeedbackStore.ts`
-- `apps/web-react/src/components/tradefeedback/TradeReviewButton.tsx`
-- `apps/web-react/src/pages/ShortTermPage.tsx`
-- `apps/web-react/src/pages/TechTrackerPage.tsx`
-- `apps/web-react/src/pages/MispricingPage.tsx`
-- `apps/web-react/src/pages/CycleTrialPage.tsx`
-- `apps/web-react/src/pages/DailySignalsPage.tsx`
 
-## Page Mapping Self-Review
+Added:
 
-- Short Term: `SHORT_TERM` / `short-term-right-side-v2`; renders only in `CandidateDetail` beside `WatchButton`, uses `candidate.latestPrice`, `report.generatedAt`, and the selected candidate snapshot. It does not nest a control in `CandidateRow`.
-- Hot Tracker: `HOT_TRACKER` / `hot-tracker-v2`; uses each stock's latest price, report generation timestamp, and stock snapshot.
-- Mispricing: `MISPRICING` / `mispricing-v2`; uses each asset's latest price, report generation timestamp, and asset snapshot.
-- Cycle Trial: `CYCLE_TRIAL` / `cycle-trial-v2`; uses each candidate's latest price, report generation timestamp, and candidate snapshot.
-- Daily Signals: `DAILY_SIGNAL` / `daily-signal-v1`; passes no price, so the same control is visibly disabled with the `缺少实时每股价格` tooltip and never invents a stale price.
+- `V2SignalResponse`
+- `V2SampleSignalParams`
+- `fetchV2SampleSignal(params)`
 
-All pages prefer `todayAdvice.actionLabel` and then `todayAdvice.action`, falling back to the row action fields. Scores use `finalScore`, except Daily Signals which uses `signal.score ?? signal.confidence`. No recommendation grouping, order, or filtering logic changed.
+The client builds the optional `companyName` and `strategyCode` query parameters only when provided, and calls the backend route through the existing Axios `/api` base URL as `/api/v2/signals/sample`.
 
-## Concerns
+## Verification
 
-There is no frontend test harness in this project, so static TypeScript/Vite verification and source-level mapping checks were used. The trade-feedback API was not exercised against a running backend in this task; error handling uses the existing toast and API error-message conventions.
+Command:
 
-## Task 6 Store Race Fix Evidence
-
-Updated `apps/web-react/src/store/tradeFeedbackStore.ts` to use one pure `mergeCase(current, incoming)` policy for both single-record responses and `loadCases()` list responses:
-
-- Valid ISO `updatedAt` versions are compared chronologically; older incoming records never replace newer current records, while newer records replace older records.
-- Equal versions prefer `TradeCaseDetail` over `TradeCaseSummary`, regardless of response order. Equal-shape ties use canonical serialization for deterministic selection.
-- Bulk loading applies the same policy with one cloned case map, then rebuilds `caseIdByRecommendation` from the winning records so stale summary data cannot discard fills/outcomes or leave stale recommendation keys.
-- The pre-existing modification to `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` was left untouched.
-
-Fresh verification from `/Users/mac/Documents/shares-test`:
-
-```text
-npm run build --prefix apps/web-react
+```bash
+cd apps/web-react
+npm run build
 ```
 
-Result: exit code 0. TypeScript completed and Vite built the production bundle successfully (`1667 modules transformed`, `built in 1.50s`).
+Result: PASS. TypeScript compilation (`tsc -b`) and the Vite production build completed successfully.
 
-```text
+Separate typecheck command: not available. `apps/web-react/package.json` defines `dev`, `build`, `preview`, and `test`, but no `typecheck` script.
+
+Additional check:
+
+```bash
 git diff --check
 ```
 
-Result: exit code 0 with no whitespace errors.
+Result: PASS.
+
+## Commit
+
+The task files were committed with:
+
+```text
+feat: add frontend v2 signal client
+```
+
+## Concerns
+
+The worktree contained a pre-existing modification to `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md`. It was not modified, staged, or reverted.
+
+## Review Fix: V2 Signal Audit Fields
+
+The controller response omitted audit fields that were already present on `StrategySignal` and persisted in the ledger payload. The response contract now exposes `sourceQuality`, `signalProvenance`, and `replayPayload`, and the frontend `V2SignalResponse` matches those JSON fields.
+
+`V2SignalControllerTest` now asserts the serialized audit values and replay payload source markers. The red test first failed because `$.sourceQuality` was absent from the JSON response; after exposing the fields, the targeted Maven test and frontend production build passed. `git diff --check` also passed.
