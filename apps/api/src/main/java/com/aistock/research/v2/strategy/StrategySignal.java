@@ -2,6 +2,10 @@ package com.aistock.research.v2.strategy;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -42,7 +46,7 @@ public record StrategySignal(
         evidenceSummary = evidenceSummary == null ? List.of() : List.copyOf(evidenceSummary);
         blockedReasons = blockedReasons == null ? List.of() : List.copyOf(blockedReasons);
         context = context == null ? Map.of() : Map.copyOf(context);
-        replayPayload = replayPayload == null ? Map.of() : Map.copyOf(replayPayload);
+        replayPayload = replayPayload == null ? Map.of() : freezeReplayPayload(replayPayload);
         validateStageAndAction(candidateStage, action, blockedReasons);
         validateSourceQuality(candidateStage, action, sourceQuality, dataConfidence);
         validateProvenance(action, signalProvenance);
@@ -113,6 +117,55 @@ public record StrategySignal(
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(field + " must not be blank");
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> freezeReplayPayload(Map<?, ?> replayPayload) {
+        return (Map<String, Object>) freezeJsonValue(replayPayload, new IdentityHashMap<>());
+    }
+
+    private static Object freezeJsonValue(Object value, IdentityHashMap<Object, Boolean> ancestors) {
+        if (value == null || value instanceof String || value instanceof Number || value instanceof Boolean) {
+            return value;
+        }
+        if (value instanceof Map<?, ?> map) {
+            enterReplayContainer(value, ancestors);
+            try {
+                Map<String, Object> frozen = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    if (!(entry.getKey() instanceof String key)) {
+                        throw invalidReplayPayload("map keys must be strings");
+                    }
+                    frozen.put(key, freezeJsonValue(entry.getValue(), ancestors));
+                }
+                return Collections.unmodifiableMap(frozen);
+            } finally {
+                ancestors.remove(value);
+            }
+        }
+        if (value instanceof List<?> list) {
+            enterReplayContainer(value, ancestors);
+            try {
+                List<Object> frozen = new ArrayList<>(list.size());
+                for (Object item : list) {
+                    frozen.add(freezeJsonValue(item, ancestors));
+                }
+                return Collections.unmodifiableList(frozen);
+            } finally {
+                ancestors.remove(value);
+            }
+        }
+        throw invalidReplayPayload("unsupported value type: " + value.getClass().getName());
+    }
+
+    private static void enterReplayContainer(Object value, IdentityHashMap<Object, Boolean> ancestors) {
+        if (ancestors.put(value, Boolean.TRUE) != null) {
+            throw invalidReplayPayload("cyclic map/list reference");
+        }
+    }
+
+    private static IllegalArgumentException invalidReplayPayload(String detail) {
+        return new IllegalArgumentException("replayPayload " + detail);
     }
 
     private static void validateStageAndAction(

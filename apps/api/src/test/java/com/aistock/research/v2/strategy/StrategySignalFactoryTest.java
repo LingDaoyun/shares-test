@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
@@ -90,6 +91,64 @@ class StrategySignalFactoryTest {
         assertThat(signal.replayPayload()).containsEntry("valuationContext", "industry-percentile");
         assertThatThrownBy(() -> signal.replayPayload().put("newKey", "newValue"))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void deeplyCopiesNestedReplayPayloadCollections() {
+        Map<String, Object> nestedMap = new HashMap<>();
+        nestedMap.put("label", "original");
+        List<Object> nestedList = new ArrayList<>();
+        nestedList.add(nestedMap);
+        Map<String, Object> replayPayload = new HashMap<>();
+        replayPayload.put("items", nestedList);
+
+        StrategySignal signal = StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.parse("2026-07-14T07:20:00Z"),
+                Instant.parse("2026-07-14T07:19:30Z"),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                Map.of(),
+                replayPayload);
+
+        nestedMap.put("label", "changed");
+        nestedList.add("changed");
+
+        Map<String, Object> frozenNestedMap = (Map<String, Object>) ((List<?>) signal.replayPayload().get("items")).get(0);
+        assertThat(frozenNestedMap).containsEntry("label", "original");
+        assertThat(signal.replayPayload().get("items")).asList().hasSize(1);
+        assertThatThrownBy(() -> frozenNestedMap.put("newKey", "newValue"))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> ((List<Object>) signal.replayPayload().get("items")).add("newValue"))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void rejectsUnsupportedReplayPayloadValues() {
+        assertThatThrownBy(() -> StrategySignalFactory.research(
+                StrategyCode.VALUE_REVERSION,
+                "value-reversion-v2.0.0",
+                "600036",
+                "招商银行",
+                Instant.now(),
+                Instant.now(),
+                CandidateStage.RESEARCH,
+                StrategyAction.NEXT_WATCH,
+                new BigDecimal("72.35"),
+                new BigDecimal("84.00"),
+                null,
+                null,
+                Map.of(),
+                Map.of("unsupported", new Object())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("replayPayload");
     }
 
     @Test
