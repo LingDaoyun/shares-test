@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,6 +59,18 @@ class TradingClockServiceTest {
         assertThat(snapshot.phase()).isEqualTo("MARKET_CLOSED_DAY");
         assertThat(snapshot.phaseLabel()).contains("休市");
         assertThat(snapshot.regularAuctionOpen()).isFalse();
+    }
+
+    @Test
+    void completesCurrentDailyBarOnlyAtOrAfterRegularClose() {
+        LocalDate tradeDate = LocalDate.parse("2026-07-07");
+        TradingClockService beforeClose = serviceAt("2026-07-07T06:59:00Z");
+        TradingClockService afterClose = serviceAt("2026-07-07T07:00:01Z");
+
+        assertThat(beforeClose.isCompletedDailyBar(tradeDate)).isFalse();
+        assertThat(afterClose.isCompletedDailyBar(tradeDate)).isTrue();
+        assertThat(beforeClose.isCompletedDailyBar(tradeDate.minusDays(1))).isTrue();
+        assertThat(afterClose.isCompletedDailyBar(tradeDate.plusDays(1))).isFalse();
     }
 
     private TradingClockService serviceAt(String instant) {

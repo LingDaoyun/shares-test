@@ -50,6 +50,17 @@ public class TradingClockService {
         return classify(LocalDateTime.now(clock.withZone(CHINA_MARKET_ZONE)));
     }
 
+    public boolean isCompletedDailyBar(LocalDate tradeDate) {
+        if (tradeDate == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now(clock.withZone(CHINA_MARKET_ZONE));
+        if (tradeDate.isBefore(now.toLocalDate())) {
+            return true;
+        }
+        return tradeDate.equals(now.toLocalDate()) && !now.toLocalTime().isBefore(REGULAR_CLOSE);
+    }
+
     public TradingSessionSnapshot classify(LocalDateTime dateTime) {
         if (isMarketClosedDay(dateTime.toLocalDate())) {
             boolean weekend = dateTime.getDayOfWeek() == DayOfWeek.SATURDAY || dateTime.getDayOfWeek() == DayOfWeek.SUNDAY;
