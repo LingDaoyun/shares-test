@@ -59,7 +59,7 @@ The cross is recent when it occurred within the latest three completed trading b
 A candidate is approaching a cross when all conditions hold:
 
 - `MA5 <= MA10` on the latest completed bar;
-- the normalized spread `(MA10 - MA5) / MA10 * 100` is between `0%` and `0.8%`;
+- the signed normalized spread `(MA5 - MA10) / MA10 * 100` is between `-0.8%` and `0%`;
 - MA5 has a positive three-bar slope;
 - the MA5-to-MA10 spread has narrowed over the latest three completed bars;
 - no confirmed cross occurred in the latest three completed bars.
