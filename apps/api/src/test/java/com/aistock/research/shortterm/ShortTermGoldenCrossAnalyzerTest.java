@@ -68,6 +68,44 @@ class ShortTermGoldenCrossAnalyzerTest {
         assertThat(result.evidenceStatus()).isEqualTo("UNAVAILABLE");
     }
 
+    @Test
+    void returnsUnavailableForNullOrIncompleteRows() {
+        List<EastMoneyKLine> rowsWithNullRow = new ArrayList<>(crossRows(0));
+        rowsWithNullRow.set(4, null);
+        List<EastMoneyKLine> rowsWithMissingDate = new ArrayList<>(crossRows(0));
+        rowsWithMissingDate.set(4, kLine(null, new BigDecimal("10.00")));
+        List<EastMoneyKLine> rowsWithMissingClose = new ArrayList<>(crossRows(0));
+        rowsWithMissingClose.set(4, kLine(LocalDate.parse("2026-01-05"), null));
+
+        assertThat(analyzer.analyze(rowsWithNullRow, true).state()).isEqualTo("UNAVAILABLE");
+        assertThat(analyzer.analyze(rowsWithMissingDate, true).state()).isEqualTo("UNAVAILABLE");
+        assertThat(analyzer.analyze(rowsWithMissingClose, true).state()).isEqualTo("UNAVAILABLE");
+    }
+
+    @Test
+    void returnsUnavailableForDuplicateTradeDates() {
+        List<EastMoneyKLine> rowsWithDuplicateDate = new ArrayList<>(crossRows(0));
+        EastMoneyKLine duplicateDate = rowsWithDuplicateDate.get(4);
+        rowsWithDuplicateDate.set(5, kLine(duplicateDate.tradeDate(), new BigDecimal("10.00")));
+
+        assertThat(analyzer.analyze(rowsWithDuplicateDate, true).state()).isEqualTo("UNAVAILABLE");
+    }
+
+    @Test
+    void ignoresUnfinishedBarMetricsWhenTheCompletedCrossRemainsConfirmed() {
+        List<EastMoneyKLine> completedRows = crossRows(0);
+        List<EastMoneyKLine> rowsWithUnfinishedBar = new ArrayList<>(completedRows);
+        rowsWithUnfinishedBar.add(kLine(LocalDate.parse("2026-01-22"), new BigDecimal("1.00")));
+
+        ShortTermGoldenCrossSnapshot completed = analyzer.analyze(completedRows, true);
+        ShortTermGoldenCrossSnapshot result = analyzer.analyze(rowsWithUnfinishedBar, false);
+
+        assertThat(result.state()).isEqualTo("CONFIRMED");
+        assertThat(result.evidenceStatus()).isEqualTo("COMPLETE");
+        assertThat(result.ma5Ma10SpreadPercent()).isEqualByComparingTo(completed.ma5Ma10SpreadPercent());
+        assertThat(result.maAlignment()).isEqualTo(completed.maAlignment());
+    }
+
     private List<EastMoneyKLine> crossRows(int barsAfterCross) {
         List<String> closes = new ArrayList<>(Collections.nCopies(20, "10.00"));
         closes.add("10.50");
@@ -88,11 +126,12 @@ class ShortTermGoldenCrossAnalyzerTest {
     private List<EastMoneyKLine> rows(List<String> closes) {
         LocalDate start = LocalDate.parse("2026-01-01");
         return IntStream.range(0, closes.size())
-                .mapToObj(index -> {
-                    BigDecimal close = new BigDecimal(closes.get(index));
-                    return new EastMoneyKLine("600001", start.plusDays(index), close, close,
-                            close, close, new BigDecimal("100000"), null);
-                })
+                .mapToObj(index -> kLine(start.plusDays(index), new BigDecimal(closes.get(index))))
                 .toList();
+    }
+
+    private EastMoneyKLine kLine(LocalDate tradeDate, BigDecimal close) {
+        return new EastMoneyKLine("600001", tradeDate, close, close, close, close,
+                new BigDecimal("100000"), null);
     }
 }

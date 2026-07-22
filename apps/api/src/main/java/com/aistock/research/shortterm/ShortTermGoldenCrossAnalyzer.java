@@ -8,6 +8,8 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 class ShortTermGoldenCrossAnalyzer {
@@ -21,16 +23,15 @@ class ShortTermGoldenCrossAnalyzer {
         }
 
         int latestIndex = rows.size() - 1;
-        BigDecimal latestSpread = spreadAt(rows, latestIndex);
-        BigDecimal latestMa5 = movingAverageAt(rows, latestIndex, 5);
-        BigDecimal latestMa10 = movingAverageAt(rows, latestIndex, 10);
-        BigDecimal latestMa20 = movingAverageAt(rows, latestIndex, 20);
-        if (latestSpread == null || latestMa20 == null) {
-            return ShortTermGoldenCrossSnapshot.unavailable();
-        }
-
         int latestCrossIndex = latestCrossIndex(rows, latestIndex);
         if (!latestBarCompleted && latestCrossIndex == latestIndex) {
+            BigDecimal latestSpread = spreadAt(rows, latestIndex);
+            BigDecimal latestMa5 = movingAverageAt(rows, latestIndex, 5);
+            BigDecimal latestMa10 = movingAverageAt(rows, latestIndex, 10);
+            BigDecimal latestMa20 = movingAverageAt(rows, latestIndex, 20);
+            if (latestSpread == null || latestMa20 == null) {
+                return ShortTermGoldenCrossSnapshot.unavailable();
+            }
             return snapshot(
                     rows.get(latestCrossIndex).tradeDate(),
                     0,
@@ -47,6 +48,13 @@ class ShortTermGoldenCrossAnalyzer {
         if (completedIndex < 19) {
             return ShortTermGoldenCrossSnapshot.unavailable();
         }
+        BigDecimal completedSpread = spreadAt(rows, completedIndex);
+        BigDecimal completedMa5 = movingAverageAt(rows, completedIndex, 5);
+        BigDecimal completedMa10 = movingAverageAt(rows, completedIndex, 10);
+        BigDecimal completedMa20 = movingAverageAt(rows, completedIndex, 20);
+        if (completedSpread == null || completedMa20 == null) {
+            return ShortTermGoldenCrossSnapshot.unavailable();
+        }
         int completedCrossIndex = latestCrossIndex(rows, completedIndex);
         int daysSinceCross = completedCrossIndex < 0 ? -1 : completedIndex - completedCrossIndex;
         boolean approaching = isApproaching(rows, completedIndex);
@@ -55,9 +63,9 @@ class ShortTermGoldenCrossAnalyzer {
             return snapshot(
                     rows.get(completedCrossIndex).tradeDate(),
                     daysSinceCross,
-                    latestSpread,
+                    completedSpread,
                     spreadTrend(rows, completedIndex),
-                    alignment(latestMa5, latestMa10, latestMa20, false),
+                    alignment(completedMa5, completedMa10, completedMa20, false),
                     "CONFIRMED",
                     3,
                     "COMPLETE"
@@ -67,9 +75,9 @@ class ShortTermGoldenCrossAnalyzer {
             return snapshot(
                     rows.get(completedCrossIndex).tradeDate(),
                     daysSinceCross,
-                    latestSpread,
+                    completedSpread,
                     spreadTrend(rows, completedIndex),
-                    alignment(latestMa5, latestMa10, latestMa20, false),
+                    alignment(completedMa5, completedMa10, completedMa20, false),
                     "ESTABLISHED",
                     1,
                     "COMPLETE"
@@ -79,9 +87,9 @@ class ShortTermGoldenCrossAnalyzer {
             return snapshot(
                     null,
                     null,
-                    latestSpread,
+                    completedSpread,
                     "NARROWING",
-                    alignment(latestMa5, latestMa10, latestMa20, true),
+                    alignment(completedMa5, completedMa10, completedMa20, true),
                     "APPROACHING",
                     2,
                     "COMPLETE"
@@ -90,9 +98,9 @@ class ShortTermGoldenCrossAnalyzer {
         return snapshot(
                 null,
                 null,
-                latestSpread,
+                completedSpread,
                 spreadTrend(rows, completedIndex),
-                alignment(latestMa5, latestMa10, latestMa20, false),
+                alignment(completedMa5, completedMa10, completedMa20, false),
                 "NONE",
                 0,
                 "COMPLETE"
@@ -100,13 +108,17 @@ class ShortTermGoldenCrossAnalyzer {
     }
 
     private List<EastMoneyKLine> sortedRows(List<EastMoneyKLine> source) {
-        if (source == null) {
+        if (source == null || source.stream().anyMatch(row -> row == null
+                || row.tradeDate() == null || row.close() == null)) {
             return List.of();
         }
-        return source.stream()
-                .filter(row -> row != null && row.tradeDate() != null && row.close() != null)
+        List<EastMoneyKLine> rows = source.stream()
                 .sorted(Comparator.comparing(EastMoneyKLine::tradeDate))
                 .toList();
+        Set<LocalDate> tradeDates = rows.stream()
+                .map(EastMoneyKLine::tradeDate)
+                .collect(Collectors.toSet());
+        return tradeDates.size() == rows.size() ? rows : List.of();
     }
 
     private int latestCrossIndex(List<EastMoneyKLine> rows, int throughIndex) {
