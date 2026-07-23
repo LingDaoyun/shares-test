@@ -17,6 +17,7 @@ import java.util.Objects;
 public class ShortTermTradePlanService {
 
     private static final BigDecimal ONE = BigDecimal.ONE;
+    private static final BigDecimal MINIMUM_PRICE_TICK = new BigDecimal("0.01");
     private static final BigDecimal FIRST_REDUCTION_RATIO = new BigDecimal("0.50");
     private static final String STRATEGY_LABEL = "隔夜超短波段";
 
@@ -43,7 +44,11 @@ public class ShortTermTradePlanService {
                 : tradingClockService.tradingDayAfter(tradeDate, 2);
         Instant validUntil = tradeDate == null
                 ? null
-                : ZonedDateTime.of(tradeDate, rules.entryEnd(), TradingClockService.CHINA_MARKET_ZONE).toInstant();
+                : ZonedDateTime.of(
+                        tradeDate,
+                        TradingClockService.SHORT_TERM_ENTRY_EXCLUSIVE_END,
+                        TradingClockService.CHINA_MARKET_ZONE
+                ).toInstant();
 
         if (referencePrice == null || referencePrice.compareTo(BigDecimal.ZERO) <= 0) {
             return plan(
@@ -104,15 +109,34 @@ public class ShortTermTradePlanService {
         BigDecimal volatilityStop = referencePrice.multiply(
                 ONE.subtract(stopPercent.movePointLeft(2))
         );
-        BigDecimal hardStopPrice = recentSupportPrice == null
-                ? volatilityStop
-                : recentSupportPrice.max(volatilityStop);
+        BigDecimal roundedReferencePrice = money(referencePrice);
+        BigDecimal roundedVolatilityStop = money(volatilityStop);
+        BigDecimal maximumValidStop = roundedReferencePrice.subtract(MINIMUM_PRICE_TICK);
+        if (roundedVolatilityStop.compareTo(roundedReferencePrice) >= 0) {
+            roundedVolatilityStop = maximumValidStop;
+        }
+        BigDecimal roundedSupportPrice = money(recentSupportPrice);
+        boolean usableSupport = roundedSupportPrice != null
+                && roundedSupportPrice.compareTo(BigDecimal.ZERO) > 0
+                && roundedSupportPrice.compareTo(roundedReferencePrice) < 0;
+        BigDecimal hardStopPrice = usableSupport
+                ? roundedSupportPrice.max(roundedVolatilityStop)
+                : roundedVolatilityStop;
+        if (hardStopPrice.compareTo(roundedReferencePrice) >= 0) {
+            hardStopPrice = maximumValidStop;
+        }
+        BigDecimal displayedStopPercent = roundedReferencePrice
+                .subtract(hardStopPrice)
+                .multiply(new BigDecimal("100"))
+                .divide(roundedReferencePrice, 2, RoundingMode.HALF_UP);
 
         List<String> analysisBasis = new ArrayList<>();
-        analysisBasis.add("参考入场价 " + money(referencePrice) + " 元");
+        analysisBasis.add("参考入场价 " + roundedReferencePrice + " 元");
         analysisBasis.add("ATR14 波动率 " + percent(volatilityPercent) + "%，目标价和止损价只由确定性公式生成");
-        if (recentSupportPrice != null) {
-            analysisBasis.add("近期支撑价 " + money(recentSupportPrice) + " 元");
+        if (usableSupport) {
+            analysisBasis.add("近期支撑价 " + roundedSupportPrice + " 元");
+        } else if (roundedSupportPrice != null) {
+            analysisBasis.add("近期支撑价 " + roundedSupportPrice + " 元不为正或不低于参考入场价，未用于硬止损");
         }
 
         return plan(
@@ -126,8 +150,8 @@ public class ShortTermTradePlanService {
                 priceAbove(referencePrice, firstTargetPercent),
                 secondTargetPercent,
                 priceAbove(referencePrice, secondTargetPercent),
-                stopPercent,
-                money(hardStopPrice),
+                displayedStopPercent,
+                hardStopPrice,
                 normalExitDate,
                 absoluteExitDate,
                 analysisBasis
@@ -231,7 +255,7 @@ public class ShortTermTradePlanService {
                 List.of(
                         "T+1 收益为正",
                         "T+1 收盘价高于 MA5",
-                        "T+1 收盘价高于信号日前收盘价",
+                        "T+1 收盘价高于信号日收盘价",
                         "行情新鲜度和风险闸门均未失败"
                 ),
                 openScenarios(),
