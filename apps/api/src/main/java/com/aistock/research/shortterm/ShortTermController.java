@@ -1,6 +1,10 @@
 package com.aistock.research.shortterm;
 
+import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
+import com.aistock.research.shortterm.schedule.ShortTermScheduledSnapshot;
+import com.aistock.research.shortterm.schedule.ShortTermScheduledSnapshotStore;
 import com.aistock.research.tradefeedback.RecommendationAttestationService;
+import com.aistock.research.trading.TradingClockService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -10,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 @RestController
 @RequestMapping("/api/short-term")
@@ -18,15 +23,24 @@ public class ShortTermController {
     private final ShortTermService shortTermService;
     private final ShortTermScanJobService scanJobService;
     private final RecommendationAttestationService attestationService;
+    private final TradingClockService tradingClockService;
+    private final ShortTermScheduledSnapshotStore snapshotStore;
+    private final ShortTermAutomationSettings automationSettings;
 
     public ShortTermController(
             ShortTermService shortTermService,
             ShortTermScanJobService scanJobService,
-            RecommendationAttestationService attestationService
+            RecommendationAttestationService attestationService,
+            TradingClockService tradingClockService,
+            ShortTermScheduledSnapshotStore snapshotStore,
+            ShortTermAutomationSettings automationSettings
     ) {
         this.shortTermService = shortTermService;
         this.scanJobService = scanJobService;
         this.attestationService = attestationService;
+        this.tradingClockService = tradingClockService;
+        this.snapshotStore = snapshotStore;
+        this.automationSettings = automationSettings;
     }
 
     @GetMapping("/report")
@@ -64,5 +78,13 @@ public class ShortTermController {
     @GetMapping("/scan-jobs/{jobId}")
     public ShortTermScanJobStatus scanJob(@PathVariable String jobId) {
         return attestationService.attest(scanJobService.get(jobId));
+    }
+
+    @GetMapping("/scheduled-snapshots/latest")
+    public ShortTermScheduledSnapshot latestScheduledSnapshot() {
+        LocalDate today = tradingClockService.currentMarketDate();
+        return snapshotStore.latest(today)
+                .orElseGet(() -> ShortTermScheduledSnapshot.waiting(
+                        today, "等待 " + automationSettings.preselectCron() + " 自动预选"));
     }
 }

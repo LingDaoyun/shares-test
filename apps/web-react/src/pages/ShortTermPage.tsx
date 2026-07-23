@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CandlestickChart, RefreshCw, SlidersHorizontal } from 'lucide-react'
-import { fetchRightSideBacktest, fetchShortTermScanJob, startShortTermScanJob } from '../api/client'
+import { fetchLatestShortTermScheduledSnapshot, fetchRightSideBacktest, fetchShortTermScanJob, startShortTermScanJob } from '../api/client'
 import type { ShortTermParams } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -9,13 +9,16 @@ import { Card } from '../components/ui/Card'
 import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOverlay'
 import { Loader } from '../components/ui/Loader'
 import { SectionBanner } from '../components/ui/SectionBanner'
+import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
+import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
+import type { ReportOrigin } from '../components/shortterm/ScheduledSnapshotStatus'
 import { CompositeScoreBadge, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
 import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCounterEvidenceTone, goldenCrossDisplayLabel, goldenCrossSpreadLabel, goldenCrossSpreadTrendLabel, goldenCrossTone, goldenCrossV2Context } from '../lib/shortTermGoldenCross'
-import type { BacktestReport, BacktestSummary, ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermReport, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { BacktestReport, BacktestSummary, ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermReport, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -56,6 +59,8 @@ const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'n
 export function ShortTermPage() {
   const [draft, setDraft] = useState<DraftParams>(DEFAULT_DRAFT)
   const [params, setParams] = useState<DraftParams>(DEFAULT_DRAFT)
+  const [snapshot, setSnapshot] = useState<ShortTermScheduledSnapshot | null>(null)
+  const [origin, setOrigin] = useState<ReportOrigin>('SCHEDULED')
   const [report, setReport] = useState<ShortTermReport | null>(null)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   const [backtestReport, setBacktestReport] = useState<BacktestReport | null>(null)
@@ -65,68 +70,143 @@ export function ShortTermPage() {
   const [error, setError] = useState('')
   const [scanMessage, setScanMessage] = useState('')
   const [activeJobId, setActiveJobId] = useState('')
+  const manualRunGeneration = useRef(0)
+  const pollTimer = useRef<number | undefined>(undefined)
+  const preparedSnapshotRequest = useRef<ReturnType<typeof fetchLatestShortTermScheduledSnapshot> | null>(null)
+  const manualScanRequested = useRef(false)
 
   useEffect(() => {
     let alive = true
-    let timer: number | undefined
+    setLoading(true)
+    setError('')
+    setScanMessage('读取当日计划快照')
+    const request = preparedSnapshotRequest.current ?? fetchLatestShortTermScheduledSnapshot()
+    preparedSnapshotRequest.current = request
+    request
+      .then((prepared) => {
+        if (!alive || manualScanRequested.current) return
+        setSnapshot(prepared)
+        setOrigin('SCHEDULED')
+        setReport(visibleSnapshotReport(prepared))
+      })
+      .catch((e) => {
+        if (alive) setError(extractErrorMessage(e))
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+      manualRunGeneration.current += 1
+      if (pollTimer.current !== undefined) window.clearTimeout(pollTimer.current)
+    }
+  }, [])
+
+  async function runManualScan(nextParams: DraftParams) {
+    manualScanRequested.current = true
+    const generation = manualRunGeneration.current + 1
+    manualRunGeneration.current = generation
+    if (pollTimer.current !== undefined) window.clearTimeout(pollTimer.current)
+
+    setParams(nextParams)
+    setOrigin('MANUAL')
     setLoading(true)
     setError('')
     setReport(null)
     setSelectedSymbol(null)
     setScanMessage('提交实时扫描任务')
     setActiveJobId('')
+    setSnapshot((current) => ({
+      tradeDate: current?.tradeDate ?? currentShanghaiDate(),
+      stage: 'MANUAL',
+      status: 'RUNNING',
+      message: '提交实时扫描任务',
+      dataCutoffAt: null,
+      completedAt: null,
+      blockedReasons: [],
+      report: null
+    }))
 
-    async function runScan() {
-      try {
-        const started = await startShortTermScanJob(toApiParams(params))
-        if (!alive) return
-        setActiveJobId(started.jobId)
-        setScanMessage(started.message || '短线右侧实时扫描中')
+    try {
+      const started = await startShortTermScanJob(toApiParams(nextParams))
+      if (manualRunGeneration.current !== generation) return
+      setActiveJobId(started.jobId)
+      setScanMessage(started.message || '短线右侧实时扫描中')
+      setSnapshot((current) => current ? {
+        ...current,
+        message: started.message || '短线右侧实时扫描中'
+      } : current)
 
-        const poll = async () => {
-          try {
-            const job = await fetchShortTermScanJob(started.jobId)
-            if (!alive) return
-            setScanMessage(job.message || '短线右侧实时扫描中')
-            if (job.status === 'SUCCEEDED') {
-              if (job.report) {
-                setReport(job.report)
-                setError('')
-              } else {
-                setError('短线扫描任务已完成，但没有返回报告。')
-              }
-              setLoading(false)
-              return
+      const poll = async () => {
+        try {
+          const job = await fetchShortTermScanJob(started.jobId)
+          if (manualRunGeneration.current !== generation) return
+          setScanMessage(job.message || '短线右侧实时扫描中')
+          if (job.status === 'SUCCEEDED') {
+            if (job.report) {
+              const manualSnapshot = snapshotFromManualReport(job.report, job.message || '手动扫描完成')
+              setSnapshot(manualSnapshot)
+              setReport(job.report)
+              setError('')
+            } else {
+              setSnapshot((current) => current ? {
+                ...current,
+                status: 'FAILED',
+                message: '短线扫描任务已完成，但没有返回报告。',
+                completedAt: new Date().toISOString()
+              } : current)
+              setError('短线扫描任务已完成，但没有返回报告。')
             }
-            if (job.status === 'FAILED') {
-              setError(job.message || '短线右侧实时扫描失败')
-              setLoading(false)
-              return
-            }
-            timer = window.setTimeout(poll, 1500)
-          } catch (e) {
-            if (alive) {
-              setError(extractErrorMessage(e))
-              setLoading(false)
-            }
+            setLoading(false)
+            return
+          }
+          if (job.status === 'FAILED') {
+            const message = job.message || '短线右侧实时扫描失败'
+            setSnapshot((current) => current ? {
+              ...current,
+              status: 'FAILED',
+              message,
+              completedAt: job.finishedAt
+            } : current)
+            setError(message)
+            setLoading(false)
+            return
+          }
+          setSnapshot((current) => current ? {
+            ...current,
+            message: job.message || '短线右侧实时扫描中'
+          } : current)
+          pollTimer.current = window.setTimeout(() => void poll(), 1500)
+        } catch (e) {
+          if (manualRunGeneration.current === generation) {
+            const message = extractErrorMessage(e)
+            setSnapshot((current) => current ? {
+              ...current,
+              status: 'FAILED',
+              message,
+              completedAt: new Date().toISOString()
+            } : current)
+            setError(message)
+            setLoading(false)
           }
         }
+      }
 
-        await poll()
-      } catch (e) {
-        if (alive) {
-          setError(extractErrorMessage(e))
-          setLoading(false)
-        }
+      await poll()
+    } catch (e) {
+      if (manualRunGeneration.current === generation) {
+        const message = extractErrorMessage(e)
+        setSnapshot((current) => current ? {
+          ...current,
+          status: 'FAILED',
+          message,
+          completedAt: new Date().toISOString()
+        } : current)
+        setError(message)
+        setLoading(false)
       }
     }
-
-    runScan()
-    return () => {
-      alive = false
-      if (timer !== undefined) window.clearTimeout(timer)
-    }
-  }, [params])
+  }
 
   useEffect(() => {
     if (selectedSymbol && !report?.candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
@@ -190,12 +270,14 @@ export function ShortTermPage() {
             variant="primary"
             icon={<RefreshCw className="h-4 w-4" />}
             loading={loading}
-            onClick={() => setParams({ ...draft })}
+            onClick={() => void runManualScan({ ...draft })}
           >
             重新扫描
           </Button>
         }
       />
+
+      {snapshot ? <ScheduledSnapshotStatus snapshot={snapshot} origin={origin} /> : null}
 
       <Card
         title={
@@ -221,7 +303,7 @@ export function ShortTermPage() {
           <p className="text-xs leading-relaxed text-ink-500">
             参考带只影响估值语境分和风险提示，不决定股票是否入选；低流动性、长期横盘、急拉和离均线过远仍受约束。
           </p>
-          <Button variant="secondary" onClick={() => setParams({ ...draft })}>应用阈值</Button>
+          <Button variant="secondary" disabled={loading} onClick={() => void runManualScan({ ...draft })}>应用阈值</Button>
         </div>
       </Card>
 
@@ -371,6 +453,30 @@ function toApiParams(params: DraftParams): ShortTermParams {
   }
 }
 
+function visibleSnapshotReport(snapshot: ShortTermScheduledSnapshot) {
+  if (snapshot.status === 'DATA_BLOCKED' || snapshot.status === 'FAILED' || snapshot.status === 'RUNNING') {
+    return null
+  }
+  return snapshot.report
+}
+
+function snapshotFromManualReport(report: ShortTermReport, message: string): ShortTermScheduledSnapshot {
+  return {
+    tradeDate: report.dataCutoffAt?.slice(0, 10) ?? currentShanghaiDate(),
+    stage: 'MANUAL',
+    status: report.candidates.length ? 'FINAL_READY' : 'NO_TRADE',
+    message,
+    dataCutoffAt: report.dataCutoffAt,
+    completedAt: report.generatedAt,
+    blockedReasons: [],
+    report
+  }
+}
+
+function currentShanghaiDate() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
+}
+
 function shortTermDiagnostics(report: ShortTermReport | null) {
   const candidates = report?.candidates ?? []
   return {
@@ -487,6 +593,8 @@ function CandidateDetail({
             />
           </div>
         </div>
+
+        <OvernightTradePlanPanel plan={candidate.tradePlan} />
 
         <p className="text-sm leading-relaxed text-ink-600">{candidate.reason}</p>
 

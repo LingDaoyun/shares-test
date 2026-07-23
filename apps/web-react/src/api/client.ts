@@ -10,6 +10,7 @@ import type {
   MispricingReport,
   RecommendationEvidenceBundle,
   ShortTermReport,
+  ShortTermScheduledSnapshot,
   ShortTermScanJobStatus,
   RuleDefinition,
   RuntimeConfigSnapshot,
@@ -91,6 +92,10 @@ export interface ShortTermParams {
 
 export function fetchShortTermReport(params: ShortTermParams = {}) {
   return http.get<ShortTermReport>('/short-term/report', { params }).then((res) => res.data)
+}
+
+export function fetchLatestShortTermScheduledSnapshot() {
+  return http.get<ShortTermScheduledSnapshot>('/short-term/scheduled-snapshots/latest').then((res) => res.data)
 }
 
 export function startShortTermScanJob(params: ShortTermParams = {}) {

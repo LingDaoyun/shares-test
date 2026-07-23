@@ -469,6 +469,53 @@ export interface ShortTermTailSignal {
   riskControls: string[]
 }
 
+export interface ShortTermOpenScenario {
+  code: string
+  label: string
+  condition: string
+  action: string
+  invalidationRules: string[]
+}
+
+export interface ShortTermTradePlan {
+  strategyLabel: string
+  status: string
+  entryWindow: string
+  validUntil: string
+  referenceEntryPrice: number | null
+  entryLow: number | null
+  entryHigh: number | null
+  maxPositionRatio: number | null
+  maxT2PositionRatio: number | null
+  firstTargetPercent: number | null
+  firstTargetPrice: number | null
+  firstReductionRatio: number | null
+  secondTargetPercent: number | null
+  secondTargetPrice: number | null
+  hardStopPercent: number | null
+  hardStopPrice: number | null
+  trailingDrawdownPercent: number | null
+  trailingStopRule: string
+  normalExitDate: string
+  normalExitTime: string
+  absoluteExitDate: string
+  absoluteExitTime: string
+  t2ExtensionConditions: string[]
+  openScenarios: ShortTermOpenScenario[]
+  analysisBasis: string[]
+  riskWarnings: string[]
+}
+
+export interface ShortTermCoverageSnapshot {
+  expectedCount: number
+  fetchedCount: number
+  missingCount: number
+  coverageRatio: number
+  executionReliable: boolean
+  source: string
+  fetchedAt: string | null
+}
+
 export interface QuoteFreshnessSnapshot {
   status: string
   statusLabel: string
@@ -512,6 +559,7 @@ export interface ShortTermCandidate {
   exitRules: string[]
   evidenceCompleteness: EvidenceCompleteness
   evidence: ShortTermEvidence[]
+  tradePlan: ShortTermTradePlan | null
 }
 
 export interface ShortTermReport {
@@ -530,7 +578,29 @@ export interface ShortTermReport {
   marketSentiment: ShortTermMarketSentiment
   exclusions: ShortTermRiskExclusion[]
   tradeCaptureTokens: Record<string, string>
+  coverage: ShortTermCoverageSnapshot
+  reviewedSymbols: string[]
+  dataCutoffAt: string | null
   generatedAt: string
+}
+
+export type ShortTermSnapshotStatus =
+  | 'RUNNING'
+  | 'PRESELECT_READY'
+  | 'FINAL_READY'
+  | 'NO_TRADE'
+  | 'DATA_BLOCKED'
+  | 'FAILED'
+
+export interface ShortTermScheduledSnapshot {
+  tradeDate: string
+  stage: 'PRESELECT' | 'FINAL' | 'READINESS_GUARD' | 'MANUAL'
+  status: ShortTermSnapshotStatus
+  message: string
+  dataCutoffAt: string | null
+  completedAt: string | null
+  blockedReasons: string[]
+  report: ShortTermReport | null
 }
 
 export interface ShortTermMarketSentiment {
