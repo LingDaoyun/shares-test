@@ -184,7 +184,8 @@ public class RecommendationAttestationService {
                 report.scope(), report.universeCount(), report.reviewedCount(), report.klineReviewedCount(),
                 report.candidateCount(), report.quoteNote(), report.tradingSession(), report.methodology(),
                 report.ruleSet(), report.weightProfile(), report.candidates(), report.hotDirections(),
-                report.marketSentiment(), report.exclusions(), Map.copyOf(tokens), report.generatedAt());
+                report.marketSentiment(), report.exclusions(), Map.copyOf(tokens), report.coverage(),
+                report.reviewedSymbols(), report.dataCutoffAt(), report.generatedAt());
     }
 
     public ShortTermScanJobStatus attest(ShortTermScanJobStatus status) {

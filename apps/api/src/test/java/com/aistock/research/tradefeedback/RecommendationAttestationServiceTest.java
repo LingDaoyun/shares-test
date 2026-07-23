@@ -2,6 +2,8 @@ package com.aistock.research.tradefeedback;
 
 import com.aistock.research.tech.TechTrackedStock;
 import com.aistock.research.tech.TechTrackingReport;
+import com.aistock.research.shortterm.ShortTermCoverageSnapshot;
+import com.aistock.research.shortterm.ShortTermReport;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -127,6 +129,47 @@ class RecommendationAttestationServiceTest {
         TechTrackingReport attested = service.attest(report);
 
         assertThat(attested.tradeCaptureTokens()).isEmpty();
+    }
+
+    @Test
+    void preservesShortTermCoverageAndCutoffWhenAddingAttestations() {
+        RecommendationAttestationService service = registry(8, Duration.ofMinutes(30));
+        ShortTermCoverageSnapshot coverage = new ShortTermCoverageSnapshot(
+                100,
+                95,
+                5,
+                new BigDecimal("0.9500"),
+                true,
+                "实时行情",
+                NOW.minusSeconds(10)
+        );
+        ShortTermReport report = new ShortTermReport(
+                "全市场短线",
+                95,
+                2,
+                2,
+                0,
+                "测试",
+                null,
+                List.of(),
+                null,
+                null,
+                List.of(),
+                List.of(),
+                null,
+                List.of(),
+                Map.of(),
+                coverage,
+                List.of("600001", "600002"),
+                NOW.minusSeconds(20),
+                NOW
+        );
+
+        ShortTermReport attested = service.attest(report);
+
+        assertThat(attested.coverage()).isEqualTo(coverage);
+        assertThat(attested.reviewedSymbols()).containsExactly("600001", "600002");
+        assertThat(attested.dataCutoffAt()).isEqualTo(NOW.minusSeconds(20));
     }
 
     private TechTrackedStock stock(String symbol, Instant marketTimestamp) {

@@ -32,6 +32,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -66,11 +67,12 @@ public class ShortTermService {
     private static final BigDecimal GROSS_MARGIN_ACCEPTABLE = RatioScale.fromPercentPoints("15");
     private static final BigDecimal LARGE_TURNOVER_TAIL_AMOUNT = new BigDecimal("2000000000");
     private static final BigDecimal MEDIUM_TURNOVER_TAIL_AMOUNT = new BigDecimal("800000000");
-    private static final LocalTime TAIL_CONFIRM_TIME = LocalTime.of(14, 57);
-    private static final LocalTime REGULAR_CLOSE_TIME = LocalTime.of(15, 0);
+    private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
+    private static final LocalTime ACTIONABLE_TAIL_START = LocalTime.of(14, 45);
+    private static final LocalTime ACTIONABLE_TAIL_END_EXCLUSIVE = LocalTime.of(14, 57);
     private static final LocalTime POST_CLOSE_FIXED_PRICE_START = LocalTime.of(15, 5);
     private static final LocalTime POST_CLOSE_FIXED_PRICE_END = LocalTime.of(15, 30);
-    private static final String TAIL_CONFIRM_LABEL = "14:57-15:00";
+    private static final String ACTIONABLE_TAIL_LABEL = "14:45-14:56";
     private static final ShortTermWeightProfile WEIGHT_PROFILE = new ShortTermWeightProfile(
             new BigDecimal("0.10"),
             new BigDecimal("0.30"),
@@ -221,7 +223,8 @@ public class ShortTermService {
             BigDecimal maxDistanceToMa20,
             BigDecimal minFinancialScore
     ) {
-        ShortTermRuleSet ruleSet = resolveRuleSet(
+        return report(new ShortTermScanRequest(
+                limit,
                 scanLimit,
                 klineLimit,
                 minAmount,
@@ -231,6 +234,37 @@ public class ShortTermService {
                 maxEntryRise,
                 maxDistanceToMa20,
                 minFinancialScore
+        ));
+    }
+
+    public ShortTermReport report(ShortTermScanRequest request) {
+        return buildReport(request == null ? ShortTermScanRequest.empty() : request, Set.of());
+    }
+
+    public ShortTermReport finalReport(ShortTermScanRequest request, Set<String> preselectedSymbols) {
+        if (preselectedSymbols == null || preselectedSymbols.isEmpty()) {
+            throw new IllegalArgumentException("当日预选股票为空，不能执行尾盘终选");
+        }
+        return buildReport(
+                request == null ? ShortTermScanRequest.empty() : request,
+                Set.copyOf(preselectedSymbols)
+        );
+    }
+
+    private ShortTermReport buildReport(
+            ShortTermScanRequest request,
+            Set<String> preselectedSymbols
+    ) {
+        ShortTermRuleSet ruleSet = resolveRuleSet(
+                request.scanLimit(),
+                request.klineLimit(),
+                request.minAmount(),
+                request.maxPe(),
+                request.maxPb(),
+                request.minVolumeRatio(),
+                request.maxEntryRise(),
+                request.maxDistanceToMa20(),
+                request.minFinancialScore()
         );
 
         AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(ruleSet.scanLimit());
@@ -257,9 +291,17 @@ public class ShortTermService {
                         (left, right) -> left,
                         LinkedHashMap::new
                 ));
-        List<EastMoneyQuote> tradableQuotes = preFilteredQuotes.stream()
+        List<EastMoneyQuote> reviewPool = preselectedSymbols.isEmpty()
+                ? preFilteredQuotes
+                : preFilteredQuotes.stream()
+                .filter(quote -> preselectedSymbols.contains(quote.symbol()))
+                .toList();
+        List<EastMoneyQuote> tradableQuotes = reviewPool.stream()
                 .sorted(Comparator.comparing((EastMoneyQuote quote) -> preliminaryScore(quote, ruleSet, hotDirectionMap)).reversed())
                 .limit(ruleSet.klineLimit())
+                .toList();
+        List<String> reviewedSymbols = tradableQuotes.stream()
+                .map(EastMoneyQuote::symbol)
                 .toList();
 
         Map<String, List<EastMoneyKLine>> klineMap = tradableQuotes.parallelStream()
@@ -280,7 +322,7 @@ public class ShortTermService {
                         .thenComparing(Comparator.comparing((TechnicalCandidate item) -> item.technicalScore()
                                 .multiply(new BigDecimal("0.70"))
                                 .add(item.volumeScore().multiply(new BigDecimal("0.30")))).reversed()))
-                .limit(Math.max(resolveLimit(limit) * 4L, 28L))
+                .limit(Math.max(resolveLimit(request.limit()) * 4L, 28L))
                 .toList();
 
         Map<String, ShortTermFinancialSnapshot> financialMap = technicalCandidates.parallelStream()
@@ -299,7 +341,7 @@ public class ShortTermService {
                         .thenComparing(item -> item.candidate().score().finalScore(), Comparator.reverseOrder()))
                 .toList();
 
-        int safeLimit = Math.min(resolveLimit(limit), scored.size());
+        int safeLimit = Math.min(resolveLimit(request.limit()), scored.size());
         List<ShortTermCandidate> candidates = IntStream.range(0, safeLimit)
                 .mapToObj(index -> attachTradePlan(
                         enrichTailSignal(rerank(scored.get(index).candidate(), index + 1)),
@@ -326,7 +368,7 @@ public class ShortTermService {
                         "当前热门方向会提高候选优先级，但不能覆盖 K 线结构、量能确认和财报质量。",
                         "涨幅过大、距离 20 日线过远、120 日位置过高、量能过度放大会被视为追涨风险，宁可等待回踩确认。",
                         "最终建议只做短线纪律提示：右侧早期也以分批试错为主，跌破关键均线要退出。",
-                        "14:57 前只筛候选不执行买点；14:57-15:00 收盘集合竞价必须复核分时、均价线、尾盘成交占比和高点回落。15:05-15:30 盘后固定价格单独分析，不能混作普通尾盘买点。"
+                        "14:45-14:56 使用当时已经产生的分时、均价线、尾盘成交占比和高点回落完成普通股票尾盘决策；14:57 后数据只用于历史复盘，不能反推当日买点。"
                 ),
                 ruleSet,
                 WEIGHT_PROFILE,
@@ -334,6 +376,10 @@ public class ShortTermService {
                 hotDirections,
                 marketSentiment,
                 exclusions,
+                Map.of(),
+                coverageSnapshot(quoteSnapshot),
+                reviewedSymbols,
+                dataCutoffAt(quoteUniverse, candidates),
                 Instant.now()
         );
     }
@@ -351,7 +397,7 @@ public class ShortTermService {
         String coverage = snapshot.fetchedCount() + "/" + snapshot.expectedCount();
         String goldenCrossNote = " 金叉K线复核 " + klineReviewedCount + "/" + reviewedCount
                 + "；金叉排序只代表已复核样本，不代表全市场每只股票均已计算。";
-        if (snapshot.complete()) {
+        if (hasReliableMarketCoverage(snapshot)) {
             return QUOTE_NOTE + " 本轮行情覆盖 " + coverage + "，来源：" + snapshot.source() + "。" + goldenCrossNote;
         }
         return QUOTE_NOTE + " 本轮行情覆盖不足 " + coverage + "，缺失 " + snapshot.missingCount()
@@ -999,15 +1045,70 @@ public class ShortTermService {
     }
 
     private boolean hasReliableMarketCoverage(AshareQuoteSnapshot snapshot) {
+        return coverageSnapshot(snapshot).executionReliable();
+    }
+
+    private ShortTermCoverageSnapshot coverageSnapshot(AshareQuoteSnapshot snapshot) {
         if (snapshot == null || snapshot.expectedCount() <= 0) {
-            return false;
-        }
-        if (snapshot.complete()) {
-            return true;
+            return ShortTermCoverageSnapshot.unreliable();
         }
         BigDecimal ratio = BigDecimal.valueOf(snapshot.fetchedCount())
                 .divide(BigDecimal.valueOf(snapshot.expectedCount()), 4, RoundingMode.HALF_UP);
-        return ratio.compareTo(MIN_RELIABLE_MARKET_COVERAGE) >= 0;
+        Instant now = tradingClockService.currentMarketDateTime().atZone(SHANGHAI).toInstant();
+        boolean validSource = snapshot.source() != null && !snapshot.source().isBlank();
+        boolean freshSnapshot = snapshot.fetchedAt() != null
+                && !snapshot.fetchedAt().isBefore(now.minus(automationSettings.freshness()))
+                && !snapshot.fetchedAt().isAfter(now.plusSeconds(5));
+        boolean reliable = ratio.compareTo(MIN_RELIABLE_MARKET_COVERAGE) >= 0
+                && validSource
+                && freshSnapshot;
+        return new ShortTermCoverageSnapshot(
+                snapshot.expectedCount(),
+                snapshot.fetchedCount(),
+                snapshot.missingCount(),
+                ratio,
+                reliable,
+                validSource ? snapshot.source() : "未知",
+                snapshot.fetchedAt()
+        );
+    }
+
+    private Instant dataCutoffAt(
+            List<EastMoneyQuote> quoteUniverse,
+            List<ShortTermCandidate> candidates
+    ) {
+        Instant quoteCutoff = quoteUniverse.stream()
+                .map(quote -> quote.marketTimestamp() == null ? quote.fetchedAt() : quote.marketTimestamp())
+                .filter(value -> value != null)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
+        Instant tailCutoff = candidates.stream()
+                .map(ShortTermCandidate::tailSignal)
+                .filter(signal -> signal != null && signal.actionableTailWindow())
+                .map(this::tailCutoffAt)
+                .filter(value -> value != null)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
+        if (quoteCutoff == null) {
+            return tailCutoff;
+        }
+        if (tailCutoff == null) {
+            return quoteCutoff;
+        }
+        return quoteCutoff.isAfter(tailCutoff) ? quoteCutoff : tailCutoff;
+    }
+
+    private Instant tailCutoffAt(ShortTermTailSignal signal) {
+        try {
+            LocalDate date = LocalDate.parse(signal.tradeDate());
+            LocalTime time = LocalTime.parse(signal.latestMinute());
+            if (time.isBefore(ACTIONABLE_TAIL_START) || !time.isBefore(ACTIONABLE_TAIL_END_EXCLUSIVE)) {
+                return null;
+            }
+            return LocalDateTime.of(date, time).atZone(SHANGHAI).toInstant();
+        } catch (RuntimeException exception) {
+            return null;
+        }
     }
 
     private boolean isChaseRisk(EastMoneyQuote quote, ShortTermTechnicalSnapshot technical, ShortTermRuleSet ruleSet) {
@@ -1236,7 +1337,7 @@ public class ShortTermService {
                     null,
                     null,
                     new BigDecimal("35"),
-                    List.of("当天 1 分钟分时数据暂不可用，不能确认 14:57-15:00 收盘承接。"),
+                    List.of("当天 1 分钟分时数据暂不可用，不能确认 14:45-14:56 可执行尾盘承接。"),
                     List.of("尾盘分时缺失时不执行短线买入。")
             );
         }
@@ -1258,7 +1359,7 @@ public class ShortTermService {
                     null,
                     null,
                     new BigDecimal("35"),
-                    List.of("当天 1 分钟分时为空，无法判断 14:57-15:00 收盘承接。"),
+                    List.of("当天 1 分钟分时为空，无法判断 14:45-14:56 可执行尾盘承接。"),
                     List.of("没有当天分时证据时不执行短线买入。")
             );
         }
@@ -1289,74 +1390,104 @@ public class ShortTermService {
             }
             points = expectedDayPoints;
         }
-        EastMoneyIntradayPoint latest = points.get(points.size() - 1);
-        String tradeDate = latest.minute().toLocalDate().toString();
-        String latestMinute = latest.minute().toLocalTime().toString();
-        if (latest.minute().toLocalTime().isBefore(TAIL_CONFIRM_TIME)) {
+        LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
+        points = points.stream()
+                .filter(point -> !point.minute().toLocalDate().equals(decisionAt.toLocalDate())
+                        || !point.minute().isAfter(decisionAt))
+                .toList();
+        if (points.isEmpty()) {
+            return new ShortTermTailSignal(
+                    "UNAVAILABLE",
+                    "点时分时缺失",
+                    false,
+                    expectedTradeDate == null ? null : expectedTradeDate.toString(),
+                    decisionAt.toLocalTime().toString(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    new BigDecimal("35"),
+                    List.of("截至服务端决策时刻没有可用分时，不能读取随后产生的分钟数据。"),
+                    List.of("点时证据缺失时不执行短线买入。")
+            );
+        }
+        EastMoneyIntradayPoint latestAvailableForDay = points.get(points.size() - 1);
+        String tradeDate = latestAvailableForDay.minute().toLocalDate().toString();
+        String latestAvailableMinute = latestAvailableForDay.minute().toLocalTime().toString();
+        if (latestAvailableForDay.minute().toLocalTime().isBefore(ACTIONABLE_TAIL_START)) {
             return new ShortTermTailSignal(
                     "NOT_READY",
-                    "等14:57",
+                    "等14:45",
                     false,
                     tradeDate,
-                    latestMinute,
-                    money(latest.close()),
+                    latestAvailableMinute,
+                    money(latestAvailableForDay.close()),
                     null,
                     null,
                     null,
-                    latest.averagePrice() == null ? null : scale(percent(latest.close().subtract(latest.averagePrice()), latest.averagePrice())),
+                    latestAvailableForDay.averagePrice() == null ? null
+                            : scale(percent(latestAvailableForDay.close().subtract(latestAvailableForDay.averagePrice()),
+                            latestAvailableForDay.averagePrice())),
                     null,
                     null,
                     new BigDecimal("40"),
-                    List.of("当前最新分时到 " + latestMinute + "，尚未进入 14:57-15:00 收盘集合竞价确认窗口。"),
-                    List.of("14:57 前只筛候选，不把盘中涨幅当作买点。", "等收盘集合竞价站稳均价线且回落幅度可控后再评估。")
+                    List.of("当前最新分时到 " + latestAvailableMinute + "，尚未进入 14:45-14:56 可执行尾盘窗口。"),
+                    List.of("14:45 前只筛候选，不把盘中涨幅当作买点。", "进入可执行窗口后再复核均价线、回落和成交占比。")
             );
         }
 
         List<EastMoneyIntradayPoint> tailPoints = points.stream()
-                .filter(point -> !point.minute().toLocalTime().isBefore(TAIL_CONFIRM_TIME))
-                .filter(point -> !point.minute().toLocalTime().isAfter(REGULAR_CLOSE_TIME))
+                .filter(point -> !point.minute().toLocalTime().isBefore(ACTIONABLE_TAIL_START))
+                .filter(point -> point.minute().toLocalTime().isBefore(ACTIONABLE_TAIL_END_EXCLUSIVE))
                 .toList();
-        if (tailPoints.isEmpty() && isPostCloseFixedPriceMinute(latest.minute().toLocalTime())) {
+        if (tailPoints.isEmpty() && isPostCloseFixedPriceMinute(latestAvailableForDay.minute().toLocalTime())) {
             return new ShortTermTailSignal(
                     "POST_CLOSE_FIXED_PRICE",
                     "盘后固定价",
                     false,
                     tradeDate,
-                    latestMinute,
-                    money(latest.close()),
+                    latestAvailableMinute,
+                    money(latestAvailableForDay.close()),
                     null,
                     null,
                     null,
-                    latest.averagePrice() == null ? null : scale(percent(latest.close().subtract(latest.averagePrice()), latest.averagePrice())),
+                    latestAvailableForDay.averagePrice() == null ? null
+                            : scale(percent(latestAvailableForDay.close().subtract(latestAvailableForDay.averagePrice()),
+                            latestAvailableForDay.averagePrice())),
                     null,
                     null,
                     new BigDecimal("38"),
-                    List.of("最新分时到 " + latestMinute + "，属于 15:05-15:30 盘后固定价格区间，不是普通竞价尾盘确认。"),
-                    List.of("盘后固定价格不能和普通尾盘买点混用。", "需要回看 14:57-15:00 收盘集合竞价数据后再判断。")
+                    List.of("最新分时到 " + latestAvailableMinute + "，属于 15:05-15:30 盘后固定价格区间，不是普通竞价尾盘确认。"),
+                    List.of("盘后固定价格不能和普通尾盘买点混用。", "14:57 后数据只用于历史复盘。")
             );
         }
         if (tailPoints.isEmpty()) {
             return new ShortTermTailSignal(
-                    "UNAVAILABLE",
-                    "收盘分时缺失",
+                    "HISTORICAL_ONLY",
+                    "仅供复盘",
                     false,
                     tradeDate,
-                    latestMinute,
-                    money(latest.close()),
+                    latestAvailableMinute,
+                    money(latestAvailableForDay.close()),
                     null,
                     null,
                     null,
-                    latest.averagePrice() == null ? null : scale(percent(latest.close().subtract(latest.averagePrice()), latest.averagePrice())),
+                    latestAvailableForDay.averagePrice() == null ? null
+                            : scale(percent(latestAvailableForDay.close().subtract(latestAvailableForDay.averagePrice()),
+                            latestAvailableForDay.averagePrice())),
                     null,
                     null,
                     new BigDecimal("35"),
-                    List.of("缺少 14:57-15:00 收盘集合竞价分时，不能确认尾盘买点。"),
-                    List.of("收盘集合竞价分时缺失时不执行短线买入。")
+                    List.of("缺少 14:45-14:56 可执行尾盘分时；14:57 后数据不能反推当日买点。"),
+                    List.of("可执行窗口证据缺失时不执行短线买入。")
             );
         }
         EastMoneyIntradayPoint start = tailPoints.get(0);
-        latest = tailPoints.get(tailPoints.size() - 1);
-        latestMinute = latest.minute().toLocalTime().toString();
+        EastMoneyIntradayPoint latest = tailPoints.get(tailPoints.size() - 1);
+        String latestMinute = latest.minute().toLocalTime().toString();
         BigDecimal tailHigh = tailPoints.stream()
                 .map(point -> point.high() == null ? point.close() : point.high())
                 .filter(value -> value != null)
@@ -1366,27 +1497,28 @@ public class ShortTermService {
                 .map(point -> point.amount() == null ? BigDecimal.ZERO : point.amount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalAmount = points.stream()
+                .filter(point -> point.minute().toLocalTime().isBefore(ACTIONABLE_TAIL_END_EXCLUSIVE))
                 .map(point -> point.amount() == null ? BigDecimal.ZERO : point.amount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal changeFromTailConfirm = scale(percent(latest.close().subtract(start.close()), start.close()));
+        BigDecimal changeFromActionableTail = scale(percent(latest.close().subtract(start.close()), start.close()));
         BigDecimal drawdown = tailHigh == null ? null : scale(percent(tailHigh.subtract(latest.close()), tailHigh));
         BigDecimal closeVsAverage = latest.averagePrice() == null ? null : scale(percent(latest.close().subtract(latest.averagePrice()), latest.averagePrice()));
         BigDecimal tailAmountRatio = totalAmount.compareTo(BigDecimal.ZERO) <= 0
                 ? null
                 : scale(tailAmount.multiply(new BigDecimal("100")).divide(totalAmount, 6, RoundingMode.HALF_UP));
-        BigDecimal score = tailScore(changeFromTailConfirm, drawdown, closeVsAverage, tailAmountRatio, tailPoints.size());
+        BigDecimal score = tailScore(changeFromActionableTail, drawdown, closeVsAverage, tailAmountRatio, tailPoints.size());
         BigDecimal tailAmountRatioThreshold = tailAmountRatioThreshold(totalAmount);
         String status;
         String label;
         if (tailPoints.size() >= 3
-                && gte(changeFromTailConfirm, "0.30")
+                && gte(changeFromActionableTail, "0.30")
                 && lte(drawdown, "1.20")
                 && gte(closeVsAverage, "0.00")
                 && tailAmountRatio != null
                 && tailAmountRatio.compareTo(tailAmountRatioThreshold) >= 0) {
             status = "CONFIRMED";
-            label = "收盘确认";
-        } else if (gte(changeFromTailConfirm, "0.00")
+            label = "尾盘确认";
+        } else if (gte(changeFromActionableTail, "0.00")
                 && lte(drawdown, "1.80")
                 && gte(closeVsAverage, "-0.25")) {
             status = "WATCH";
@@ -1396,7 +1528,11 @@ public class ShortTermService {
             label = "尾盘回落";
         }
         List<String> reasons = new ArrayList<>();
-        reasons.add("14:57-15:00 涨跌 " + valueText(changeFromTailConfirm) + "%，收盘集合竞价高点回落 " + valueText(drawdown) + "%。");
+        reasons.add("14:45-14:56 涨跌 " + valueText(changeFromActionableTail) + "%，可执行尾盘高点回落 " + valueText(drawdown) + "%。");
+        if (points.stream().anyMatch(point ->
+                !point.minute().toLocalTime().isBefore(ACTIONABLE_TAIL_END_EXCLUSIVE))) {
+            reasons.add("14:57 后分时仅保留为历史观察，未参与本次可执行评分。");
+        }
         reasons.add("最新价相对当日均价线 " + valueText(closeVsAverage) + "%，尾盘成交额占比 " + valueText(tailAmountRatio)
                 + "%，本票动态确认门槛 " + valueText(tailAmountRatioThreshold) + "%。");
         if ("CONFIRMED".equals(status)) {
@@ -1404,7 +1540,7 @@ public class ShortTermService {
         } else if ("WATCH".equals(status)) {
             reasons.add("尾盘没有明显走坏，但强度不足，只能继续观察。");
         } else {
-            reasons.add("尾盘回落或均价线承接不足，不适合作为 14:57-15:00 收盘买点。");
+            reasons.add("尾盘回落或均价线承接不足，不适合作为 14:45-14:56 可执行买点。");
         }
         return new ShortTermTailSignal(
                 status,
@@ -1414,14 +1550,14 @@ public class ShortTermService {
                 latestMinute,
                 money(latest.close()),
                 money(start.close()),
-                changeFromTailConfirm,
+                changeFromActionableTail,
                 drawdown,
                 closeVsAverage,
                 money(tailAmount),
                 tailAmountRatio,
                 score,
                 reasons,
-                List.of("只用 14:57-15:00 收盘集合竞价执行普通尾盘确认。", "尾盘跌回均价线下方或从高点回落超过 1.8% 时不追。", "大成交额股票采用较低尾盘成交占比门槛，但仍必须站稳均价线并保持价格强度。", "15:05-15:30 盘后固定价格单独分析，不混作普通买点。")
+                List.of("普通股票只用 14:45-14:56 已产生的数据完成尾盘决策。", "尾盘跌回均价线下方或从高点回落超过 1.8% 时不追。", "大成交额股票采用较低尾盘成交占比门槛，但仍必须站稳均价线并保持价格强度。", "14:57 后数据只用于历史复盘，不能反推买点。")
         );
     }
 
@@ -1436,14 +1572,14 @@ public class ShortTermService {
     }
 
     private BigDecimal tailScore(
-            BigDecimal changeFromTailConfirm,
+            BigDecimal changeFromActionableTail,
             BigDecimal drawdown,
             BigDecimal closeVsAverage,
             BigDecimal tailAmountRatio,
             int minuteCount
     ) {
         BigDecimal score = new BigDecimal("50")
-                .add(nullToZero(changeFromTailConfirm).multiply(new BigDecimal("12")))
+                .add(nullToZero(changeFromActionableTail).multiply(new BigDecimal("12")))
                 .subtract(nullToZero(drawdown).multiply(new BigDecimal("10")))
                 .add(nullToZero(closeVsAverage).multiply(new BigDecimal("8")))
                 .add(nullToZero(tailAmountRatio).min(new BigDecimal("18")).multiply(new BigDecimal("0.80")))
@@ -1517,12 +1653,13 @@ public class ShortTermService {
             );
         }
         String summary = switch (tailSignal.status()) {
-            case "CONFIRMED" -> "14:57-15:00 收盘证据仅保留用于研究和复盘，当前已不在普通股票可成交窗口，不可新建短线仓位。";
-            case "NOT_READY" -> "当前还没有进入 14:57-15:00 收盘集合竞价确认窗口，短线买点需要等当天分时数据完成验证。";
+            case "CONFIRMED" -> "14:45-14:56 尾盘证据已形成，但当前已不在普通股票可成交决策窗口；结果只用于研究，不可新建短线仓位。";
+            case "NOT_READY" -> "当前还没有进入 14:45-14:56 可执行尾盘窗口，先保留候选观察。";
             case "POST_CLOSE_FIXED_PRICE" -> "当前数据属于盘后固定价格区间，不能和普通尾盘买点混用，今日先观察。";
-            case "WATCH" -> "14:57-15:00 收盘观察数据仅保留用于研究和复盘，当前已不在普通股票可成交窗口，不可新建短线仓位。";
-            case "WEAK" -> "14:57-15:00 分时承接不足或从高点回落，今日不追。";
-            default -> "当天分时数据缺失，无法确认 " + TAIL_CONFIRM_LABEL + " 后买点。";
+            case "WATCH" -> "14:45-14:56 尾盘观察证据不足，结果只用于研究，不可新建短线仓位。";
+            case "WEAK" -> "14:45-14:56 分时承接不足或从高点回落，今日不追。";
+            case "HISTORICAL_ONLY" -> "只有 14:57 后历史数据，不能反推当日可执行买点。";
+            default -> "当天分时数据缺失，无法确认 " + ACTIONABLE_TAIL_LABEL + " 可执行买点。";
         };
         return new TradingAdvice(
                 "WAIT",
@@ -1539,6 +1676,7 @@ public class ShortTermService {
             LocalDateTime decisionAt
     ) {
         if (tailSignal == null
+                || !tailSignal.actionableTailWindow()
                 || decisionAt == null
                 || tailSignal.tradeDate() == null
                 || tailSignal.latestMinute() == null) {
@@ -1550,7 +1688,9 @@ public class ShortTermService {
             if (!evidenceDate.equals(decisionAt.toLocalDate())) {
                 return false;
             }
-            return !LocalDateTime.of(evidenceDate, evidenceTime).isAfter(decisionAt);
+            return !evidenceTime.isBefore(ACTIONABLE_TAIL_START)
+                    && evidenceTime.isBefore(ACTIONABLE_TAIL_END_EXCLUSIVE)
+                    && !LocalDateTime.of(evidenceDate, evidenceTime).isAfter(decisionAt);
         } catch (DateTimeParseException exception) {
             return false;
         }
@@ -1604,15 +1744,15 @@ public class ShortTermService {
                 null,
                 null,
                 new BigDecimal("40"),
-                List.of("14:57-15:00 收盘集合竞价信号会在候选入围后拉取。"),
-                List.of("未完成收盘集合竞价确认前不执行短线买入。")
+                List.of("14:45-14:56 可执行尾盘信号会在候选入围后拉取。"),
+                List.of("未完成可执行尾盘确认前不执行短线买入。")
         );
     }
 
     private List<String> withTailEntryRule(List<String> rules) {
         List<String> merged = new ArrayList<>(rules);
-        merged.add("最近三根已完成交易日内确认金叉后，14:57-15:00 仍必须复核收盘集合竞价分时；尾盘只能确认买点，不能为旧金叉或未确认金叉创造买点。");
-        merged.add("15:05-15:30 盘后固定价格需要单独分析，不能替代普通尾盘确认。");
+        merged.add("最近三根已完成交易日内确认金叉后，14:45-14:56 仍必须复核当时已产生的尾盘分时；尾盘只能确认买点，不能为旧金叉或未确认金叉创造买点。");
+        merged.add("14:57 后数据只用于历史复盘，15:05-15:30 盘后固定价格不能替代普通尾盘确认。");
         return merged.stream().distinct().toList();
     }
 
@@ -1622,7 +1762,7 @@ public class ShortTermService {
         merged.add(new ShortTermEvidence(
                 "尾盘分时",
                 tailSignal.statusLabel() + "：最新分时 " + minuteText
-                        + "，14:57-15:00 涨跌 " + valueText(tailSignal.changeFromTailConfirmPercent())
+                        + "，14:45-14:56 涨跌 " + valueText(tailSignal.changeFromActionableTailPercent())
                         + "%，高点回落 " + valueText(tailSignal.drawdownFromTailHighPercent())
                         + "%，相对均价线 " + valueText(tailSignal.closeVsAveragePricePercent())
                         + "%，尾盘成交占比 " + valueText(tailSignal.tailAmountRatioPercent()) + "%。",

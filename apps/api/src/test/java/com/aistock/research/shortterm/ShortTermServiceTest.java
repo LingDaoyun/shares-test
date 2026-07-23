@@ -13,6 +13,7 @@ import com.aistock.research.trading.QuoteFreshnessService;
 import com.aistock.research.trading.TradingAdvice;
 import com.aistock.research.trading.TradingClockService;
 import com.aistock.research.valuation.ValuationContextState;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -53,6 +54,159 @@ class ShortTermServiceTest {
         assertThat(eastMoneyClient.requestedQuoteLimit).isEqualTo(6000);
         assertThat(report.ruleSet().scanLimit()).isEqualTo(6000);
         assertThat(report.ruleSet().klineLimit()).isEqualTo(60);
+    }
+
+    @Test
+    void finalReportRestrictsExpensiveReviewToPreselectedSymbols() {
+        eastMoneyClient.quotes = List.of(
+                quote("600795", "国电电力", "4.90", "1.03", "12.95", "1.49", "900000000"),
+                quote("002128", "电投能源", "26.40", "1.42", "14.08", "1.60", "800000000"),
+                quote("601918", "新集能源", "9.86", "-3.52", "11.87", "1.46", "700000000")
+        );
+        eastMoneyClient.quotes.forEach(quote -> {
+            eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), quote.latestPrice().toPlainString(), "180000"));
+            eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
+        });
+
+        ShortTermReport report = service.finalReport(
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null),
+                Set.of("600795", "002128")
+        );
+
+        assertThat(report.reviewedSymbols()).containsExactlyInAnyOrder("600795", "002128");
+        assertThat(eastMoneyClient.requestedKlineSymbols).containsExactlyInAnyOrder("600795", "002128");
+        assertThat(eastMoneyClient.requestedKlineSymbols).doesNotContain("601918");
+        assertThat(eastMoneyClient.requestedFinancialSymbols).containsExactlyInAnyOrder("600795", "002128");
+        assertThat(eastMoneyClient.requestedFinancialSymbols).doesNotContain("601918");
+        assertThat(report.universeCount()).isEqualTo(3);
+    }
+
+    @Test
+    void finalReportRejectsEmptyPreselection() {
+        assertThatThrownBy(() -> service.finalReport(ShortTermScanRequest.empty(), Set.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("预选股票为空");
+    }
+
+    @Test
+    void shouldExposeCoverageAndKeepAbsentCompatibilityCoverageUnreliable() {
+        eastMoneyClient.quotes = IntStream.range(0, 9)
+                .mapToObj(index -> quote(
+                        "6001" + index,
+                        "覆盖样本" + index,
+                        "10.62",
+                        "1.20",
+                        "18",
+                        "1.60",
+                        "600000000"
+                ))
+                .toList();
+        eastMoneyClient.snapshotExpectedCount = 10;
+        eastMoneyClient.snapshotComplete = false;
+        eastMoneyClient.quotes.forEach(quote ->
+                eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "180000")));
+
+        ShortTermReport report = service.report(
+                new ShortTermScanRequest(3, 100, 9, null, null, null, null, null, null, null)
+        );
+
+        assertThat(report.coverage().expectedCount()).isEqualTo(10);
+        assertThat(report.coverage().fetchedCount()).isEqualTo(9);
+        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9000");
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.reviewedSymbols()).containsExactlyInAnyOrderElementsOf(eastMoneyClient.requestedKlineSymbols);
+        assertThat(report.dataCutoffAt()).isEqualTo(Instant.parse("2026-07-07T06:58:00Z"));
+
+        ShortTermReport compatible = new ShortTermReport(
+                "旧报告", 1, 1, 1, 0, "旧格式", null,
+                List.of(), null, null, List.of(), List.of(), null, List.of(), Instant.EPOCH);
+
+        assertThat(compatible.coverage().executionReliable()).isFalse();
+        assertThat(compatible.reviewedSymbols()).isEmpty();
+        assertThat(compatible.dataCutoffAt()).isNull();
+    }
+
+    @Test
+    void oldStoredJsonDefaultsCoverageToExplicitlyUnreliable() throws Exception {
+        ShortTermReport report = new ObjectMapper()
+                .findAndRegisterModules()
+                .readValue("{\"scope\":\"旧报告\"}", ShortTermReport.class);
+
+        assertThat(report.coverage()).isEqualTo(ShortTermCoverageSnapshot.unreliable());
+        assertThat(report.reviewedSymbols()).isEmpty();
+        assertThat(report.dataCutoffAt()).isNull();
+    }
+
+    @Test
+    void staleCoverageSnapshotNeverBecomesExecutionReliable() {
+        eastMoneyClient.quotes = List.of(
+                quote("600001", "过期覆盖样本", "10.62", "1.20", "18", "1.60", "600000000")
+        );
+        eastMoneyClient.snapshotFetchedAt = Instant.parse("2026-07-07T06:50:00Z");
+        eastMoneyClient.klines.put("600001", rightEarlyKLines("600001", "10.62", "180000"));
+        eastMoneyClient.financials.put("600001", goodFinancial("600001"));
+
+        ShortTermReport report = service.report(ShortTermScanRequest.empty());
+
+        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("1.0000");
+        assertThat(report.coverage().executionReliable()).isFalse();
+        assertThat(report.marketSentiment().phase()).isEqualTo("行情覆盖不足");
+    }
+
+    @Test
+    void actionableTailUsesOnlyMinutesFrom1445InclusiveTo1457Exclusive() {
+        eastMoneyClient.quotes = List.of(
+                quote("600001", "尾盘边界", "10.62", "1.60", "18.00", "1.60", "180000000")
+        );
+        eastMoneyClient.klines.put("600001", rightEarlyKLines("600001", "10.62", "180000"));
+        eastMoneyClient.financials.put("600001", goodFinancial("600001"));
+        eastMoneyClient.intraday.put("600001", List.of(
+                intraday("600001", "2026-07-07T14:44", "10.00", "10.00", "10.01", "9.99", "10000", "10000000", "10.00"),
+                intraday("600001", "2026-07-07T14:45", "10.05", "10.10", "10.11", "10.04", "12000", "12000000", "10.05"),
+                intraday("600001", "2026-07-07T14:52", "10.15", "10.20", "10.21", "10.14", "14000", "14000000", "10.10"),
+                intraday("600001", "2026-07-07T14:57", "8.00", "8.00", "8.01", "7.99", "90000", "90000000", "9.80")
+        ));
+
+        ShortTermCandidate candidate = find(
+                service.report(1, 100, 5, null, null, null, null, null, null, null),
+                "600001"
+        );
+
+        assertThat(candidate.tailSignal().latestMinute()).isEqualTo("14:52");
+        assertThat(candidate.tailSignal().tailStartPrice()).isEqualByComparingTo("10.10");
+        assertThat(candidate.tailSignal().changeFromActionableTailPercent()).isEqualByComparingTo("0.99");
+        assertThat(candidate.tailSignal().actionableTailWindow()).isTrue();
+        assertThat(candidate.tailSignal().reasons()).anySatisfy(reason ->
+                assertThat(reason).contains("14:57", "未参与"));
+    }
+
+    @Test
+    void actionableTailNeverUsesMinuteAfterDecisionTime() {
+        eastMoneyClient.quotes = List.of(
+                quote("600001", "点时边界", "10.62", "1.60", "18.00", "1.60", "180000000")
+        );
+        eastMoneyClient.klines.put("600001", rightEarlyKLines("600001", "10.62", "180000"));
+        eastMoneyClient.financials.put("600001", goodFinancial("600001"));
+        eastMoneyClient.intraday.put("600001", List.of(
+                intraday("600001", "2026-07-07T14:45", "10.05", "10.10", "10.11", "10.04", "12000", "12000000", "10.05"),
+                intraday("600001", "2026-07-07T14:52", "10.15", "10.20", "10.21", "10.14", "14000", "14000000", "10.10")
+        ));
+        Clock decisionClock = Clock.fixed(Instant.parse("2026-07-07T06:50:00Z"), SHANGHAI);
+        TradingClockService decisionTradingClock = new TradingClockService(decisionClock);
+        ShortTermService pointInTimeService = new ShortTermService(
+                eastMoneyClient,
+                new EvidenceCompletenessService(),
+                decisionTradingClock,
+                new QuoteFreshnessService(decisionTradingClock, decisionClock)
+        );
+
+        ShortTermCandidate candidate = find(
+                pointInTimeService.report(1, 100, 5, null, null, null, null, null, null, null),
+                "600001"
+        );
+
+        assertThat(candidate.tailSignal().latestMinute()).isEqualTo("14:45");
+        assertThat(candidate.tailSignal().latestPrice()).isEqualByComparingTo("10.10");
     }
 
     @Test
@@ -584,7 +738,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldWaitUntilClosingAuctionForRegularTailConfirmation() {
+    void shouldWaitUntilActionableTailWindow() {
         eastMoneyClient.quotes = List.of(
                 quote("600001", "右侧股份", "10.62", "1.60", "18.00", "1.60", "180000000")
         );
@@ -597,8 +751,8 @@ class ShortTermServiceTest {
         ShortTermCandidate candidate = find(report, "600001");
         assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
         assertThat(candidate.tailSignal().status()).isEqualTo("NOT_READY");
-        assertThat(candidate.tailSignal().statusLabel()).isEqualTo("等14:57");
-        assertThat(candidate.tailSignal().reasons()).anySatisfy(reason -> assertThat(reason).contains("14:57"));
+        assertThat(candidate.tailSignal().statusLabel()).isEqualTo("等14:45");
+        assertThat(candidate.tailSignal().reasons()).anySatisfy(reason -> assertThat(reason).contains("14:45"));
     }
 
     @Test
@@ -609,8 +763,16 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600001", rightEarlyKLines("600001", "10.62", "180000"));
         eastMoneyClient.financials.put("600001", goodFinancial("600001"));
         eastMoneyClient.intraday.put("600001", postCloseOnly("600001"));
+        Clock postCloseClock = Clock.fixed(Instant.parse("2026-07-07T07:20:00Z"), SHANGHAI);
+        TradingClockService postCloseTradingClock = new TradingClockService(postCloseClock);
+        ShortTermService postCloseService = new ShortTermService(
+                eastMoneyClient,
+                new EvidenceCompletenessService(),
+                postCloseTradingClock,
+                new QuoteFreshnessService(postCloseTradingClock, postCloseClock)
+        );
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = postCloseService.report(3, 100, 5, null, null, null, null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600001");
         assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
@@ -1124,7 +1286,7 @@ class ShortTermServiceTest {
             BigDecimal close = new BigDecimal("10.45").add(new BigDecimal("0.05").multiply(BigDecimal.valueOf(index)));
             points.add(new EastMoneyIntradayPoint(
                     symbol,
-                    tradeDate.atTime(14, 57).plusMinutes(index),
+                    tradeDate.atTime(14, 45).plusMinutes(index * 3L),
                     close.subtract(new BigDecimal("0.02")),
                     close,
                     close.add(new BigDecimal("0.03")),
@@ -1139,37 +1301,37 @@ class ShortTermServiceTest {
 
     private List<EastMoneyIntradayPoint> watchedTail(String symbol) {
         return List.of(
-                intraday(symbol, "2026-07-07T14:57", "10.48", "10.50", "10.52", "10.47", "26000", "26000000", "10.48"),
-                intraday(symbol, "2026-07-07T14:58", "10.50", "10.51", "10.53", "10.49", "24000", "25000000", "10.49"),
-                intraday(symbol, "2026-07-07T14:59", "10.51", "10.51", "10.52", "10.50", "23000", "24000000", "10.49"),
-                intraday(symbol, "2026-07-07T15:00", "10.51", "10.51", "10.52", "10.50", "22000", "23000000", "10.49")
+                intraday(symbol, "2026-07-07T14:45", "10.48", "10.50", "10.52", "10.47", "26000", "26000000", "10.48"),
+                intraday(symbol, "2026-07-07T14:48", "10.50", "10.51", "10.53", "10.49", "24000", "25000000", "10.49"),
+                intraday(symbol, "2026-07-07T14:52", "10.51", "10.51", "10.52", "10.50", "23000", "24000000", "10.49"),
+                intraday(symbol, "2026-07-07T14:56", "10.51", "10.51", "10.52", "10.50", "22000", "23000000", "10.49")
         );
     }
 
     private List<EastMoneyIntradayPoint> weakTail(String symbol) {
         return List.of(
-                intraday(symbol, "2026-07-07T14:57", "10.55", "10.55", "10.57", "10.53", "28000", "29000000", "10.50"),
-                intraday(symbol, "2026-07-07T14:58", "10.55", "10.49", "10.55", "10.48", "26000", "27000000", "10.50"),
-                intraday(symbol, "2026-07-07T14:59", "10.49", "10.45", "10.50", "10.44", "25000", "26000000", "10.50"),
-                intraday(symbol, "2026-07-07T15:00", "10.45", "10.42", "10.46", "10.41", "24000", "25000000", "10.50")
+                intraday(symbol, "2026-07-07T14:45", "10.55", "10.55", "10.57", "10.53", "28000", "29000000", "10.50"),
+                intraday(symbol, "2026-07-07T14:48", "10.55", "10.49", "10.55", "10.48", "26000", "27000000", "10.50"),
+                intraday(symbol, "2026-07-07T14:52", "10.49", "10.45", "10.50", "10.44", "25000", "26000000", "10.50"),
+                intraday(symbol, "2026-07-07T14:56", "10.45", "10.42", "10.46", "10.41", "24000", "25000000", "10.50")
         );
     }
 
     private List<EastMoneyIntradayPoint> largeTurnoverConfirmedTail(String symbol) {
         List<EastMoneyIntradayPoint> points = new ArrayList<>();
         points.add(intraday(symbol, "2026-07-07T14:30", "10.32", "10.38", "10.40", "10.31", "2600000", "3000000000", "10.36"));
-        points.add(intraday(symbol, "2026-07-07T14:57", "10.48", "10.50", "10.52", "10.47", "36000", "36000000", "10.48"));
-        points.add(intraday(symbol, "2026-07-07T14:58", "10.50", "10.52", "10.53", "10.49", "36000", "37000000", "10.49"));
-        points.add(intraday(symbol, "2026-07-07T14:59", "10.52", "10.54", "10.55", "10.51", "36000", "38000000", "10.50"));
-        points.add(intraday(symbol, "2026-07-07T15:00", "10.54", "10.55", "10.56", "10.53", "36000", "39000000", "10.50"));
+        points.add(intraday(symbol, "2026-07-07T14:45", "10.48", "10.50", "10.52", "10.47", "36000", "36000000", "10.48"));
+        points.add(intraday(symbol, "2026-07-07T14:48", "10.50", "10.52", "10.53", "10.49", "36000", "37000000", "10.49"));
+        points.add(intraday(symbol, "2026-07-07T14:52", "10.52", "10.54", "10.55", "10.51", "36000", "38000000", "10.50"));
+        points.add(intraday(symbol, "2026-07-07T14:56", "10.54", "10.55", "10.56", "10.53", "36000", "39000000", "10.50"));
         return points;
     }
 
     private List<EastMoneyIntradayPoint> tailBeforeClosingAuction(String symbol) {
         return List.of(
-                intraday(symbol, "2026-07-07T14:51", "10.34", "10.38", "10.39", "10.33", "14000", "14000000", "10.32"),
-                intraday(symbol, "2026-07-07T14:54", "10.38", "10.42", "10.43", "10.37", "18000", "19000000", "10.36"),
-                intraday(symbol, "2026-07-07T14:56", "10.42", "10.48", "10.49", "10.41", "22000", "24000000", "10.39")
+                intraday(symbol, "2026-07-07T14:40", "10.34", "10.38", "10.39", "10.33", "14000", "14000000", "10.32"),
+                intraday(symbol, "2026-07-07T14:42", "10.38", "10.42", "10.43", "10.37", "18000", "19000000", "10.36"),
+                intraday(symbol, "2026-07-07T14:44", "10.42", "10.48", "10.49", "10.41", "22000", "24000000", "10.39")
         );
     }
 
@@ -1212,7 +1374,11 @@ class ShortTermServiceTest {
         private int requestedQuoteLimit;
         private boolean snapshotComplete = true;
         private int snapshotExpectedCount;
+        private String snapshotSource = "测试行情";
+        private Instant snapshotFetchedAt = Instant.parse("2026-07-07T06:59:00Z");
         private Set<String> unstableIndustrySymbols = Set.of();
+        private final List<String> requestedKlineSymbols = Collections.synchronizedList(new ArrayList<>());
+        private final List<String> requestedFinancialSymbols = Collections.synchronizedList(new ArrayList<>());
         private final Map<String, List<EastMoneyKLine>> klines = new HashMap<>();
         private final Map<String, List<EastMoneyAnnualIndicator>> financials = new HashMap<>();
         private final Map<String, List<EastMoneyIntradayPoint>> intraday = new HashMap<>();
@@ -1245,13 +1411,14 @@ class ShortTermServiceTest {
                     fetched,
                     Math.max(0, expected - fetched),
                     snapshotComplete,
-                    "测试行情",
-                    Instant.parse("2026-07-07T06:59:00Z")
+                    snapshotSource,
+                    snapshotFetchedAt
             );
         }
 
         @Override
         public List<EastMoneyKLine> fetchDailyKLines(String symbol, LocalDate begin, LocalDate end) {
+            requestedKlineSymbols.add(symbol);
             return klines.getOrDefault(symbol, List.of());
         }
 
@@ -1265,6 +1432,7 @@ class ShortTermServiceTest {
 
         @Override
         public List<EastMoneyAnnualIndicator> fetchAnnualIndicatorHistory(String symbol, int limit) {
+            requestedFinancialSymbols.add(symbol);
             return financials.getOrDefault(symbol, List.of()).stream().limit(limit).toList();
         }
 
