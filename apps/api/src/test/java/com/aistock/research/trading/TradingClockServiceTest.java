@@ -12,7 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TradingClockServiceTest {
 
     @Test
-    void shouldClassifyClosingAuctionAsRegularCloseDecisionWindow() {
+    void shouldClassifyClosingAuctionAsResearchOnlyWindow() {
         TradingClockService service = serviceAt("2026-07-08T06:58:00Z");
 
         TradingSessionSnapshot snapshot = service.currentSession();
@@ -20,7 +20,7 @@ class TradingClockServiceTest {
         assertThat(snapshot.phase()).isEqualTo("CLOSING_CALL_AUCTION");
         assertThat(snapshot.phaseLabel()).isEqualTo("收盘集合竞价");
         assertThat(snapshot.regularAuctionOpen()).isTrue();
-        assertThat(snapshot.closingDecisionWindow()).isTrue();
+        assertThat(snapshot.closingDecisionWindow()).isFalse();
         assertThat(snapshot.postCloseFixedPrice()).isFalse();
         assertThat(snapshot.warnings()).anySatisfy(warning -> assertThat(warning).contains("14:57-15:00"));
     }

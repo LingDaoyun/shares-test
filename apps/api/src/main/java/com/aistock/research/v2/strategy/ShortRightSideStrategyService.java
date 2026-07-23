@@ -3,6 +3,7 @@ package com.aistock.research.v2.strategy;
 import org.springframework.stereotype.Service;
 
 import com.aistock.research.shortterm.ShortTermGoldenCrossSnapshot;
+import com.aistock.research.trading.TradingClockService;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -68,7 +69,7 @@ public class ShortRightSideStrategyService {
         if (dataConfidence.compareTo(new BigDecimal("60")) < 0) {
             return StrategyAction.WAIT;
         }
-        if (!"TAIL_ENTRY_1445_1456".equals(checkpoint(input))) {
+        if (!TradingClockService.SHORT_TERM_ENTRY_CHECKPOINT.equals(checkpoint(input))) {
             return StrategyAction.WAIT;
         }
         if (!legacyExecutionAllowed(input)) {
@@ -279,7 +280,7 @@ public class ShortRightSideStrategyService {
     }
 
     private String checkpointEvidence(ShortRightSideStrategyInput input) {
-        if ("TAIL_ENTRY_1445_1456".equals(checkpoint(input))) {
+        if (TradingClockService.SHORT_TERM_ENTRY_CHECKPOINT.equals(checkpoint(input))) {
             return "服务端交易时钟已进入 14:45-14:56 普通股票可成交决策窗口。";
         }
         return "服务端交易时钟不在 14:45-14:56 可成交决策窗口，当前不能发布买入动作。";

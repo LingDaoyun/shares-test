@@ -2,6 +2,7 @@ package com.aistock.research.shortterm.schedule;
 
 import com.aistock.research.shortterm.OvernightRuleSet;
 import com.aistock.research.shortterm.ShortTermScanRequest;
+import com.aistock.research.trading.TradingClockService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.env.Environment;
@@ -83,9 +84,23 @@ public class ShortTermAutomationSettings {
     }
 
     public OvernightRuleSet overnightRules() {
+        LocalTime entryStart = boundedEntryTime(
+                "research.short-term.overnight.entry-start",
+                TradingClockService.SHORT_TERM_ENTRY_START);
+        LocalTime entryEnd = boundedEntryTime(
+                "research.short-term.overnight.entry-end",
+                TradingClockService.SHORT_TERM_ENTRY_END);
+        if (entryStart.isAfter(entryEnd)) {
+            warnFallback(
+                    "research.short-term.overnight.entry-window",
+                    entryStart + "-" + entryEnd,
+                    TradingClockService.SHORT_TERM_ENTRY_START + "-" + TradingClockService.SHORT_TERM_ENTRY_END);
+            entryStart = TradingClockService.SHORT_TERM_ENTRY_START;
+            entryEnd = TradingClockService.SHORT_TERM_ENTRY_END;
+        }
         return new OvernightRuleSet(
-                time("research.short-term.overnight.entry-start", "14:45"),
-                time("research.short-term.overnight.entry-end", "14:56"),
+                entryStart,
+                entryEnd,
                 time("research.short-term.overnight.normal-exit-time", "14:50"),
                 integer("research.short-term.overnight.max-holding-trading-days", 2, 1, 10),
                 decimal("research.short-term.overnight.max-position-ratio", "0.3333",
@@ -172,6 +187,24 @@ public class ShortTermAutomationSettings {
             warnFallback(key, value, fallbackText);
             return LocalTime.parse(fallbackText);
         }
+    }
+
+    private LocalTime boundedEntryTime(String key, LocalTime fallback) {
+        String raw = environment.getProperty(key);
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            LocalTime value = LocalTime.parse(raw.trim());
+            if (!value.isBefore(TradingClockService.SHORT_TERM_ENTRY_START)
+                    && !value.isAfter(TradingClockService.SHORT_TERM_ENTRY_END)) {
+                return value;
+            }
+        } catch (DateTimeParseException ignored) {
+            // Warning below includes the rejected refreshed value and fallback.
+        }
+        warnFallback(key, raw, fallback);
+        return fallback;
     }
 
     private String cron(String key, String fallback) {

@@ -1205,7 +1205,10 @@ public class ShortTermService {
     }
 
     private TradingAdvice tailAdjustedAdvice(TradingAdvice base, String candidateAction, ShortTermTailSignal tailSignal) {
-        if ("CONFIRMED".equals(tailSignal.status()) && "ADD".equals(base.action())) {
+        boolean executableEntryWindow = TradingClockService.SHORT_TERM_ENTRY_CHECKPOINT.equals(
+                tradingClockService.shortTermDecisionCheckpoint());
+        if (executableEntryWindow
+                && "CONFIRMED".equals(tailSignal.status()) && "ADD".equals(base.action())) {
             return new TradingAdvice(
                     "ADD",
                     "加仓",
@@ -1218,7 +1221,8 @@ public class ShortTermService {
         if (isPullbackAdvice(base)) {
             return base;
         }
-        if (shouldLightTrial(base, candidateAction, tailSignal)) {
+        if (executableEntryWindow
+                && shouldLightTrial(base, candidateAction, tailSignal)) {
             return new TradingAdvice(
                     "LIGHT_TRIAL",
                     "轻仓试错",
@@ -1238,7 +1242,7 @@ public class ShortTermService {
                     merge(tailSignal.riskControls(), List.of("次日若缩量回踩不破 5/10/20 日线再重新评估。", "次日若高开急拉，不追第一笔。"))
             );
         }
-        if ("CONFIRMED".equals(tailSignal.status())) {
+        if (executableEntryWindow && "CONFIRMED".equals(tailSignal.status())) {
             return new TradingAdvice(
                     "NEXT_WATCH",
                     "次日关注",
@@ -1249,9 +1253,10 @@ public class ShortTermService {
             );
         }
         String summary = switch (tailSignal.status()) {
+            case "CONFIRMED" -> "14:57-15:00 收盘证据仅保留用于研究和复盘，当前已不在普通股票可成交窗口，不可新建短线仓位。";
             case "NOT_READY" -> "当前还没有进入 14:57-15:00 收盘集合竞价确认窗口，短线买点需要等当天分时数据完成验证。";
             case "POST_CLOSE_FIXED_PRICE" -> "当前数据属于盘后固定价格区间，不能和普通尾盘买点混用，今日先观察。";
-            case "WATCH" -> "14:57-15:00 分时没有明显走坏，但确认强度不足，今日先观察。";
+            case "WATCH" -> "14:57-15:00 收盘观察数据仅保留用于研究和复盘，当前已不在普通股票可成交窗口，不可新建短线仓位。";
             case "WEAK" -> "14:57-15:00 分时承接不足或从高点回落，今日不追。";
             default -> "当天分时数据缺失，无法确认 " + TAIL_CONFIRM_LABEL + " 后买点。";
         };

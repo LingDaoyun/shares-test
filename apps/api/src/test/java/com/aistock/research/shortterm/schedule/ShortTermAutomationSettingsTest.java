@@ -2,6 +2,7 @@ package com.aistock.research.shortterm.schedule;
 
 import com.aistock.research.shortterm.OvernightRuleSet;
 import com.aistock.research.shortterm.ShortTermScanRequest;
+import com.aistock.research.trading.TradingClockService;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 
@@ -39,7 +40,7 @@ class ShortTermAutomationSettingsTest {
 
         OvernightRuleSet rules = settings.overnightRules();
         assertThat(rules.entryStart()).isEqualTo(LocalTime.of(14, 45));
-        assertThat(rules.entryEnd()).isEqualTo(LocalTime.of(14, 56));
+        assertThat(rules.entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);
         assertThat(rules.normalExitTime()).isEqualTo(LocalTime.of(14, 50));
         assertThat(rules.maxHoldingTradingDays()).isEqualTo(2);
         assertThat(rules.maxPositionRatio()).isEqualByComparingTo("0.3333");
@@ -77,6 +78,7 @@ class ShortTermAutomationSettingsTest {
                 .withProperty("research.short-term.schedule.limit", "0")
                 .withProperty("research.short-term.schedule.max-pe", "NaN")
                 .withProperty("research.short-term.overnight.entry-start", "bad-time")
+                .withProperty("research.short-term.overnight.entry-end", "15:20")
                 .withProperty("research.short-term.overnight.max-holding-trading-days", "0")
                 .withProperty("research.short-term.overnight.max-position-ratio", "1.5");
 
@@ -90,8 +92,26 @@ class ShortTermAutomationSettingsTest {
         assertThat(settings.scanRequest().limit()).isEqualTo(3);
         assertThat(settings.scanRequest().maxPe()).isEqualByComparingTo("100");
         assertThat(settings.overnightRules().entryStart()).isEqualTo(LocalTime.of(14, 45));
+        assertThat(settings.overnightRules().entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);
         assertThat(settings.overnightRules().maxHoldingTradingDays()).isEqualTo(2);
         assertThat(settings.overnightRules().maxPositionRatio())
                 .isEqualByComparingTo(new BigDecimal("0.3333"));
+    }
+
+    @Test
+    void boundsEntryOverridesToExecutableWindowAndRejectsInvertedRange() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("research.short-term.overnight.entry-start", "14:46")
+                .withProperty("research.short-term.overnight.entry-end", "14:55");
+        ShortTermAutomationSettings settings = new ShortTermAutomationSettings(environment);
+
+        assertThat(settings.overnightRules().entryStart()).isEqualTo(LocalTime.of(14, 46));
+        assertThat(settings.overnightRules().entryEnd()).isEqualTo(LocalTime.of(14, 55));
+
+        environment.setProperty("research.short-term.overnight.entry-start", "14:55");
+        environment.setProperty("research.short-term.overnight.entry-end", "14:50");
+
+        assertThat(settings.overnightRules().entryStart()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_START);
+        assertThat(settings.overnightRules().entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);
     }
 }

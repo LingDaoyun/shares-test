@@ -95,7 +95,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldDowngradeCrowdedMarketToLightTrialInsteadOfHardBlockingEveryCandidate() {
+    void shouldKeepCrowdedMarketForResearchWithoutPostWindowTrial() {
         List<EastMoneyQuote> quotes = new ArrayList<>();
         quotes.add(quote("600301", "右侧候选", "10.62", "1.60", "18", "1.6", "600000000"));
         for (int index = 0; index < 80; index++) {
@@ -112,7 +112,8 @@ class ShortTermServiceTest {
         ShortTermCandidate candidate = find(report, "600301");
         assertThat(report.marketSentiment().phase()).isEqualTo("高潮");
         assertThat(candidate.action()).isEqualTo("WATCH_RIGHT_SIDE");
-        assertThat(candidate.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
+        assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
+        assertThat(candidate.todayAdvice().summary()).contains("研究", "不可新建");
     }
 
     @Test
@@ -180,7 +181,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldFindRightSideEarlyStockWithFinancialSupport() {
+    void shouldKeepRightSideEarlyStockForResearchWithoutPostWindowUpgrade() {
         eastMoneyClient.unstableIndustrySymbols = Set.of("300059");
         eastMoneyClient.quotes = List.of(
                 quote("600001", "右侧股份", "10.62", "1.60", "18.00", "1.60", "180000000"),
@@ -209,8 +210,9 @@ class ShortTermServiceTest {
         assertThat(report.ruleSet().scanLimit()).isEqualTo(100);
         assertThat(candidate.phaseLabel()).isEqualTo("右侧早期");
         assertThat(candidate.action()).isEqualTo("RIGHT_EARLY_ADD");
-        assertThat(candidate.todayAdvice().action()).isEqualTo("ADD");
-        assertThat(candidate.todayAdvice().actionLabel()).isEqualTo("加仓");
+        assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
+        assertThat(candidate.todayAdvice().actionLabel()).isEqualTo("观望");
+        assertThat(candidate.todayAdvice().summary()).contains("研究", "不可新建");
         assertThat(candidate.tailSignal().status()).isEqualTo("CONFIRMED");
         assertThat(candidate.technical().rightSideSignal()).contains("右侧早期");
         assertThat(candidate.financial().qualityScore()).isGreaterThanOrEqualTo(new BigDecimal("58"));
@@ -388,7 +390,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldGiveLightTrialWhenRightSideObservationHasWatchedTailSupport() {
+    void shouldNotGiveLightTrialFromWatchedClosingAuctionSupport() {
         eastMoneyClient.quotes = List.of(
                 quote("600012", "观察试错", "10.62", "1.60", "18.00", "1.60", "180000000")
         );
@@ -401,9 +403,9 @@ class ShortTermServiceTest {
         ShortTermCandidate candidate = find(report, "600012");
         assertThat(candidate.action()).isEqualTo("WATCH_RIGHT_SIDE");
         assertThat(candidate.tailSignal().status()).isEqualTo("WATCH");
-        assertThat(candidate.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
-        assertThat(candidate.todayAdvice().actionLabel()).isEqualTo("轻仓试错");
-        assertThat(candidate.todayAdvice().summary()).contains("轻仓");
+        assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
+        assertThat(candidate.todayAdvice().actionLabel()).isEqualTo("观望");
+        assertThat(candidate.todayAdvice().summary()).contains("研究", "不可新建");
     }
 
     @Test
@@ -426,7 +428,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldUseLowerTailAmountRatioThresholdForLargeTurnoverStocks() {
+    void shouldKeepLowerTailThresholdForResearchWithoutPostWindowUpgrade() {
         eastMoneyClient.quotes = List.of(
                 quote("600014", "大额成交", "10.62", "1.60", "18.00", "1.60", "3600000000")
         );
@@ -439,7 +441,8 @@ class ShortTermServiceTest {
         ShortTermCandidate candidate = find(report, "600014");
         assertThat(candidate.tailSignal().tailAmountRatioPercent()).isLessThan(new BigDecimal("6.00"));
         assertThat(candidate.tailSignal().status()).isEqualTo("CONFIRMED");
-        assertThat(candidate.todayAdvice().action()).isEqualTo("ADD");
+        assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
+        assertThat(candidate.todayAdvice().summary()).contains("研究", "不可新建");
     }
 
     @Test
