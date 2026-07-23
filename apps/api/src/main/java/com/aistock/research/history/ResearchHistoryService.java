@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -74,6 +75,11 @@ public class ResearchHistoryService {
 
     @Transactional
     public void recordShortTermReport(ShortTermReport report) {
+        recordShortTermReport(null, report);
+    }
+
+    @Transactional
+    public void recordShortTermReport(String snapshotIdentity, ShortTermReport report) {
         if (report == null || report.candidates() == null || report.candidates().isEmpty()) {
             return;
         }
@@ -96,22 +102,30 @@ public class ResearchHistoryService {
                     report.generatedAt()
             );
             String payload = serialize(historyPayload);
-            String analysisId = UUID.randomUUID().toString();
+            String analysisId = historyId(snapshotIdentity, "analysis", candidate.symbol());
+            String decisionId = historyId(snapshotIdentity, "decision", candidate.symbol());
+            boolean analysisExists = snapshotIdentity != null && analysisRepository.existsById(analysisId);
+            boolean decisionExists = snapshotIdentity != null && decisionRepository.existsById(decisionId);
+            if (analysisExists && decisionExists) {
+                continue;
+            }
             String analysisStatus = text(candidate.action(), "WAIT_CONFIRM");
             String analysisSummary = text(candidate.reason(), "短线候选已生成，等待证据复核。");
-            analysisRepository.save(new AnalysisHistoryEntity(
-                    analysisId,
-                    candidate.symbol(),
-                    text(candidate.name(), candidate.symbol()),
-                    "SHORT_TERM_RIGHT_SIDE",
-                    analysisStatus,
-                    analysisSummary,
-                    null,
-                    null,
-                    payload,
-                    dataAsOf,
-                    recordedAt
-            ));
+            if (!analysisExists) {
+                analysisRepository.save(new AnalysisHistoryEntity(
+                        analysisId,
+                        candidate.symbol(),
+                        text(candidate.name(), candidate.symbol()),
+                        "SHORT_TERM_RIGHT_SIDE",
+                        analysisStatus,
+                        analysisSummary,
+                        null,
+                        null,
+                        payload,
+                        dataAsOf,
+                        recordedAt
+                ));
+            }
 
             String actionStage = candidate.todayAdvice() == null
                     ? analysisStatus
@@ -119,20 +133,30 @@ public class ResearchHistoryService {
             String actionLabel = candidate.todayAdvice() == null
                     ? text(candidate.actionLabel(), "等待确认")
                     : text(candidate.todayAdvice().actionLabel(), text(candidate.actionLabel(), "等待确认"));
-            decisionRepository.save(new DecisionHistoryEntity(
-                    UUID.randomUUID().toString(),
-                    analysisId,
-                    candidate.symbol(),
-                    "SHORT_TERM_SCAN",
-                    actionStage,
-                    actionLabel,
-                    candidate.score() == null ? null : candidate.score().finalScore(),
-                    SHORT_TERM_RULE_VERSION,
-                    payload,
-                    dataAsOf,
-                    recordedAt
-            ));
+            if (!decisionExists) {
+                decisionRepository.save(new DecisionHistoryEntity(
+                        decisionId,
+                        analysisId,
+                        candidate.symbol(),
+                        "SHORT_TERM_SCAN",
+                        actionStage,
+                        actionLabel,
+                        candidate.score() == null ? null : candidate.score().finalScore(),
+                        SHORT_TERM_RULE_VERSION,
+                        payload,
+                        dataAsOf,
+                        recordedAt
+                ));
+            }
         }
+    }
+
+    private String historyId(String snapshotIdentity, String recordType, String symbol) {
+        if (snapshotIdentity == null) {
+            return UUID.randomUUID().toString();
+        }
+        String identity = snapshotIdentity + ":" + recordType + ":" + symbol;
+        return UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString();
     }
 
     private Instant shortTermDataAsOf(

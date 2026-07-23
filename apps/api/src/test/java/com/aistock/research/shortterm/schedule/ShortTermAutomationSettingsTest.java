@@ -1,9 +1,13 @@
 package com.aistock.research.shortterm.schedule;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.aistock.research.shortterm.OvernightRuleSet;
 import com.aistock.research.shortterm.ShortTermScanRequest;
 import com.aistock.research.trading.TradingClockService;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.mock.env.MockEnvironment;
 
 import java.math.BigDecimal;
@@ -86,6 +90,53 @@ class ShortTermAutomationSettingsTest {
     }
 
     @Test
+    void rejectsNonShanghaiZoneAndDeduplicatesWarningUntilValueBecomesValid() {
+        String key = "research.short-term.schedule.zone";
+        MockEnvironment environment = new MockEnvironment().withProperty(key, "UTC");
+        ShortTermAutomationSettings settings = new ShortTermAutomationSettings(environment);
+        ListAppender<ILoggingEvent> appender = attachAppender();
+        try {
+            assertThat(settings.zone()).isEqualTo("Asia/Shanghai");
+            assertThat(settings.zone()).isEqualTo("Asia/Shanghai");
+            assertThat(warningsFor(appender, key)).isEqualTo(1);
+
+            environment.setProperty(key, "Asia/Shanghai");
+            assertThat(settings.zone()).isEqualTo("Asia/Shanghai");
+            environment.setProperty(key, "UTC");
+            assertThat(settings.zone()).isEqualTo("Asia/Shanghai");
+
+            assertThat(warningsFor(appender, key)).isEqualTo(2);
+        } finally {
+            detachAppender(appender);
+        }
+    }
+
+    @Test
+    void deduplicatesInvalidCronWarningAndAllowsOneWarningAfterValidReset() {
+        String key = "research.short-term.schedule.final-cron";
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty(key, "0 49 14 * * MON-FRI");
+        ShortTermAutomationSettings settings = new ShortTermAutomationSettings(environment);
+        assertThat(settings.finalCron()).isEqualTo("0 49 14 * * MON-FRI");
+        ListAppender<ILoggingEvent> appender = attachAppender();
+        try {
+            environment.setProperty(key, "invalid-final");
+            assertThat(settings.finalCron()).isEqualTo("0 49 14 * * MON-FRI");
+            assertThat(settings.finalCron()).isEqualTo("0 49 14 * * MON-FRI");
+            assertThat(warningsFor(appender, key)).isEqualTo(1);
+
+            environment.setProperty(key, "0 50 14 * * MON-FRI");
+            assertThat(settings.finalCron()).isEqualTo("0 50 14 * * MON-FRI");
+            environment.setProperty(key, "invalid-final");
+            assertThat(settings.finalCron()).isEqualTo("0 50 14 * * MON-FRI");
+
+            assertThat(warningsFor(appender, key)).isEqualTo(2);
+        } finally {
+            detachAppender(appender);
+        }
+    }
+
+    @Test
     void invalidOrOutOfRangeRefreshedValuesFallBackWithoutThrowing() {
         MockEnvironment environment = new MockEnvironment()
                 .withProperty("research.short-term.schedule.enabled", "not-a-boolean")
@@ -138,5 +189,25 @@ class ShortTermAutomationSettingsTest {
 
         assertThat(settings.overnightRules().entryStart()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_START);
         assertThat(settings.overnightRules().entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);
+    }
+
+    private ListAppender<ILoggingEvent> attachAppender() {
+        Logger logger = (Logger) LoggerFactory.getLogger(ShortTermAutomationSettings.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return appender;
+    }
+
+    private void detachAppender(ListAppender<ILoggingEvent> appender) {
+        Logger logger = (Logger) LoggerFactory.getLogger(ShortTermAutomationSettings.class);
+        logger.detachAppender(appender);
+        appender.stop();
+    }
+
+    private long warningsFor(ListAppender<ILoggingEvent> appender, String key) {
+        return appender.list.stream()
+                .filter(event -> event.getFormattedMessage().contains(key))
+                .count();
     }
 }

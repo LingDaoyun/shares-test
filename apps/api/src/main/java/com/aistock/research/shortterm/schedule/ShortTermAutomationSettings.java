@@ -12,9 +12,9 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalTime;
-import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Component
@@ -24,9 +24,11 @@ public class ShortTermAutomationSettings {
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal ONE = BigDecimal.ONE;
     private static final BigDecimal HUNDRED = new BigDecimal("100");
+    private static final String CHINA_MARKET_ZONE = "Asia/Shanghai";
 
     private final Environment environment;
     private final Map<String, String> lastValidCrons = new ConcurrentHashMap<>();
+    private final Set<String> warnedInvalidValues = ConcurrentHashMap.newKeySet();
 
     public ShortTermAutomationSettings(Environment environment) {
         this.environment = environment;
@@ -38,15 +40,13 @@ public class ShortTermAutomationSettings {
 
     public String zone() {
         String key = "research.short-term.schedule.zone";
-        String fallback = "Asia/Shanghai";
-        String value = text(key, fallback);
-        try {
-            ZoneId.of(value);
-            return value;
-        } catch (RuntimeException exception) {
-            warnFallback(key, value, fallback);
-            return fallback;
+        String value = text(key, CHINA_MARKET_ZONE);
+        if (CHINA_MARKET_ZONE.equals(value)) {
+            clearInvalidWarnings(key);
+            return CHINA_MARKET_ZONE;
         }
+        warnFallbackOnce(key, value, CHINA_MARKET_ZONE);
+        return CHINA_MARKET_ZONE;
     }
 
     public String preselectCron() {
@@ -215,10 +215,11 @@ public class ShortTermAutomationSettings {
         try {
             CronExpression.parse(value);
             lastValidCrons.put(key, value);
+            clearInvalidWarnings(key);
             return value;
         } catch (IllegalArgumentException exception) {
             String retained = lastValidCrons.getOrDefault(key, fallback);
-            warnFallback(key, value, retained);
+            warnFallbackOnce(key, value, retained);
             return retained;
         }
     }
@@ -233,5 +234,17 @@ public class ShortTermAutomationSettings {
 
     private void warnFallback(String key, Object rejected, Object fallback) {
         log.warn("Invalid refreshed setting {}={}, using default {}", key, rejected, fallback);
+    }
+
+    private void warnFallbackOnce(String key, Object rejected, Object fallback) {
+        String warningKey = key + "\u0000" + rejected;
+        if (warnedInvalidValues.add(warningKey)) {
+            log.warn("Invalid refreshed setting {}={}, retaining/falling back to {}", key, rejected, fallback);
+        }
+    }
+
+    private void clearInvalidWarnings(String key) {
+        String prefix = key + "\u0000";
+        warnedInvalidValues.removeIf(value -> value.startsWith(prefix));
     }
 }

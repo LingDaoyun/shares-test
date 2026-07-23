@@ -132,6 +132,27 @@ public class ShortTermScheduledSnapshotStore {
     }
 
     @Transactional(readOnly = true)
+    public Optional<ShortTermScheduledSnapshot> latest(
+            LocalDate tradeDate,
+            ShortTermSnapshotStage stage
+    ) {
+        return repository.findFirstByTradeDateAndStageOrderByUpdatedAtDescSnapshotKeyDesc(tradeDate, stage)
+                .map(this::toSnapshot);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ShortTermScheduledSnapshot> running(
+            LocalDate tradeDate,
+            ShortTermSnapshotStage stage
+    ) {
+        return repository.findAllByTradeDateAndStageAndStatusOrderByStartedAtAscSnapshotKeyAsc(
+                        tradeDate, stage, ShortTermSnapshotStatus.RUNNING)
+                .stream()
+                .map(this::toSnapshot)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public Optional<ShortTermScheduledSnapshot> find(
             LocalDate tradeDate,
             ShortTermSnapshotStage stage,
@@ -164,7 +185,8 @@ public class ShortTermScheduledSnapshotStore {
     private ShortTermScheduledSnapshot toSnapshot(ShortTermScheduledSnapshotEntity entity) {
         return new ShortTermScheduledSnapshot(
                 entity.getSnapshotKey(), entity.getTradeDate(), entity.getStage(), entity.getStatus(),
-                entity.getAttemptCount(), entity.getParameterFingerprint(), entity.getDataCutoffAt(),
+                entity.getAttemptCount(), entity.getParameterFingerprint(), entity.getParametersJson(),
+                entity.getDataCutoffAt(),
                 entity.getStartedAt(),
                 entity.getCompletedAt(), entity.getMessage(), readBlockedReasons(entity.getBlockedReasonsJson()),
                 readReport(entity.getReportJson()));

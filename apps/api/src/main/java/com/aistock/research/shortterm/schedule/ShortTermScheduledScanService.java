@@ -16,6 +16,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -28,6 +30,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -112,15 +115,51 @@ public class ShortTermScheduledScanService {
         if (prepared.isEmpty()) {
             return;
         }
+        enqueue(List.of(prepared.orElseThrow()));
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void recoverCurrentDayAfterStartup() {
+        LocalDate tradeDate = tradingClock.currentMarketDate();
+        Optional<ShortTermScheduledSnapshot> latestFinal = store.latest(tradeDate, FINAL);
+        latestFinal.filter(snapshot -> snapshot.status() == FINAL_READY && snapshot.report() != null)
+                .ifPresent(snapshot -> archiveFinalHistory(snapshot.snapshotKey(), snapshot.report()));
+
+        Instant restartedAt = clock.instant();
+        if (!settings.enabled() || tradingClock.isMarketClosedDay(tradeDate)
+                || afterFinalDeadline(tradeDate, restartedAt)) {
+            return;
+        }
+
+        Instant staleCutoff = restartedAt.minus(staleRunTimeout);
+        List<PreparedRun> recoveredRuns = new ArrayList<>(2);
+        for (ShortTermScheduledSnapshot running : store.running(tradeDate, PRESELECT)) {
+            recoverStartupStage(
+                    tradeDate, PRESELECT, running,
+                    staleCutoff, restartedAt).ifPresent(recoveredRuns::add);
+        }
+        for (ShortTermScheduledSnapshot running : store.running(tradeDate, FINAL)) {
+            recoverStartupStage(
+                    tradeDate, FINAL, running,
+                    staleCutoff, restartedAt).ifPresent(recoveredRuns::add);
+        }
+        enqueue(recoveredRuns);
+    }
+
+    private void enqueue(List<PreparedRun> runs) {
+        if (runs.isEmpty()) {
+            return;
+        }
         try {
-            executor.execute(() -> execute(prepared.orElseThrow()));
+            executor.execute(() -> runs.forEach(this::execute));
         } catch (RejectedExecutionException exception) {
-            PreparedRun rejected = prepared.orElseThrow();
-            publishBlocked(
-                    rejected.claim(), null, null, "短线定时执行器队列已满",
-                    List.of(EXECUTOR_SATURATED), rejected.startedAt());
-            log.warn("Scheduled short-term queue saturated, runKey={}, stage={}",
-                    rejected.claim().snapshotKey(), rejected.stage());
+            for (PreparedRun rejected : runs) {
+                publishBlocked(
+                        rejected.claim(), null, null, "短线定时执行器队列已满",
+                        List.of(EXECUTOR_SATURATED), rejected.startedAt());
+                log.warn("Scheduled short-term queue saturated, runKey={}, stage={}",
+                        rejected.claim().snapshotKey(), rejected.stage());
+            }
         }
     }
 
@@ -160,6 +199,36 @@ public class ShortTermScheduledScanService {
                         staleCutoff, startedAt)
                 .map(recovered -> new PreparedRun(
                         tradeDate, stage, parameters, recovered, startedAt));
+    }
+
+    private Optional<PreparedRun> recoverStartupStage(
+            LocalDate tradeDate,
+            ShortTermSnapshotStage stage,
+            ShortTermScheduledSnapshot running,
+            Instant staleCutoff,
+            Instant restartedAt
+    ) {
+        if (running.status() != RUNNING || running.startedAt() == null
+                || running.startedAt().isAfter(staleCutoff)) {
+            return Optional.empty();
+        }
+        Optional<ShortTermSnapshotClaim> recovered = store.recoverStaleRunning(
+                tradeDate, stage, running.parameterFingerprint(), running.attemptCount(),
+                staleCutoff, restartedAt);
+        if (recovered.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            ResolvedParameters parameters = persistedParameters(running);
+            return Optional.of(new PreparedRun(
+                    tradeDate, stage, parameters, recovered.orElseThrow(), restartedAt));
+        } catch (RuntimeException exception) {
+            ShortTermSnapshotClaim claim = recovered.orElseThrow();
+            store.fail(
+                    claim, restartedAt, "持久化调度参数无效：" + rootMessage(exception),
+                    List.of("PERSISTED_PARAMETERS_INVALID"));
+            return Optional.empty();
+        }
     }
 
     private void execute(PreparedRun run) {
@@ -252,17 +321,29 @@ public class ShortTermScheduledScanService {
             return;
         }
 
-        ShortTermReport attested = attestationService.attest(report);
-        historyService.recordShortTermReport(attested);
         store.finish(
-                run.claim(), FINAL_READY, attested, report.dataCutoffAt(), completedAt,
+                run.claim(), FINAL_READY, report, report.dataCutoffAt(), completedAt,
                 "尾盘最终结果已就绪", List.of());
+        archiveFinalHistory(run.claim().snapshotKey(), report);
+    }
+
+    private void archiveFinalHistory(String snapshotIdentity, ShortTermReport report) {
+        try {
+            ShortTermReport attested = attestationService.attest(report);
+            if (attested == null) {
+                throw new IllegalStateException("recommendation attestation returned no report");
+            }
+            historyService.recordShortTermReport(snapshotIdentity, attested);
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "FINAL_READY retained; history archival remains retryable, snapshotKey={}, reason={}",
+                    snapshotIdentity, rootMessage(exception), exception);
+        }
     }
 
     private void runReadinessGuard(PreparedRun run) {
         Instant checkedAt = clock.instant();
-        Optional<ShortTermScheduledSnapshot> finalSnapshot = store.find(
-                run.tradeDate(), FINAL, run.parameters().fingerprint());
+        Optional<ShortTermScheduledSnapshot> finalSnapshot = store.latest(run.tradeDate(), FINAL);
         if (finalSnapshot.isEmpty()) {
             publishBlocked(
                     run.claim(), null, null, "尾盘最终快照缺失",
@@ -344,7 +425,8 @@ public class ShortTermScheduledScanService {
     }
 
     private ZoneId resolvedZone() {
-        return ZoneId.of(settings.zone());
+        settings.zone();
+        return TradingClockService.CHINA_MARKET_ZONE;
     }
 
     private void publishBlocked(
@@ -384,6 +466,24 @@ public class ShortTermScheduledScanService {
             return new ResolvedParameters(scanRequest, overnightRules, json, fingerprint);
         } catch (JsonProcessingException | NoSuchAlgorithmException exception) {
             throw new IllegalStateException("Unable to resolve scheduled scan parameters", exception);
+        }
+    }
+
+    private ResolvedParameters persistedParameters(ShortTermScheduledSnapshot snapshot) {
+        if (snapshot.parametersJson() == null || snapshot.parametersJson().isBlank()) {
+            throw new IllegalStateException("parametersJson is missing");
+        }
+        try {
+            ParameterDocument document = canonicalObjectMapper.readValue(
+                    snapshot.parametersJson(), ParameterDocument.class);
+            ResolvedParameters resolved = resolveParameters(
+                    document.scanRequest(), document.overnightRules());
+            if (!resolved.fingerprint().equals(snapshot.parameterFingerprint())) {
+                throw new IllegalStateException("parameter fingerprint does not match persisted JSON");
+            }
+            return resolved;
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Unable to read persisted scheduled scan parameters", exception);
         }
     }
 

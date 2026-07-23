@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStage.FINAL;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStage.PRESELECT;
@@ -76,6 +77,24 @@ class ShortTermScanSchedulerTest {
     }
 
     @Test
+    void schedulerAlwaysCalculatesInShanghaiEvenIfRefreshedZoneIsUtc() {
+        ShortTermScheduledScanService service = mock(ShortTermScheduledScanService.class);
+        ShortTermAutomationSettings settings = mock(ShortTermAutomationSettings.class);
+        when(settings.zone()).thenReturn("UTC");
+        when(settings.preselectCron()).thenReturn("0 30 14 * * MON-FRI");
+        when(settings.finalCron()).thenReturn("0 48 14 * * MON-FRI");
+        when(settings.readinessCron()).thenReturn("0 54 14 * * MON-FRI");
+        ShortTermScanScheduler scheduler = new ShortTermScanScheduler(service, settings);
+        ScheduledTaskRegistrar registrar = new ScheduledTaskRegistrar();
+        scheduler.configureTasks(registrar);
+
+        Instant next = registrar.getTriggerTaskList().get(0).getTrigger()
+                .nextExecution(context(Instant.parse("2026-07-22T06:00:00Z")));
+
+        assertThat(next).isEqualTo(Instant.parse("2026-07-22T06:30:00Z"));
+    }
+
+    @Test
     void executorIsSingleWorkerBoundedAndIndependentFromManualQueue() throws Exception {
         ExecutorService executor = new ShortTermScheduledExecutorConfig().shortTermScheduledExecutor();
         try {
@@ -88,17 +107,52 @@ class ShortTermScanSchedulerTest {
             CountDownLatch ran = new CountDownLatch(1);
             java.util.concurrent.atomic.AtomicReference<String> threadName =
                     new java.util.concurrent.atomic.AtomicReference<>();
+            AtomicBoolean daemon = new AtomicBoolean(true);
             executor.submit(() -> {
                 threadName.set(Thread.currentThread().getName());
+                daemon.set(Thread.currentThread().isDaemon());
                 ran.countDown();
             });
 
             assertThat(ran.await(2, TimeUnit.SECONDS)).isTrue();
             assertThat(threadName.get()).startsWith("short-term-scheduled-");
+            assertThat(daemon).isFalse();
         } finally {
             executor.shutdownNow();
             assertThat(executor.awaitTermination(2, TimeUnit.SECONDS)).isTrue();
         }
+    }
+
+    @Test
+    void gracefulShutdownWaitsForInFlightScheduledScan() throws Exception {
+        ShortTermScheduledExecutor executor =
+                (ShortTermScheduledExecutor) new ShortTermScheduledExecutorConfig()
+                        .shortTermScheduledExecutor();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean interrupted = new AtomicBoolean(false);
+        executor.submit(() -> {
+            entered.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException exception) {
+                interrupted.set(true);
+                Thread.currentThread().interrupt();
+            }
+        });
+        assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
+
+        Thread shutdown = new Thread(executor::shutdownGracefully);
+        shutdown.start();
+        Thread.sleep(100);
+        assertThat(shutdown.isAlive()).isTrue();
+
+        release.countDown();
+        shutdown.join(2_000);
+
+        assertThat(shutdown.isAlive()).isFalse();
+        assertThat(interrupted).isFalse();
+        assertThat(executor.isTerminated()).isTrue();
     }
 
     private TriggerContext context(Instant base) {

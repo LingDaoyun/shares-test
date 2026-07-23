@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 public interface ShortTermScheduledSnapshotRepository
@@ -14,6 +15,19 @@ public interface ShortTermScheduledSnapshotRepository
 
     Optional<ShortTermScheduledSnapshotEntity>
     findFirstByTradeDateOrderByUpdatedAtDescSnapshotKeyDesc(LocalDate tradeDate);
+
+    Optional<ShortTermScheduledSnapshotEntity>
+    findFirstByTradeDateAndStageOrderByUpdatedAtDescSnapshotKeyDesc(
+            LocalDate tradeDate,
+            ShortTermSnapshotStage stage
+    );
+
+    List<ShortTermScheduledSnapshotEntity>
+    findAllByTradeDateAndStageAndStatusOrderByStartedAtAscSnapshotKeyAsc(
+            LocalDate tradeDate,
+            ShortTermSnapshotStage stage,
+            ShortTermSnapshotStatus status
+    );
 
     Optional<ShortTermScheduledSnapshotEntity>
     findByTradeDateAndStageAndParameterFingerprint(

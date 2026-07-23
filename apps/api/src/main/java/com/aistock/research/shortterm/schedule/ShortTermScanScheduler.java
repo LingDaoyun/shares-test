@@ -11,7 +11,6 @@ import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
-import java.time.ZoneId;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -91,7 +90,8 @@ public class ShortTermScanScheduler implements SchedulingConfigurer {
             String cron = cronSupplier.get();
             String zone = settings.zone();
             try {
-                CronTrigger refreshed = new CronTrigger(cron, ZoneId.of(zone));
+                CronTrigger refreshed = new CronTrigger(
+                        cron, TradingClockService.CHINA_MARKET_ZONE);
                 lastValid = refreshed;
                 lastWarningKey = null;
             } catch (RuntimeException exception) {

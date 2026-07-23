@@ -13,6 +13,7 @@ public record ShortTermScheduledSnapshot(
         ShortTermSnapshotStatus status,
         int attemptCount,
         String parameterFingerprint,
+        String parametersJson,
         Instant dataCutoffAt,
         Instant startedAt,
         Instant completedAt,
@@ -23,6 +24,7 @@ public record ShortTermScheduledSnapshot(
     public static ShortTermScheduledSnapshot waiting(LocalDate tradeDate, String message) {
         return new ShortTermScheduledSnapshot(
                 tradeDate + ":PRESELECT:WAITING", tradeDate, ShortTermSnapshotStage.PRESELECT,
-                ShortTermSnapshotStatus.RUNNING, 0, "waiting", null, null, null, message, List.of(), null);
+                ShortTermSnapshotStatus.RUNNING, 0, "waiting", null,
+                null, null, null, message, List.of(), null);
     }
 }

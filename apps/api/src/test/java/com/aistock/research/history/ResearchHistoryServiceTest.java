@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import org.mockito.ArgumentCaptor;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -84,5 +85,30 @@ class ResearchHistoryServiceTest {
         verify(objectMapper).writeValueAsString(payloadCaptor.capture());
         assertThat(payloadCaptor.getValue().candidate()).isSameAs(candidate);
         assertThat(payloadCaptor.getValue().marketSentiment()).isSameAs(sentiment);
+    }
+
+    @Test
+    void archivesScheduledShortTermHistoryIdempotentlyBySnapshotIdentity() throws Exception {
+        ShortTermCandidate candidate = mock(ShortTermCandidate.class);
+        ShortTermReport report = mock(ShortTermReport.class);
+        when(candidate.symbol()).thenReturn("600001");
+        when(candidate.name()).thenReturn("右侧股份");
+        when(report.candidates()).thenReturn(List.of(candidate));
+        when(objectMapper.writeValueAsString(any(ShortTermHistoryPayload.class)))
+                .thenReturn("{\"symbol\":\"600001\"}");
+        when(analysisRepository.existsById(any(String.class))).thenReturn(false, true);
+        when(decisionRepository.existsById(any(String.class))).thenReturn(false, true);
+
+        service.recordShortTermReport("2026-07-23:FINAL:fingerprint", report);
+        service.recordShortTermReport("2026-07-23:FINAL:fingerprint", report);
+
+        ArgumentCaptor<AnalysisHistoryEntity> analysisCaptor =
+                ArgumentCaptor.forClass(AnalysisHistoryEntity.class);
+        ArgumentCaptor<DecisionHistoryEntity> decisionCaptor =
+                ArgumentCaptor.forClass(DecisionHistoryEntity.class);
+        verify(analysisRepository, times(1)).save(analysisCaptor.capture());
+        verify(decisionRepository, times(1)).save(decisionCaptor.capture());
+        assertThat(decisionCaptor.getValue().toEntry().analysisId())
+                .isEqualTo(analysisCaptor.getValue().getAnalysisId());
     }
 }

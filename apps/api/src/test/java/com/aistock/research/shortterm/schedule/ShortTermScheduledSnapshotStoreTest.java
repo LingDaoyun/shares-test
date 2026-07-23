@@ -120,6 +120,48 @@ class ShortTermScheduledSnapshotStoreTest {
     }
 
     @Test
+    void returnsLatestSnapshotForDateAndStageIndependentOfFingerprint() {
+        LocalDate date = LocalDate.of(2026, 7, 23);
+        Instant started = Instant.parse("2026-07-23T06:48:00Z");
+        ShortTermSnapshotClaim older = store.claim(
+                date, FINAL, "rules-v1", "{\"version\":1}", started).orElseThrow();
+        store.finish(
+                older, FINAL_READY, sampleReport(), started, started.plusSeconds(10),
+                "旧配置终选", List.of());
+        ShortTermSnapshotClaim newer = store.claim(
+                date, FINAL, "rules-v2", "{\"version\":2}", started.plusSeconds(20)).orElseThrow();
+        store.finish(
+                newer, FINAL_READY, sampleReport(), started.plusSeconds(20), started.plusSeconds(30),
+                "新配置终选", List.of());
+
+        assertThat(store.latest(date, FINAL)).get()
+                .extracting(ShortTermScheduledSnapshot::parameterFingerprint)
+                .isEqualTo("rules-v2");
+        assertThat(store.latest(date, PRESELECT)).isEmpty();
+    }
+
+    @Test
+    void returnsAllRunningSnapshotsForDateAndStageAcrossFingerprints() {
+        LocalDate date = LocalDate.of(2026, 7, 23);
+        Instant started = Instant.parse("2026-07-23T06:48:00Z");
+        ShortTermSnapshotClaim terminal = store.claim(
+                date, FINAL, "rules-v1", "{\"version\":1}", started).orElseThrow();
+        store.finish(
+                terminal, FINAL_READY, sampleReport(), started, started.plusSeconds(10),
+                "旧配置终选", List.of());
+        store.claim(
+                date, FINAL, "rules-v2", "{\"version\":2}", started.plusSeconds(20)).orElseThrow();
+        store.claim(
+                date, FINAL, "rules-v3", "{\"version\":3}", started.plusSeconds(30)).orElseThrow();
+        store.claim(
+                date, PRESELECT, "rules-v2", "{\"version\":2}", started.plusSeconds(40)).orElseThrow();
+
+        assertThat(store.running(date, FINAL))
+                .extracting(ShortTermScheduledSnapshot::parameterFingerprint)
+                .containsExactly("rules-v2", "rules-v3");
+    }
+
+    @Test
     void publishesOnlyOnceFromRunningAndPreservesTheFirstTerminalResult() {
         LocalDate date = LocalDate.of(2026, 7, 28);
         Instant started = Instant.parse("2026-07-28T06:48:00Z");
