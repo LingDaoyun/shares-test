@@ -108,6 +108,13 @@ class ShortTermAutomationSettingsTest {
         assertThat(settings.overnightRules().entryStart()).isEqualTo(LocalTime.of(14, 46));
         assertThat(settings.overnightRules().entryEnd()).isEqualTo(LocalTime.of(14, 55));
 
+        environment.setProperty("research.short-term.overnight.entry-start", "14:56:59");
+        environment.setProperty("research.short-term.overnight.entry-end", "14:56:59.999999999");
+
+        assertThat(settings.overnightRules().entryStart()).isEqualTo(LocalTime.of(14, 56, 59));
+        assertThat(settings.overnightRules().entryEnd())
+                .isEqualTo(LocalTime.of(14, 56, 59, 999_999_999));
+
         environment.setProperty("research.short-term.overnight.entry-start", "14:55");
         environment.setProperty("research.short-term.overnight.entry-end", "14:50");
 

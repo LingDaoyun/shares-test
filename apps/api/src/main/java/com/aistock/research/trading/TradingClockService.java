@@ -26,6 +26,7 @@ public class TradingClockService {
     public static final LocalTime POST_CLOSE_FIXED_PRICE_END = LocalTime.of(15, 30);
     public static final LocalTime SHORT_TERM_ENTRY_START = LocalTime.of(14, 45);
     public static final LocalTime SHORT_TERM_ENTRY_END = LocalTime.of(14, 56, 59);
+    public static final LocalTime SHORT_TERM_ENTRY_EXCLUSIVE_END = LocalTime.of(14, 57);
     public static final String SHORT_TERM_ENTRY_CHECKPOINT = "TAIL_ENTRY_1445_1456";
     private static final Set<LocalDate> OFFICIAL_2026_HOLIDAYS = Set.of(
             LocalDate.parse("2026-01-01"), LocalDate.parse("2026-01-02"),
@@ -68,7 +69,7 @@ public class TradingClockService {
         LocalDateTime now = LocalDateTime.now(clock.withZone(CHINA_MARKET_ZONE));
         if (!isMarketClosedDay(now.toLocalDate())
                 && !now.toLocalTime().isBefore(SHORT_TERM_ENTRY_START)
-                && !now.toLocalTime().isAfter(SHORT_TERM_ENTRY_END)) {
+                && now.toLocalTime().isBefore(SHORT_TERM_ENTRY_EXCLUSIVE_END)) {
             return SHORT_TERM_ENTRY_CHECKPOINT;
         }
         return "NOT_CONFIRMED:" + classify(now).phase();
@@ -92,6 +93,10 @@ public class TradingClockService {
 
     public LocalDate currentMarketDate() {
         return LocalDate.now(clock.withZone(CHINA_MARKET_ZONE));
+    }
+
+    public LocalDateTime currentMarketDateTime() {
+        return LocalDateTime.now(clock.withZone(CHINA_MARKET_ZONE));
     }
 
     public TradingSessionSnapshot classify(LocalDateTime dateTime) {

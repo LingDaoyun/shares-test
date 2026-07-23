@@ -197,7 +197,7 @@ public class ShortTermAutomationSettings {
         try {
             LocalTime value = LocalTime.parse(raw.trim());
             if (!value.isBefore(TradingClockService.SHORT_TERM_ENTRY_START)
-                    && !value.isAfter(TradingClockService.SHORT_TERM_ENTRY_END)) {
+                    && value.isBefore(TradingClockService.SHORT_TERM_ENTRY_EXCLUSIVE_END)) {
                 return value;
             }
         } catch (DateTimeParseException ignored) {

@@ -19,13 +19,46 @@ import static org.mockito.Mockito.mock;
 class ShortTermExecutionWindowTest {
 
     @Test
-    void permitsConfirmedUpgradeAtLastExecutableSecond() {
+    void permitsConfirmedUpgradeWithCurrentEvidenceAtLastExecutableNanosecond() {
+        TradingAdvice advice = adjustAt(
+                "2026-07-23T06:56:59.999999999Z",
+                baseAdvice("ADD"),
+                tailSignal("CONFIRMED", "2026-07-23", "14:56:59.999999999"));
+
+        assertThat(advice.action()).isEqualTo("ADD");
+    }
+
+    @Test
+    void futureClosingAuctionEvidenceCannotUpgradeBeforeItsTimestamp() {
         TradingAdvice advice = adjustAt(
                 "2026-07-23T06:56:59Z",
                 baseAdvice("ADD"),
-                tailSignal("CONFIRMED"));
+                tailSignal("CONFIRMED", "2026-07-23", "14:57"));
 
-        assertThat(advice.action()).isEqualTo("ADD");
+        assertThat(advice.action()).isEqualTo("WAIT");
+        assertThat(advice.summary()).contains("研究", "不可新建");
+    }
+
+    @Test
+    void futureWatchEvidenceCannotUpgradeToLightTrial() {
+        TradingAdvice advice = adjustAt(
+                "2026-07-23T06:56:59Z",
+                baseAdvice("WAIT"),
+                tailSignal("WATCH", "2026-07-23", "14:57"));
+
+        assertThat(advice.action()).isEqualTo("WAIT");
+        assertThat(advice.summary()).contains("研究", "不可新建");
+    }
+
+    @Test
+    void priorTradingDayEvidenceCannotUpgradeSameDayAdvice() {
+        TradingAdvice advice = adjustAt(
+                "2026-07-23T06:56:59Z",
+                baseAdvice("ADD"),
+                tailSignal("CONFIRMED", "2026-07-22", "14:56:59"));
+
+        assertThat(advice.action()).isEqualTo("WAIT");
+        assertThat(advice.summary()).contains("研究", "不可新建");
     }
 
     @Test
@@ -33,7 +66,7 @@ class ShortTermExecutionWindowTest {
         TradingAdvice advice = adjustAt(
                 "2026-07-23T06:57:00Z",
                 baseAdvice("ADD"),
-                tailSignal("CONFIRMED"));
+                tailSignal("CONFIRMED", "2026-07-23", "14:57"));
 
         assertThat(advice.action()).isEqualTo("WAIT");
         assertThat(advice.summary()).contains("研究", "不可新建");
@@ -44,7 +77,7 @@ class ShortTermExecutionWindowTest {
         TradingAdvice advice = adjustAt(
                 "2026-07-23T07:00:00Z",
                 baseAdvice("WAIT"),
-                tailSignal("WATCH"));
+                tailSignal("WATCH", "2026-07-23", "15:00"));
 
         assertThat(advice.action()).isEqualTo("WAIT");
         assertThat(advice.summary()).contains("研究", "不可新建");
@@ -79,13 +112,13 @@ class ShortTermExecutionWindowTest {
                 List.of("遵守止损"));
     }
 
-    private ShortTermTailSignal tailSignal(String status) {
+    private ShortTermTailSignal tailSignal(String status, String tradeDate, String latestMinute) {
         return new ShortTermTailSignal(
                 status,
                 status,
                 true,
-                "2026-07-23",
-                "15:00",
+                tradeDate,
+                latestMinute,
                 new BigDecimal("10.50"),
                 new BigDecimal("10.30"),
                 new BigDecimal("0.80"),

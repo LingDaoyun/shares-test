@@ -28,7 +28,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -1205,15 +1207,18 @@ public class ShortTermService {
     }
 
     private TradingAdvice tailAdjustedAdvice(TradingAdvice base, String candidateAction, ShortTermTailSignal tailSignal) {
+        LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
         boolean executableEntryWindow = TradingClockService.SHORT_TERM_ENTRY_CHECKPOINT.equals(
                 tradingClockService.shortTermDecisionCheckpoint());
-        if (executableEntryWindow
+        boolean evidenceAvailableAtDecision = tailEvidenceAvailableAtDecision(tailSignal, decisionAt);
+        boolean executableEvidence = executableEntryWindow && evidenceAvailableAtDecision;
+        if (executableEvidence
                 && "CONFIRMED".equals(tailSignal.status()) && "ADD".equals(base.action())) {
             return new TradingAdvice(
                     "ADD",
                     "加仓",
                     Math.min(90, Math.max(base.confidence(), tailSignal.score().setScale(0, RoundingMode.HALF_UP).intValue())),
-                    "右侧结构通过，且 14:57-15:00 收盘集合竞价承接确认，可按纪律小仓试错。",
+                    "右侧结构通过，且当日分时证据不晚于 14:45-14:56 可成交决策时刻，可按纪律小仓试错。",
                     merge(base.reasons(), tailSignal.reasons()),
                     merge(base.riskControls(), tailSignal.riskControls())
             );
@@ -1221,14 +1226,24 @@ public class ShortTermService {
         if (isPullbackAdvice(base)) {
             return base;
         }
-        if (executableEntryWindow
+        if (executableEntryWindow && !evidenceAvailableAtDecision) {
+            return new TradingAdvice(
+                    "WAIT",
+                    "观望",
+                    Math.max(35, Math.min(base.confidence(), tailSignal.score().setScale(0, RoundingMode.HALF_UP).intValue())),
+                    "尾盘证据不属于当前交易日，或其时间晚于服务端决策时刻，仅保留用于研究和复盘，不可新建短线仓位。",
+                    merge(tailSignal.reasons(), base.reasons()),
+                    merge(tailSignal.riskControls(), base.riskControls())
+            );
+        }
+        if (executableEvidence
                 && shouldLightTrial(base, candidateAction, tailSignal)) {
             return new TradingAdvice(
                     "LIGHT_TRIAL",
                     "轻仓试错",
                     lightTrialConfidence(base, tailSignal),
                     "右侧结构已经进入可试错区，但还没有达到强加仓标准，只允许轻仓试错，不追第二笔。",
-                    merge(List.of("日线右侧结构进入观察区。", "14:57-15:00 尾盘没有明显走坏，具备小仓验证条件。"), base.reasons()),
+                    merge(List.of("日线右侧结构进入观察区。", "当日分时证据不晚于服务端决策时刻，具备小仓验证条件。"), base.reasons()),
                     merge(base.riskControls(), List.of("轻仓试错不超过计划短线仓位的 1/5。", "次日不能继续站稳 5/10/20 日线时退出试错。"))
             );
         }
@@ -1268,6 +1283,28 @@ public class ShortTermService {
                 merge(tailSignal.reasons(), base.reasons()),
                 merge(tailSignal.riskControls(), base.riskControls())
         );
+    }
+
+    private boolean tailEvidenceAvailableAtDecision(
+            ShortTermTailSignal tailSignal,
+            LocalDateTime decisionAt
+    ) {
+        if (tailSignal == null
+                || decisionAt == null
+                || tailSignal.tradeDate() == null
+                || tailSignal.latestMinute() == null) {
+            return false;
+        }
+        try {
+            LocalDate evidenceDate = LocalDate.parse(tailSignal.tradeDate());
+            LocalTime evidenceTime = LocalTime.parse(tailSignal.latestMinute());
+            if (!evidenceDate.equals(decisionAt.toLocalDate())) {
+                return false;
+            }
+            return !LocalDateTime.of(evidenceDate, evidenceTime).isAfter(decisionAt);
+        } catch (DateTimeParseException exception) {
+            return false;
+        }
     }
 
     private boolean shouldLightTrial(TradingAdvice base, String candidateAction, ShortTermTailSignal tailSignal) {
