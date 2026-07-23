@@ -18,6 +18,7 @@ import java.util.Set;
 public class ShortTermScheduledSnapshotStore {
 
     private static final TypeReference<List<String>> BLOCKED_REASONS_TYPE = new TypeReference<>() { };
+    private static final String RUNNING_MESSAGE = "正在执行";
     private static final Set<ShortTermSnapshotStatus> FINISH_STATUSES = Set.of(
             ShortTermSnapshotStatus.PRESELECT_READY,
             ShortTermSnapshotStatus.FINAL_READY,
@@ -36,7 +37,7 @@ public class ShortTermScheduledSnapshotStore {
         this.objectMapper = objectMapper;
     }
 
-    public boolean claim(
+    public Optional<ShortTermSnapshotClaim> claim(
             LocalDate tradeDate,
             ShortTermSnapshotStage stage,
             String parameterFingerprint,
@@ -45,19 +46,25 @@ public class ShortTermScheduledSnapshotStore {
     ) {
         String snapshotKey = snapshotKey(tradeDate, stage, parameterFingerprint);
         try {
-            repository.saveAndFlush(new ShortTermScheduledSnapshotEntity(
+            ShortTermScheduledSnapshotEntity entity = repository.saveAndFlush(new ShortTermScheduledSnapshotEntity(
                     snapshotKey, tradeDate, stage, parameterFingerprint, parametersJson, startedAt));
-            return true;
+            return Optional.of(new ShortTermSnapshotClaim(snapshotKey, entity.getAttemptCount()));
         } catch (DataIntegrityViolationException ignored) {
-            return repository.reclaimFailed(snapshotKey, ShortTermSnapshotStatus.RUNNING, ShortTermSnapshotStatus.FAILED) == 1;
+            int reclaimed = repository.reclaimFailed(
+                    snapshotKey, ShortTermSnapshotStatus.RUNNING, ShortTermSnapshotStatus.FAILED,
+                    startedAt, RUNNING_MESSAGE);
+            if (reclaimed != 1) {
+                return Optional.empty();
+            }
+            ShortTermScheduledSnapshotEntity entity = repository.findById(snapshotKey)
+                    .orElseThrow(() -> new IllegalStateException("Reclaimed scheduled snapshot is missing"));
+            return Optional.of(new ShortTermSnapshotClaim(snapshotKey, entity.getAttemptCount()));
         }
     }
 
     @Transactional
     public ShortTermScheduledSnapshot finish(
-            LocalDate tradeDate,
-            ShortTermSnapshotStage stage,
-            String parameterFingerprint,
+            ShortTermSnapshotClaim claim,
             ShortTermSnapshotStatus status,
             ShortTermReport report,
             Instant dataCutoffAt,
@@ -69,21 +76,19 @@ public class ShortTermScheduledSnapshotStore {
             throw new IllegalArgumentException("Finish status must be a publishable terminal status");
         }
         return publishTerminal(
-                tradeDate, stage, parameterFingerprint, status, writeReport(report), dataCutoffAt,
+                claim, status, writeReport(report), dataCutoffAt,
                 completedAt, message, writeBlockedReasons(blockedReasons));
     }
 
     @Transactional
     public ShortTermScheduledSnapshot fail(
-            LocalDate tradeDate,
-            ShortTermSnapshotStage stage,
-            String parameterFingerprint,
+            ShortTermSnapshotClaim claim,
             Instant completedAt,
             String message,
             List<String> blockedReasons
     ) {
         return publishTerminal(
-                tradeDate, stage, parameterFingerprint, ShortTermSnapshotStatus.FAILED, null, null,
+                claim, ShortTermSnapshotStatus.FAILED, null, null,
                 completedAt, message, writeBlockedReasons(blockedReasons));
     }
 
@@ -104,9 +109,7 @@ public class ShortTermScheduledSnapshotStore {
     }
 
     private ShortTermScheduledSnapshot publishTerminal(
-            LocalDate tradeDate,
-            ShortTermSnapshotStage stage,
-            String parameterFingerprint,
+            ShortTermSnapshotClaim claim,
             ShortTermSnapshotStatus status,
             String reportJson,
             Instant dataCutoffAt,
@@ -114,14 +117,14 @@ public class ShortTermScheduledSnapshotStore {
             String message,
             String blockedReasonsJson
     ) {
-        String snapshotKey = snapshotKey(tradeDate, stage, parameterFingerprint);
         int updated = repository.publishTerminal(
-                snapshotKey, ShortTermSnapshotStatus.RUNNING, status, reportJson, dataCutoffAt,
+                claim.snapshotKey(), claim.attemptCount(), ShortTermSnapshotStatus.RUNNING,
+                status, reportJson, dataCutoffAt,
                 completedAt, message, blockedReasonsJson);
         if (updated != 1) {
-            throw new IllegalStateException("Scheduled snapshot is no longer running");
+            throw new IllegalStateException("Scheduled snapshot claim is stale or no longer running");
         }
-        return toSnapshot(repository.findById(snapshotKey)
+        return toSnapshot(repository.findById(claim.snapshotKey())
                 .orElseThrow(() -> new IllegalStateException("Scheduled snapshot was not claimed")));
     }
 

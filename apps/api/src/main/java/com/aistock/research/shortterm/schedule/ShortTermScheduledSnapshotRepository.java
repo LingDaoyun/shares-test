@@ -27,14 +27,23 @@ public interface ShortTermScheduledSnapshotRepository
     @Query("""
             update ShortTermScheduledSnapshotEntity snapshot
             set snapshot.status = :runningStatus,
-                snapshot.attemptCount = snapshot.attemptCount + 1
+                snapshot.attemptCount = snapshot.attemptCount + 1,
+                snapshot.startedAt = :startedAt,
+                snapshot.completedAt = null,
+                snapshot.reportJson = null,
+                snapshot.dataCutoffAt = null,
+                snapshot.message = :runningMessage,
+                snapshot.blockedReasonsJson = null,
+                snapshot.updatedAt = :startedAt
             where snapshot.snapshotKey = :snapshotKey
               and snapshot.status = :failedStatus
             """)
     int reclaimFailed(
             @Param("snapshotKey") String snapshotKey,
             @Param("runningStatus") ShortTermSnapshotStatus runningStatus,
-            @Param("failedStatus") ShortTermSnapshotStatus failedStatus
+            @Param("failedStatus") ShortTermSnapshotStatus failedStatus,
+            @Param("startedAt") java.time.Instant startedAt,
+            @Param("runningMessage") String runningMessage
     );
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
@@ -50,9 +59,11 @@ public interface ShortTermScheduledSnapshotRepository
                 snapshot.updatedAt = :completedAt
             where snapshot.snapshotKey = :snapshotKey
               and snapshot.status = :runningStatus
+              and snapshot.attemptCount = :attemptCount
             """)
     int publishTerminal(
             @Param("snapshotKey") String snapshotKey,
+            @Param("attemptCount") int attemptCount,
             @Param("runningStatus") ShortTermSnapshotStatus runningStatus,
             @Param("terminalStatus") ShortTermSnapshotStatus terminalStatus,
             @Param("reportJson") String reportJson,
