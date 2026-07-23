@@ -106,6 +106,45 @@ class ShortTermGoldenCrossAnalyzerTest {
         assertThat(result.maAlignment()).isEqualTo(completed.maAlignment());
     }
 
+    @Test
+    void doesNotKeepOlderCrossEstablishedAfterMa5RecrossesAtOrBelowMa10() {
+        List<String> closes = new ArrayList<>(Collections.nCopies(20, "10.00"));
+        closes.addAll(List.of(
+                "10.50", "10.55", "10.60", "10.65", "10.70",
+                "9.00", "9.00", "9.00", "9.00", "9.00"
+        ));
+
+        ShortTermGoldenCrossSnapshot result = analyzer.analyze(rows(closes), true);
+
+        assertThat(result.state()).isEqualTo("NONE");
+        assertThat(result.ma5Ma10SpreadPercent()).isNegative();
+        assertThat(result.maAlignment()).isEqualTo("BEARISH");
+    }
+
+    @Test
+    void doesNotKeepRecentCrossConfirmedAfterMa5RecrossesAtOrBelowMa10() {
+        List<String> closes = new ArrayList<>(Collections.nCopies(20, "10.00"));
+        closes.addAll(List.of("10.50", "9.40"));
+
+        ShortTermGoldenCrossSnapshot result = analyzer.analyze(rows(closes), true);
+
+        assertThat(result.state()).isEqualTo("NONE");
+        assertThat(result.ma5Ma10SpreadPercent()).isNegative();
+        assertThat(result.maAlignment()).isEqualTo("BEARISH");
+    }
+
+    @Test
+    void doesNotRelabelFailedRecentCrossAsANewApproachingSignal() {
+        List<String> closes = new ArrayList<>(Collections.nCopies(20, "10.00"));
+        closes.addAll(List.of("10.50", "9.10", "10.35"));
+
+        ShortTermGoldenCrossSnapshot result = analyzer.analyze(rows(closes), true);
+
+        assertThat(result.state()).isEqualTo("NONE");
+        assertThat(result.tradingDaysSinceCross()).isNull();
+        assertThat(result.priorityTier()).isZero();
+    }
+
     private List<EastMoneyKLine> crossRows(int barsAfterCross) {
         List<String> closes = new ArrayList<>(Collections.nCopies(20, "10.00"));
         closes.add("10.50");

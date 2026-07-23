@@ -25,6 +25,7 @@ public record ShortTermTechnicalSnapshot(
         BigDecimal drawdownFrom120HighPercent,
         BigDecimal todayAmplitudePercent,
         int consecutiveAboveMa20Days,
-        String rightSideSignal
+        String rightSideSignal,
+        ShortTermGoldenCrossSnapshot goldenCross
 ) {
 }

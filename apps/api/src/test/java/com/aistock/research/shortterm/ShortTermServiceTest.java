@@ -19,10 +19,12 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -47,6 +49,178 @@ class ShortTermServiceTest {
         assertThat(eastMoneyClient.requestedQuoteLimit).isEqualTo(6000);
         assertThat(report.ruleSet().scanLimit()).isEqualTo(6000);
         assertThat(report.ruleSet().klineLimit()).isEqualTo(60);
+    }
+
+    @Test
+    void shouldDefaultToThreeShortTermRecommendations() {
+        eastMoneyClient.quotes = List.of(
+                quoteWithIndustry("600101", "光通信甲", "光通信", "10.62", "1.60", "35", "4.2", "900000000"),
+                quoteWithIndustry("600102", "光通信乙", "光通信", "10.62", "1.50", "42", "4.6", "860000000"),
+                quoteWithIndustry("600103", "光通信丙", "光通信", "10.62", "1.40", "48", "5.1", "820000000"),
+                quoteWithIndustry("600104", "光通信丁", "光通信", "10.62", "1.30", "55", "5.5", "780000000"),
+                quoteWithIndustry("600105", "光通信戊", "光通信", "10.62", "1.20", "60", "5.9", "740000000")
+        );
+        for (EastMoneyQuote quote : eastMoneyClient.quotes) {
+            eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "180000"));
+            eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
+        }
+
+        ShortTermReport report = service.report(null, 100, 10, null, null, null, null, null, null, null);
+
+        assertThat(report.candidates()).hasSize(3);
+        assertThat(report.methodology()).anySatisfy(item ->
+                assertThat(item).contains("只输出前三个", "热门方向", "分歧低吸"));
+    }
+
+    @Test
+    void shouldRankReviewedGoldenCrossTiersAndKeepWatchStatesNonExecutable() {
+        eastMoneyClient.quotes = List.of(
+                quote("600501", "确认金叉", "10.50", "1.60", "18", "1.6", "600000000"),
+                quote("600502", "临界金叉", "10.30", "1.20", "18", "1.6", "600000000"),
+                quote("600503", "延续金叉", "10.70", "1.00", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600501", confirmedRightEarlyKLines("600501", "10.50", "180000"));
+        eastMoneyClient.klines.put("600502", approachingGoldenCrossKLines("600502"));
+        eastMoneyClient.klines.put("600503", establishedRightSideKLines("600503"));
+        eastMoneyClient.quotes.forEach(quote -> eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
+
+        ShortTermReport report = service.report(3, 100, 10, null, null, null, null, null, null, null);
+
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600501", "600503", "600502");
+        assertThat(find(report, "600501").technical().goldenCross().state()).isEqualTo("CONFIRMED");
+        assertThat(find(report, "600502").technical().goldenCross().state()).isEqualTo("APPROACHING");
+        assertThat(find(report, "600502").todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
+        assertThat(report.quoteNote()).contains(
+                "金叉K线复核 " + report.klineReviewedCount() + "/" + report.reviewedCount());
+    }
+
+    @Test
+    void shouldRankRightSideConfirmationBeforeHigherScoringObservation() {
+        eastMoneyClient.quotes = List.of(
+                quote("600601", "确认样本", "10.62", "1.20", "90", "12", "600000000"),
+                quote("600602", "观察样本", "10.62", "1.20", "12", "1.2", "600000000")
+        );
+        eastMoneyClient.klines.put("600601", rightEarlyKLines("600601", "10.62", "180000"));
+        eastMoneyClient.klines.put("600602", rightEarlyKLines("600602", "10.62", "105000"));
+        eastMoneyClient.financials.put("600601", acceptableFinancial("600601"));
+        eastMoneyClient.financials.put("600602", goodFinancial("600602"));
+
+        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+
+        ShortTermCandidate confirmed = find(report, "600601");
+        ShortTermCandidate observed = find(report, "600602");
+        assertThat(confirmed.technical().rightSideSignal()).isEqualTo("右侧早期确认");
+        assertThat(observed.technical().rightSideSignal()).isEqualTo("右侧早期观察");
+        assertThat(confirmed.action()).isEqualTo(observed.action()).isEqualTo("WATCH_RIGHT_SIDE");
+        assertThat(confirmed.technical().goldenCross().priorityTier())
+                .isEqualTo(observed.technical().goldenCross().priorityTier())
+                .isEqualTo(1);
+        assertThat(confirmed.score().finalScore()).isEqualByComparingTo("83.45");
+        assertThat(observed.score().finalScore()).isEqualByComparingTo("89.00");
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600601", "600602");
+    }
+
+    @Test
+    void shouldRankEligibleObservationBeforeDataBlockedConfirmation() {
+        eastMoneyClient.quotes = List.of(
+                quote("600603", "待复核确认样本", "10.62", "1.20", "18", "1.6", "600000000"),
+                quote("600604", "可执行观察样本", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600603", rightEarlyKLines("600603", "10.62", "180000"));
+        eastMoneyClient.klines.put("600604", rightEarlyKLines("600604", "10.62", "105000"));
+        eastMoneyClient.financials.put("600604", goodFinancial("600604"));
+
+        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+
+        ShortTermCandidate blocked = find(report, "600603");
+        ShortTermCandidate eligible = find(report, "600604");
+        assertThat(blocked.technical().rightSideSignal()).isEqualTo("右侧早期确认");
+        assertThat(blocked.action()).isEqualTo("DATA_REVIEW");
+        assertThat(eligible.technical().rightSideSignal()).isEqualTo("右侧早期观察");
+        assertThat(eligible.action()).isEqualTo("WATCH_RIGHT_SIDE");
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600604", "600603");
+    }
+
+    @Test
+    void shouldRankActionPriorityBeforeRightSideMaturity() {
+        eastMoneyClient.quotes = List.of(
+                quote("600605", "等回踩确认样本", "10.62", "5.20", "18", "1.6", "600000000"),
+                quote("600606", "右侧观察样本", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600605", rightEarlyKLines("600605", "10.62", "180000"));
+        eastMoneyClient.klines.put("600606", rightEarlyKLines("600606", "10.62", "105000"));
+        eastMoneyClient.quotes.forEach(quote ->
+                eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
+
+        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+
+        ShortTermCandidate pullback = find(report, "600605");
+        ShortTermCandidate observation = find(report, "600606");
+        assertThat(pullback.technical().rightSideSignal()).isEqualTo("右侧早期确认");
+        assertThat(pullback.action()).isEqualTo("WAIT_PULLBACK");
+        assertThat(observation.technical().rightSideSignal()).isEqualTo("右侧早期观察");
+        assertThat(observation.action()).isEqualTo("WATCH_RIGHT_SIDE");
+        assertThat(pullback.technical().goldenCross().priorityTier())
+                .isEqualTo(observation.technical().goldenCross().priorityTier())
+                .isEqualTo(1);
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600606", "600605");
+    }
+
+    @Test
+    void shouldNotExecuteOverextendedConfirmedGoldenCross() {
+        eastMoneyClient.quotes = List.of(
+                quote("600504", "过度拉开金叉", "12.00", "1.60", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600504", recentGoldenCrossKLines("600504", 2));
+        eastMoneyClient.financials.put("600504", goodFinancial("600504"));
+
+        ShortTermCandidate overextendedConfirmed = find(
+                service.report(3, 100, 10, null, null, null, null, null, null, null),
+                "600504"
+        );
+
+        assertThat(overextendedConfirmed.technical().goldenCross().state()).isEqualTo("CONFIRMED");
+        assertThat(overextendedConfirmed.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
+    }
+
+    @Test
+    void shouldKeepSameDayUnfinishedGoldenCrossNonExecutableUntilFundamentalsArePresent() {
+        eastMoneyClient.quotes = List.of(
+                quote("600505", "未完成金叉", "10.50", "1.60", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600505", unfinishedFormingGoldenCrossKLines("600505"));
+
+        ShortTermCandidate candidate = find(
+                service.report(3, 100, 10, null, null, null, null, null, null, null),
+                "600505"
+        );
+
+        assertThat(tradingClockService.isCompletedDailyBar(candidate.technical().tradeDate())).isFalse();
+        assertThat(candidate.technical().goldenCross().state()).isEqualTo("FORMING");
+        assertThat(candidate.action()).isEqualTo("DATA_REVIEW");
+        assertThat(candidate.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
+    }
+
+    @Test
+    void shouldRequireConstructiveVolumeBeforeFormingGoldenCrossWatchAdvice() {
+        eastMoneyClient.quotes = List.of(
+                quote("600506", "低量未完成金叉", "10.50", "1.60", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600506", unfinishedFormingGoldenCrossKLinesWithLowVolume("600506"));
+        eastMoneyClient.financials.put("600506", goodFinancial("600506"));
+
+        ShortTermCandidate candidate = find(
+                service.report(3, 100, 10, null, null, null, null, null, null, null),
+                "600506"
+        );
+
+        assertThat(candidate.technical().goldenCross().state()).isEqualTo("FORMING");
+        assertThat(candidate.action()).isEqualTo("WAIT_CONFIRM");
+        assertThat(candidate.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
     }
 
     @Test
@@ -95,7 +269,78 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldKeepCrowdedMarketForResearchWithoutPostWindowTrial() {
+    void shouldTreatNarrowHotSectorAsStructuralMarketInsteadOfIcePointBlock() {
+        List<EastMoneyQuote> quotes = new ArrayList<>();
+        quotes.add(quoteWithIndustry("600401", "算力甲", "算力设备", "10.62", "2.80", "48", "5.2", "900000000"));
+        quotes.add(quoteWithIndustry("600402", "算力乙", "算力设备", "10.62", "2.50", "50", "5.4", "820000000"));
+        quotes.add(quoteWithIndustry("600403", "算力丙", "算力设备", "10.62", "2.20", "52", "5.6", "760000000"));
+        quotes.add(quoteWithIndustry("600404", "算力丁", "算力设备", "10.62", "1.90", "55", "5.8", "700000000"));
+        for (int index = 0; index < 8; index++) {
+            quotes.add(quote(String.format("6005%02d", index), "弱势样本" + index,
+                    "10.00", "-1.40", "18", "1.6", "260000000"));
+        }
+        eastMoneyClient.quotes = quotes;
+        eastMoneyClient.klines.put("600401", rightEarlyKLines("600401", "10.62", "180000"));
+        eastMoneyClient.financials.put("600401", goodFinancial("600401"));
+        eastMoneyClient.intraday.put("600401", confirmedTail("600401"));
+
+        ShortTermReport report = service.report(3, 50, 12, null, null, null, null, null, null, null);
+
+        assertThat(report.marketSentiment().phase()).isEqualTo("结构性行情");
+        ShortTermCandidate candidate = find(report, "600401");
+        assertThat(candidate.action()).isNotEqualTo("MARKET_RISK_WAIT");
+        assertThat(candidate.score().marketHeatScore()).isGreaterThan(new BigDecimal("70"));
+        assertThat(candidate.todayAdvice().action()).isIn("ADD", "LIGHT_TRIAL", "NEXT_WATCH", "WAIT");
+        assertThat(report.marketSentiment().explanation()).contains("热点簇");
+    }
+
+    @Test
+    void shouldRankRightSideStructureAheadOfWaitingShapeWhenMarketRiskOff() {
+        List<EastMoneyQuote> quotes = new ArrayList<>();
+        quotes.add(quote("600211", "右侧甲", "10.62", "1.10", "55", "5.0", "90000000"));
+        quotes.add(quote("600212", "右侧乙", "10.62", "1.20", "58", "5.2", "90000000"));
+        quotes.add(quote("600213", "右侧丙", "10.62", "1.30", "60", "5.5", "90000000"));
+        quotes.add(quoteWithIndustry("600399", "高分未右侧", "机器人", "9.60", "0.80", "18", "1.6", "3600000000"));
+        for (int index = 0; index < 8; index++) {
+            quotes.add(quote("6007" + index, "下跌样本" + index, "10.00", "-1.50", "18", "1.6", "300000000"));
+        }
+        eastMoneyClient.quotes = quotes;
+        for (String symbol : List.of("600211", "600212", "600213")) {
+            eastMoneyClient.klines.put(symbol, rightEarlyKLines(symbol, "10.62", "90000"));
+        }
+        eastMoneyClient.klines.put("600399", belowMa20KLines("600399"));
+        eastMoneyClient.financials.put("600399", goodFinancial("600399"));
+
+        ShortTermReport report = service.report(3, 100, 12, null, null, null, null, null, null, null);
+
+        assertThat(report.marketSentiment().phase()).isEqualTo("冰点/混沌");
+        assertThat(report.candidates()).hasSize(3);
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600211", "600212", "600213");
+        assertThat(report.candidates()).allSatisfy(candidate ->
+                assertThat(candidate.technical().rightSideSignal()).contains("右侧"));
+    }
+
+    @Test
+    void shouldTreatShrinkingRiseAsConstructiveVolumeSignal() {
+        eastMoneyClient.quotes = List.of(
+                quote("600214", "缩量上涨", "10.62", "1.10", "28", "2.6", "280000000")
+        );
+        eastMoneyClient.klines.put("600214", rightEarlyKLines("600214", "10.62", "80000"));
+        eastMoneyClient.financials.put("600214", goodFinancial("600214"));
+
+        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+
+        ShortTermCandidate candidate = find(report, "600214");
+        assertThat(candidate.technical().volumeRatio20()).isLessThan(BigDecimal.ONE);
+        assertThat(candidate.score().volumeScore()).isGreaterThanOrEqualTo(new BigDecimal("72"));
+        assertThat(candidate.strengths()).anySatisfy(strength -> assertThat(strength).contains("缩量上涨", "惜售"));
+        assertThat(candidate.evidence()).extracting(ShortTermEvidence::summary)
+                .anySatisfy(summary -> assertThat(summary).contains("缩量上涨"));
+    }
+
+    @Test
+    void shouldNotLetTailCreateAnEntryWhenCrowdedMarketDowngradesTheDailySignal() {
         List<EastMoneyQuote> quotes = new ArrayList<>();
         quotes.add(quote("600301", "右侧候选", "10.62", "1.60", "18", "1.6", "600000000"));
         for (int index = 0; index < 80; index++) {
@@ -103,7 +348,7 @@ class ShortTermServiceTest {
                     "10.00", "9.60", "30", "3", "300000000"));
         }
         eastMoneyClient.quotes = quotes;
-        eastMoneyClient.klines.put("600301", rightEarlyKLines("600301", "10.62", "180000"));
+        eastMoneyClient.klines.put("600301", confirmedRightEarlyKLines("600301", "10.62", "180000"));
         eastMoneyClient.financials.put("600301", goodFinancial("600301"));
         eastMoneyClient.intraday.put("600301", confirmedTail("600301"));
 
@@ -113,7 +358,6 @@ class ShortTermServiceTest {
         assertThat(report.marketSentiment().phase()).isEqualTo("高潮");
         assertThat(candidate.action()).isEqualTo("WATCH_RIGHT_SIDE");
         assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
-        assertThat(candidate.todayAdvice().summary()).contains("研究", "不可新建");
     }
 
     @Test
@@ -191,7 +435,7 @@ class ShortTermServiceTest {
                 quote("300059", "东方财富", "18.20", "1.10", "26.00", "3.20", "300000000"),
                 quote("000002", "*ST样本", "2.10", "1.00", "8.00", "0.90", "100000000")
         );
-        eastMoneyClient.klines.put("600001", rightEarlyKLines("600001", "10.62", "180000"));
+        eastMoneyClient.klines.put("600001", confirmedRightEarlyKLines("600001", "10.62", "180000"));
         eastMoneyClient.klines.put("600002", rightEarlyKLines("600002", "12.90", "420000"));
         eastMoneyClient.klines.put("600004", rightEarlyKLines("600004", "10.62", "160000"));
         eastMoneyClient.klines.put("600003", rightEarlyKLines("600003", "11.30", "210000"));
@@ -282,7 +526,7 @@ class ShortTermServiceTest {
         ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600001");
-        assertThat(candidate.todayAdvice().action()).isEqualTo("NEXT_WATCH");
+        assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
         assertThat(candidate.tailSignal().status()).isEqualTo("POST_CLOSE_FIXED_PRICE");
         assertThat(candidate.tailSignal().statusLabel()).isEqualTo("盘后固定价");
         assertThat(candidate.tailSignal().riskControls()).anySatisfy(control -> assertThat(control).contains("不能和普通尾盘买点混用"));
@@ -394,14 +638,14 @@ class ShortTermServiceTest {
         eastMoneyClient.quotes = List.of(
                 quote("600012", "观察试错", "10.62", "1.60", "18.00", "1.60", "180000000")
         );
-        eastMoneyClient.klines.put("600012", rightEarlyKLines("600012", "10.62", "108000"));
+        eastMoneyClient.klines.put("600012", confirmedRightEarlyKLines("600012", "10.62", "180000"));
         eastMoneyClient.financials.put("600012", goodFinancial("600012"));
         eastMoneyClient.intraday.put("600012", watchedTail("600012"));
 
         ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600012");
-        assertThat(candidate.action()).isEqualTo("WATCH_RIGHT_SIDE");
+        assertThat(candidate.action()).isEqualTo("RIGHT_EARLY_ADD");
         assertThat(candidate.tailSignal().status()).isEqualTo("WATCH");
         assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
         assertThat(candidate.todayAdvice().actionLabel()).isEqualTo("观望");
@@ -409,11 +653,87 @@ class ShortTermServiceTest {
     }
 
     @Test
+    void shouldRankEstablishedRightSideAheadOfApproachingCrossBelowMa20() {
+        eastMoneyClient.quotes = List.of(
+                quote("600017", "弱势临界", "10.30", "1.20", "18", "1.6", "600000000"),
+                quote("600018", "多头延续", "10.70", "1.00", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600017", approachingBelowMa20KLines("600017"));
+        eastMoneyClient.klines.put("600018", establishedRightSideKLines("600018"));
+        eastMoneyClient.quotes.forEach(quote -> eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
+
+        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+
+        assertThat(find(report, "600017").technical().goldenCross().state()).isEqualTo("APPROACHING");
+        assertThat(find(report, "600017").technical().rightSideSignal()).isEqualTo("尚未右侧");
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600018", "600017");
+    }
+
+    @Test
+    void shouldNotPromoteApproachingCrossThatIsAlreadyFarFromMa20() {
+        eastMoneyClient.quotes = List.of(
+                quote("600019", "过远临界", "12.00", "1.20", "18", "1.6", "600000000"),
+                quote("600020", "合理延续", "10.70", "1.00", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600019", approachingGoldenCrossKLines("600019"));
+        eastMoneyClient.klines.put("600020", establishedRightSideKLines("600020"));
+        eastMoneyClient.quotes.forEach(quote -> eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
+
+        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+
+        ShortTermCandidate approaching = find(report, "600019");
+        assertThat(approaching.technical().goldenCross().state()).isEqualTo("APPROACHING");
+        assertThat(approaching.technical().rightSideSignal()).isIn("右侧雏形", "右侧已拉开");
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600020", "600019");
+    }
+
+    @Test
+    void shouldReportAllSuccessfullyReviewedKLinesBeforeCandidateTruncation() {
+        List<EastMoneyQuote> quotes = IntStream.range(0, 35)
+                .mapToObj(index -> quote(String.format("60%04d", 700 + index), "复核样本" + index,
+                        "10.62", "1.20", "18", "1.6", "600000000"))
+                .toList();
+        eastMoneyClient.quotes = quotes;
+        quotes.forEach(quote -> {
+            eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "180000"));
+            eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
+        });
+
+        ShortTermReport report = service.report(3, 100, 35, null, null, null, null, null, null, null);
+
+        assertThat(report.reviewedCount()).isEqualTo(35);
+        assertThat(report.klineReviewedCount()).isEqualTo(35);
+        assertThat(report.quoteNote()).contains("金叉K线复核 35/35");
+    }
+
+    @Test
+    void shouldNotLetTailSupportCreateAnEntryAfterRecentGoldenCrossWindow() {
+        eastMoneyClient.quotes = List.of(
+                quote("600016", "延续观察", "10.70", "1.00", "18.00", "1.60", "180000000")
+        );
+        eastMoneyClient.klines.put("600016", rightEarlyKLines("600016", "10.70", "108000"));
+        eastMoneyClient.financials.put("600016", goodFinancial("600016"));
+        eastMoneyClient.intraday.put("600016", watchedTail("600016"));
+
+        ShortTermCandidate candidate = find(
+                service.report(3, 100, 5, null, null, null, null, null, null, null),
+                "600016"
+        );
+
+        assertThat(candidate.technical().goldenCross().state()).isEqualTo("ESTABLISHED");
+        assertThat(candidate.tailSignal().status()).isEqualTo("WATCH");
+        assertThat(candidate.action()).isEqualTo("WATCH_RIGHT_SIDE");
+        assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
+    }
+
+    @Test
     void shouldKeepStrongDailySignalAsNextDayWatchWhenTailTurnsWeak() {
         eastMoneyClient.quotes = List.of(
                 quote("600013", "次日关注", "10.62", "1.60", "18.00", "1.60", "180000000")
         );
-        eastMoneyClient.klines.put("600013", rightEarlyKLines("600013", "10.62", "180000"));
+        eastMoneyClient.klines.put("600013", confirmedRightEarlyKLines("600013", "10.62", "180000"));
         eastMoneyClient.financials.put("600013", goodFinancial("600013"));
         eastMoneyClient.intraday.put("600013", weakTail("600013"));
 
@@ -432,7 +752,7 @@ class ShortTermServiceTest {
         eastMoneyClient.quotes = List.of(
                 quote("600014", "大额成交", "10.62", "1.60", "18.00", "1.60", "3600000000")
         );
-        eastMoneyClient.klines.put("600014", rightEarlyKLines("600014", "10.62", "180000"));
+        eastMoneyClient.klines.put("600014", confirmedRightEarlyKLines("600014", "10.62", "180000"));
         eastMoneyClient.financials.put("600014", goodFinancial("600014"));
         eastMoneyClient.intraday.put("600014", largeTurnoverConfirmedTail("600014"));
 
@@ -502,6 +822,72 @@ class ShortTermServiceTest {
         return rows;
     }
 
+    private List<EastMoneyKLine> recentGoldenCrossKLines(String symbol, int barsAfterCross) {
+        List<BigDecimal> closes = new ArrayList<>(Collections.nCopies(20, new BigDecimal("10.00")));
+        closes.add(new BigDecimal("10.50"));
+        for (int index = 0; index < barsAfterCross; index++) {
+            closes.add(new BigDecimal("10.55").add(new BigDecimal("0.05").multiply(BigDecimal.valueOf(index))));
+        }
+        return klineRows(symbol, closes);
+    }
+
+    private List<EastMoneyKLine> confirmedRightEarlyKLines(String symbol, String finalClose, String finalVolume) {
+        List<EastMoneyKLine> rows = new ArrayList<>(rightEarlyKLines(symbol, finalClose, finalVolume));
+        List<BigDecimal> recentCloses = List.of(
+                new BigDecimal("10.00"), new BigDecimal("9.90"), new BigDecimal("9.80"),
+                new BigDecimal("9.90"), new BigDecimal("10.00"), new BigDecimal("10.20"),
+                new BigDecimal("10.40"), new BigDecimal(finalClose)
+        );
+        int start = rows.size() - recentCloses.size();
+        for (int index = 0; index < recentCloses.size(); index++) {
+            String volume = index == recentCloses.size() - 1 ? finalVolume : "105000";
+            rows.set(start + index, kline(symbol, rows.get(start + index).tradeDate(), recentCloses.get(index), volume));
+        }
+        return rows;
+    }
+
+    private List<EastMoneyKLine> approachingGoldenCrossKLines(String symbol) {
+        List<BigDecimal> closes = new ArrayList<>(Collections.nCopies(15, new BigDecimal("10.50")));
+        closes.addAll(Collections.nCopies(5, new BigDecimal("10.00")));
+        closes.addAll(List.of(new BigDecimal("10.10"), new BigDecimal("10.20"), new BigDecimal("10.30")));
+        return klineRows(symbol, closes);
+    }
+
+    private List<EastMoneyKLine> approachingBelowMa20KLines(String symbol) {
+        List<BigDecimal> closes = new ArrayList<>(Collections.nCopies(10, new BigDecimal("12.00")));
+        closes.addAll(Collections.nCopies(3, new BigDecimal("10.00")));
+        closes.addAll(Collections.nCopies(2, new BigDecimal("10.50")));
+        closes.addAll(Collections.nCopies(5, new BigDecimal("10.00")));
+        closes.addAll(List.of(new BigDecimal("10.10"), new BigDecimal("10.20"), new BigDecimal("10.30")));
+        return klineRows(symbol, closes);
+    }
+
+    private List<EastMoneyKLine> establishedRightSideKLines(String symbol) {
+        return recentGoldenCrossKLines(symbol, 4);
+    }
+
+    private List<EastMoneyKLine> unfinishedFormingGoldenCrossKLines(String symbol) {
+        List<EastMoneyKLine> historical = recentGoldenCrossKLines(symbol, 0);
+        LocalDate start = LocalDate.parse("2026-06-17");
+        return IntStream.range(0, historical.size())
+                .mapToObj(index -> kline(symbol, start.plusDays(index), historical.get(index).close(), "180000"))
+                .toList();
+    }
+
+    private List<EastMoneyKLine> unfinishedFormingGoldenCrossKLinesWithLowVolume(String symbol) {
+        List<EastMoneyKLine> rows = new ArrayList<>(unfinishedFormingGoldenCrossKLines(symbol));
+        EastMoneyKLine latest = rows.get(rows.size() - 1);
+        rows.set(rows.size() - 1, kline(symbol, latest.tradeDate(), latest.close(), "30000"));
+        return rows;
+    }
+
+    private List<EastMoneyKLine> klineRows(String symbol, List<BigDecimal> closes) {
+        LocalDate start = LocalDate.parse("2026-06-01");
+        return IntStream.range(0, closes.size())
+                .mapToObj(index -> kline(symbol, start.plusDays(index), closes.get(index), "180000"))
+                .toList();
+    }
+
     private List<EastMoneyKLine> longSidewaysKLines(String symbol) {
         List<EastMoneyKLine> rows = new ArrayList<>();
         LocalDate start = LocalDate.parse("2026-01-01");
@@ -509,6 +895,17 @@ class ShortTermServiceTest {
             BigDecimal close = new BigDecimal("10.00").add(new BigDecimal(index % 2 == 0 ? "0.08" : "-0.06"));
             rows.add(kline(symbol, start.plusDays(index), close, "110000"));
         }
+        return rows;
+    }
+
+    private List<EastMoneyKLine> belowMa20KLines(String symbol) {
+        List<EastMoneyKLine> rows = new ArrayList<>();
+        LocalDate start = LocalDate.parse("2026-01-01");
+        for (int index = 0; index < 80; index++) {
+            BigDecimal close = new BigDecimal("12.00").subtract(new BigDecimal("0.030").multiply(BigDecimal.valueOf(index)));
+            rows.add(kline(symbol, start.plusDays(index), close, "260000"));
+        }
+        rows.add(kline(symbol, start.plusDays(80), new BigDecimal("9.60"), "360000"));
         return rows;
     }
 
@@ -559,6 +956,14 @@ class ShortTermServiceTest {
                         new BigDecimal("1.05"), new BigDecimal("0.2600"), new BigDecimal("0.0300"), new BigDecimal("0.0800"), BigDecimal.ONE, new BigDecimal("4.60")),
                 new EastMoneyAnnualIndicator(symbol, "样本", "2023-12-31", "年报", new BigDecimal("0.0960"),
                         new BigDecimal("0.90"), new BigDecimal("0.2400"), new BigDecimal("0.0200"), new BigDecimal("0.0500"), BigDecimal.ONE, new BigDecimal("4.20"))
+        );
+    }
+
+    private List<EastMoneyAnnualIndicator> acceptableFinancial(String symbol) {
+        return List.of(
+                new EastMoneyAnnualIndicator(symbol, "样本", "2025-12-31", "年报", new BigDecimal("0.0600"),
+                        new BigDecimal("0.60"), new BigDecimal("0.1200"), new BigDecimal("-0.0200"),
+                        new BigDecimal("0.0300"), BigDecimal.ONE, new BigDecimal("3.00"))
         );
     }
 

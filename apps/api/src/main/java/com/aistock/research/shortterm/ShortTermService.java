@@ -45,7 +45,7 @@ import java.util.stream.IntStream;
 public class ShortTermService {
 
     private static final Logger logger = LoggerFactory.getLogger(ShortTermService.class);
-    private static final int DEFAULT_LIMIT = 8;
+    private static final int DEFAULT_LIMIT = 3;
     private static final int DEFAULT_SCAN_LIMIT = 6000;
     private static final int MAX_SCAN_LIMIT = 6000;
     private static final int DEFAULT_KLINE_LIMIT = 60;
@@ -133,10 +133,11 @@ public class ShortTermService {
     private final EvidenceCompletenessService evidenceCompletenessService;
     private final TradingClockService tradingClockService;
     private final QuoteFreshnessService quoteFreshnessService;
+    private final ShortTermGoldenCrossAnalyzer goldenCrossAnalyzer;
     private final ValuationContextCalculator valuationContextCalculator = new ValuationContextCalculator();
 
     public ShortTermService(EastMoneyClient eastMoneyClient) {
-        this(eastMoneyClient, new EvidenceCompletenessService(), new TradingClockService());
+        this(eastMoneyClient, new EvidenceCompletenessService(), new TradingClockService(), new ShortTermGoldenCrossAnalyzer());
     }
 
     public ShortTermService(
@@ -144,7 +145,27 @@ public class ShortTermService {
             EvidenceCompletenessService evidenceCompletenessService,
             TradingClockService tradingClockService
     ) {
-        this(eastMoneyClient, evidenceCompletenessService, tradingClockService, new QuoteFreshnessService(tradingClockService));
+        this(eastMoneyClient, evidenceCompletenessService, tradingClockService, new ShortTermGoldenCrossAnalyzer());
+    }
+
+    public ShortTermService(
+            EastMoneyClient eastMoneyClient,
+            EvidenceCompletenessService evidenceCompletenessService,
+            TradingClockService tradingClockService,
+            ShortTermGoldenCrossAnalyzer goldenCrossAnalyzer
+    ) {
+        this(eastMoneyClient, evidenceCompletenessService, tradingClockService,
+                new QuoteFreshnessService(tradingClockService), goldenCrossAnalyzer);
+    }
+
+    public ShortTermService(
+            EastMoneyClient eastMoneyClient,
+            EvidenceCompletenessService evidenceCompletenessService,
+            TradingClockService tradingClockService,
+            QuoteFreshnessService quoteFreshnessService
+    ) {
+        this(eastMoneyClient, evidenceCompletenessService, tradingClockService, quoteFreshnessService,
+                new ShortTermGoldenCrossAnalyzer());
     }
 
     @Autowired
@@ -152,12 +173,14 @@ public class ShortTermService {
             EastMoneyClient eastMoneyClient,
             EvidenceCompletenessService evidenceCompletenessService,
             TradingClockService tradingClockService,
-            QuoteFreshnessService quoteFreshnessService
+            QuoteFreshnessService quoteFreshnessService,
+            ShortTermGoldenCrossAnalyzer goldenCrossAnalyzer
     ) {
         this.eastMoneyClient = eastMoneyClient;
         this.evidenceCompletenessService = evidenceCompletenessService;
         this.tradingClockService = tradingClockService;
         this.quoteFreshnessService = quoteFreshnessService;
+        this.goldenCrossAnalyzer = goldenCrossAnalyzer;
     }
 
     public ShortTermReport report(
@@ -220,13 +243,17 @@ public class ShortTermService {
                         (left, right) -> left
                 ));
 
-        List<TechnicalCandidate> technicalCandidates = tradableQuotes.stream()
+        List<TechnicalCandidate> reviewedTechnicalCandidates = tradableQuotes.stream()
                 .map(quote -> technicalCandidate(quote, klineMap.getOrDefault(quote.symbol(), List.of()), ruleSet))
                 .filter(candidate -> candidate.technical().snapshot().tradeDate() != null)
+                .toList();
+
+        List<TechnicalCandidate> technicalCandidates = reviewedTechnicalCandidates.stream()
                 .filter(candidate -> !isLongSidewaysWithoutBreakout(candidate, ruleSet))
-                .sorted(Comparator.comparing((TechnicalCandidate item) -> item.technicalScore()
-                        .multiply(new BigDecimal("0.70"))
-                        .add(item.volumeScore().multiply(new BigDecimal("0.30")))).reversed())
+                .sorted(Comparator.comparingInt(this::goldenCrossTechnicalPriority).reversed()
+                        .thenComparing(Comparator.comparing((TechnicalCandidate item) -> item.technicalScore()
+                                .multiply(new BigDecimal("0.70"))
+                                .add(item.volumeScore().multiply(new BigDecimal("0.30")))).reversed()))
                 .limit(Math.max(resolveLimit(limit) * 4L, 28L))
                 .toList();
 
@@ -239,7 +266,10 @@ public class ShortTermService {
 
         List<ScoredShortTerm> scored = technicalCandidates.stream()
                 .map(item -> score(item, financialMap.get(item.quote().symbol()), ruleSet, hotDirectionMap, marketSentiment))
-                .sorted(Comparator.comparingInt((ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed()
+                .sorted(Comparator.comparingInt((ScoredShortTerm item) -> eligibilityGatePriority(item.candidate().action())).reversed()
+                        .thenComparing(Comparator.comparingInt((ScoredShortTerm item) -> eligibleGoldenCrossPriority(item.candidate())).reversed())
+                        .thenComparing(Comparator.comparingInt((ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed())
+                        .thenComparing(Comparator.comparingInt((ScoredShortTerm item) -> rightSideMaturityPriority(item.candidate())).reversed())
                         .thenComparing(item -> item.candidate().score().finalScore(), Comparator.reverseOrder()))
                 .toList();
 
@@ -248,9 +278,7 @@ public class ShortTermService {
                 .mapToObj(index -> enrichTailSignal(rerank(scored.get(index).candidate(), index + 1)))
                 .toList();
 
-        long validKlineCount = technicalCandidates.stream()
-                .filter(candidate -> candidate.technical().snapshot().tradeDate() != null)
-                .count();
+        long validKlineCount = reviewedTechnicalCandidates.size();
 
         return new ShortTermReport(
                 "A 股短线右侧启动池",
@@ -258,12 +286,13 @@ public class ShortTermService {
                 tradableQuotes.size(),
                 (int) validKlineCount,
                 candidates.size(),
-                quoteNote(quoteSnapshot),
+                quoteNote(quoteSnapshot, (int) validKlineCount, tradableQuotes.size()),
                 tradingClockService.currentSession(),
                 List.of(
                         "第一层用全 A 股行情做流动性、非 ST、热门方向和追涨风险排序，PE/PB 只占预选分的 10%。",
                         "第二层拉取候选近一年 K 线，优先寻找站上 20 日线、20 日线走平上拐、突破前高且距离均线不远的右侧早期结构。",
-                        "第三层用量能确认突破强度；量比不足只能观察，不能因为低 PE/PB 直接给买入建议。",
+                        "第三层用量价确认突破质量；温和放量突破、缩量上涨惜售、缩量回踩不破都算建设性信号，不能因为低 PE/PB 直接给买入建议。",
+                        "默认只输出前三个短线候选：优先热门方向、流动性充足、基本面过线且右侧早期或分歧低吸更舒服的股票。",
                         "PE、PB 在最终分中只占 5%，高于参考带仅提示预期偏高，不能单独淘汰右侧候选。",
                         "当前热门方向会提高候选优先级，但不能覆盖 K 线结构、量能确认和财报质量。",
                         "涨幅过大、距离 20 日线过远、120 日位置过高、量能过度放大会被视为追涨风险，宁可等待回踩确认。",
@@ -289,19 +318,21 @@ public class ShortTermService {
         }
     }
 
-    private String quoteNote(AshareQuoteSnapshot snapshot) {
+    private String quoteNote(AshareQuoteSnapshot snapshot, int klineReviewedCount, int reviewedCount) {
         String coverage = snapshot.fetchedCount() + "/" + snapshot.expectedCount();
+        String goldenCrossNote = " 金叉K线复核 " + klineReviewedCount + "/" + reviewedCount
+                + "；金叉排序只代表已复核样本，不代表全市场每只股票均已计算。";
         if (snapshot.complete()) {
-            return QUOTE_NOTE + " 本轮行情覆盖 " + coverage + "，来源：" + snapshot.source() + "。";
+            return QUOTE_NOTE + " 本轮行情覆盖 " + coverage + "，来源：" + snapshot.source() + "。" + goldenCrossNote;
         }
         return QUOTE_NOTE + " 本轮行情覆盖不足 " + coverage + "，缺失 " + snapshot.missingCount()
-                + " 只；页面保留研究结果，但覆盖率低于 90% 时关闭短线执行动作。来源：" + snapshot.source() + "。";
+                + " 只；页面保留研究结果，但覆盖率低于 90% 时关闭短线执行动作。来源：" + snapshot.source() + "。" + goldenCrossNote;
     }
 
     private TechnicalCandidate technicalCandidate(EastMoneyQuote quote, List<EastMoneyKLine> klines, ShortTermRuleSet ruleSet) {
         TechnicalContext context = technicalContext(quote, klines, ruleSet);
         BigDecimal technicalScore = technicalScore(context, ruleSet);
-        BigDecimal volumeScore = volumeScore(context.snapshot(), ruleSet);
+        BigDecimal volumeScore = volumeScore(context, ruleSet);
         return new TechnicalCandidate(quote, context, technicalScore, volumeScore);
     }
 
@@ -377,12 +408,12 @@ public class ShortTermService {
                 .filter(kline -> kline.close() != null && kline.tradeDate() != null)
                 .sorted(Comparator.comparing(EastMoneyKLine::tradeDate))
                 .toList();
-        if (sorted.size() < 35) {
+        if (sorted.size() < 20) {
             return new TechnicalContext(
                     quote,
                     sorted,
                     new ShortTermTechnicalSnapshot(null, null, null, null, null, null, null, null, null, null, null, null, null,
-                            null, null, null, null, null, null, null, 0, "K线不足"),
+                            null, null, null, null, null, null, null, 0, "K线不足", ShortTermGoldenCrossSnapshot.unavailable()),
                     null,
                     null,
                     List.of("近一年 K 线不足，不能确认右侧启动")
@@ -416,6 +447,8 @@ public class ShortTermService {
         BigDecimal drawdownFromHigh120 = percent(nullToZero(high120).subtract(close), high120);
         BigDecimal amplitude = last.high() == null || last.low() == null ? null : percent(last.high().subtract(last.low()), close);
         int consecutiveAboveMa20 = consecutiveAboveMa(sorted, 20);
+        boolean latestBarCompleted = tradingClockService.isCompletedDailyBar(last.tradeDate());
+        ShortTermGoldenCrossSnapshot goldenCross = goldenCrossAnalyzer.analyze(sorted, latestBarCompleted);
         String rightSideSignal = rightSideSignal(
                 close,
                 previous,
@@ -429,7 +462,8 @@ public class ShortTermService {
                 distanceToMa20,
                 breakoutFromPreviousHigh20,
                 volumeRatio20,
-                ruleSet
+                ruleSet,
+                goldenCross
         );
 
         return new TechnicalContext(
@@ -457,7 +491,8 @@ public class ShortTermService {
                         scale(drawdownFromHigh120),
                         scale(amplitude),
                         consecutiveAboveMa20,
-                        rightSideSignal
+                        rightSideSignal,
+                        goldenCross
                 ),
                 last,
                 previous,
@@ -478,7 +513,8 @@ public class ShortTermService {
             BigDecimal distanceToMa20,
             BigDecimal breakoutFromPreviousHigh20Percent,
             BigDecimal volumeRatio20,
-            ShortTermRuleSet ruleSet
+            ShortTermRuleSet ruleSet,
+            ShortTermGoldenCrossSnapshot goldenCross
     ) {
         if (close == null || ma20 == null) {
             return "K线不足";
@@ -493,9 +529,13 @@ public class ShortTermService {
         boolean breakout20 = previousHigh20 != null && close.compareTo(previousHigh20) >= 0
                 || breakoutFromPreviousHigh20Percent != null && breakoutFromPreviousHigh20Percent.compareTo(BigDecimal.ZERO) >= 0;
         boolean aboveMa60 = ma60 != null && close.compareTo(ma60) > 0;
+        boolean approachingGoldenCross = goldenCross != null && "APPROACHING".equals(goldenCross.state());
 
         if (aboveMa20 && ma5AboveMa10 && ma20Turning && nearMa20 && middleRange && volumeConfirmed && (crossedMa20 || breakout20)) {
             return "右侧早期确认";
+        }
+        if (approachingGoldenCross && aboveMa20 && ma20Turning && nearMa20 && middleRange) {
+            return "右侧早期观察";
         }
         if (aboveMa20 && ma5AboveMa10 && ma20Turning && nearMa20 && middleRange) {
             return "右侧早期观察";
@@ -587,8 +627,14 @@ public class ShortTermService {
         if (snapshot.ma60() != null && close.compareTo(snapshot.ma60()) > 0) {
             score = score.add(new BigDecimal("8"));
         }
-        if (snapshot.ma5() != null && snapshot.ma10() != null && snapshot.ma5().compareTo(snapshot.ma10()) >= 0) {
-            score = score.add(new BigDecimal("8"));
+        if (snapshot.goldenCross() != null) {
+            score = score.add(switch (snapshot.goldenCross().state()) {
+                case "CONFIRMED" -> new BigDecimal("14");
+                case "APPROACHING" -> new BigDecimal("8");
+                case "FORMING" -> new BigDecimal("6");
+                case "ESTABLISHED" -> new BigDecimal("4");
+                default -> BigDecimal.ZERO;
+            });
         }
         if (snapshot.ma20SlopePercent() != null && snapshot.ma20SlopePercent().compareTo(BigDecimal.ZERO) >= 0) {
             score = score.add(new BigDecimal("8"));
@@ -647,10 +693,14 @@ public class ShortTermService {
         return clamp(score);
     }
 
-    private BigDecimal volumeScore(ShortTermTechnicalSnapshot snapshot, ShortTermRuleSet ruleSet) {
+    private BigDecimal volumeScore(TechnicalContext context, ShortTermRuleSet ruleSet) {
+        ShortTermTechnicalSnapshot snapshot = context.snapshot();
         BigDecimal ratio = snapshot.volumeRatio20();
         if (ratio == null) {
             return new BigDecimal("45");
+        }
+        if (isConstructiveShrinkingRise(context, ruleSet)) {
+            return new BigDecimal("78");
         }
         if (ratio.compareTo(ruleSet.minVolumeRatio()) >= 0 && ratio.compareTo(new BigDecimal("2.80")) <= 0) {
             return new BigDecimal("86");
@@ -665,6 +715,29 @@ public class ShortTermService {
             return new BigDecimal("42");
         }
         return new BigDecimal("50");
+    }
+
+    private boolean isConstructiveShrinkingRise(TechnicalContext context, ShortTermRuleSet ruleSet) {
+        ShortTermTechnicalSnapshot snapshot = context.snapshot();
+        EastMoneyKLine previous = context.previous();
+        BigDecimal close = latestPrice(context.quote(), context);
+        BigDecimal ratio = snapshot.volumeRatio20();
+        if (snapshot.tradeDate() == null || previous == null || previous.close() == null || close == null || ratio == null) {
+            return false;
+        }
+        boolean priceRising = close.compareTo(previous.close()) > 0
+                || context.quote().changePercent() != null && context.quote().changePercent().compareTo(BigDecimal.ZERO) > 0;
+        boolean shrinkingButNotDry = ratio.compareTo(new BigDecimal("0.55")) >= 0
+                && ratio.compareTo(new BigDecimal("1.05")) <= 0;
+        boolean rightStructure = isQualifiedRightSideSignal(snapshot.rightSideSignal())
+                || snapshot.ma20() != null && close.compareTo(snapshot.ma20()) >= 0
+                && snapshot.ma20SlopePercent() != null && snapshot.ma20SlopePercent().compareTo(new BigDecimal("-0.20")) >= 0;
+        boolean nearKeyAverage = snapshot.distanceToMa20Percent() == null
+                || snapshot.distanceToMa20Percent().compareTo(BigDecimal.ZERO) >= 0
+                && snapshot.distanceToMa20Percent().compareTo(ruleSet.maxDistanceToMa20Percent().add(new BigDecimal("2"))) <= 0;
+        boolean notChasing = context.quote().changePercent() == null
+                || context.quote().changePercent().compareTo(ruleSet.maxEntryRisePercent().add(BigDecimal.ONE)) <= 0;
+        return priceRising && shrinkingButNotDry && rightStructure && nearKeyAverage && notChasing;
     }
 
     private BigDecimal financialQualityScore(List<EastMoneyAnnualIndicator> history) {
@@ -760,7 +833,11 @@ public class ShortTermService {
         boolean hasFinancial = financial != null && financial.reportDate() != null;
         boolean financialOk = financial != null && financial.qualityScore().compareTo(ruleSet.minFinancialScore()) >= 0;
         boolean rightEarly = "右侧早期确认".equals(technical.rightSideSignal()) || "右侧早期观察".equals(technical.rightSideSignal());
+        boolean confirmedRecentGoldenCross = technical.goldenCross() != null
+                && technical.goldenCross().confirmedRecent();
+        boolean goldenCrossWatch = technical.goldenCross() != null && technical.goldenCross().watchLayer();
         boolean volumeConfirmed = hasVolumeConfirmation(technical.volumeRatio20(), ruleSet);
+        boolean constructiveVolume = volumeConfirmed || volumeScore.compareTo(new BigDecimal("72")) >= 0;
         boolean chaseRisk = isChaseRisk(quote, technical, ruleSet);
         boolean crowdedSentiment = "高潮".equals(marketSentiment.phase());
         boolean marketRiskOff = "退潮".equals(marketSentiment.phase())
@@ -775,17 +852,26 @@ public class ShortTermService {
         if (marketRiskOff) {
             return new ActionDecision("MARKET_RISK_WAIT", "情绪风险等待");
         }
+        if (!hasFinancial || !financialOk) {
+            return new ActionDecision("DATA_REVIEW", "财报质量复核");
+        }
         // 右侧策略优先识别“早期启动 + 基本面可接受”的机会；总分只决定信心，不再作为过高的单一闸门。
         boolean qualityEnoughForTrial = financial != null
                 && financial.qualityScore().compareTo(ruleSet.minFinancialScore().subtract(new BigDecimal("5"))) >= 0;
-        if (rightEarly && !crowdedSentiment && technicalScore.compareTo(new BigDecimal("65")) >= 0
-                && volumeConfirmed && volumeScore.compareTo(new BigDecimal("70")) >= 0
+        if ((rightEarly || "右侧已拉开".equals(technical.rightSideSignal()) || goldenCrossWatch) && chaseRisk) {
+            return new ActionDecision("WAIT_PULLBACK", "右侧已动-等回踩");
+        }
+        if (goldenCrossWatch) {
+            if (!constructiveVolume || volumeScore.compareTo(new BigDecimal("70")) < 0) {
+                return new ActionDecision("WAIT_CONFIRM", "量能确认不足");
+            }
+            return new ActionDecision("WATCH_RIGHT_SIDE", "金叉观察");
+        }
+        if (rightEarly && confirmedRecentGoldenCross && !crowdedSentiment && technicalScore.compareTo(new BigDecimal("65")) >= 0
+                && constructiveVolume && volumeScore.compareTo(new BigDecimal("70")) >= 0
                 && qualityEnoughForTrial && !chaseRisk
                 && "右侧早期确认".equals(technical.rightSideSignal())) {
             return new ActionDecision("RIGHT_EARLY_ADD", "右侧早期-分批");
-        }
-        if ((rightEarly || "右侧已拉开".equals(technical.rightSideSignal())) && chaseRisk) {
-            return new ActionDecision("WAIT_PULLBACK", "右侧已动-等回踩");
         }
         if (rightEarly && finalScore.compareTo(new BigDecimal("62")) >= 0 && financialOk) {
             return new ActionDecision("WATCH_RIGHT_SIDE", "右侧观察");
@@ -825,9 +911,12 @@ public class ShortTermService {
         int total = advancing + declining;
         BigDecimal breadth = total == 0 ? BigDecimal.ZERO
                 : BigDecimal.valueOf(advancing * 100L).divide(BigDecimal.valueOf(total), 2, RoundingMode.HALF_UP);
+        StructuralHotCluster hotCluster = structuralHotCluster(quotes);
         String phase;
         if (limitDownLike >= 30 || (breadth.compareTo(new BigDecimal("35")) < 0 && limitDownLike > limitUpLike * 2)) {
             phase = "退潮";
+        } else if (breadth.compareTo(new BigDecimal("45")) < 0 && hotCluster.available()) {
+            phase = "结构性行情";
         } else if (limitUpLike >= 80 && breadth.compareTo(new BigDecimal("65")) >= 0) {
             phase = "高潮";
         } else if (breadth.compareTo(new BigDecimal("55")) >= 0 && limitUpLike > limitDownLike) {
@@ -840,9 +929,35 @@ public class ShortTermService {
         BigDecimal score = breadth.add(BigDecimal.valueOf(Math.min(limitUpLike, 100) * 0.15))
                 .subtract(BigDecimal.valueOf(Math.min(limitDownLike, 100) * 0.20))
                 .max(BigDecimal.ZERO).min(new BigDecimal("100"));
+        if ("结构性行情".equals(phase)) {
+            score = score.max(new BigDecimal("58"));
+        }
+        String explanation = "结构性行情".equals(phase)
+                ? "全市场涨跌广度偏弱，但 " + hotCluster.industry() + " 形成热点簇：上涨 "
+                + hotCluster.advancingCount() + "/" + hotCluster.sampleCount()
+                + "，平均涨幅 " + hotCluster.averageChangePercent() + "%"
+                + "，成交额 " + moneyInYi(hotCluster.totalAmount()) + "；这种环境只允许围绕热点方向轻仓试错。"
+                : "基于全市场涨跌广度、涨停近似数和跌停近似数；情绪状态只用于仓位和加仓闸门，不单独产生买点。";
         return new ShortTermMarketSentiment(phase, score.setScale(2, RoundingMode.HALF_UP), advancing, declining,
                 limitUpLike, limitDownLike, breadth,
-                "基于全市场涨跌广度、涨停近似数和跌停近似数；情绪状态只用于仓位和加仓闸门，不单独产生买点。");
+                explanation);
+    }
+
+    private StructuralHotCluster structuralHotCluster(List<EastMoneyQuote> quotes) {
+        Map<String, IndustryMomentumStats> stats = new LinkedHashMap<>();
+        for (EastMoneyQuote quote : quotes) {
+            String industry = quote.industry();
+            if (industry == null || industry.isBlank() || quote.changePercent() == null) {
+                continue;
+            }
+            stats.computeIfAbsent(industry.trim(), IndustryMomentumStats::new).add(quote);
+        }
+        return stats.values().stream()
+                .map(IndustryMomentumStats::toCluster)
+                .filter(StructuralHotCluster::available)
+                .max(Comparator.comparing(StructuralHotCluster::heatScore)
+                        .thenComparing(StructuralHotCluster::totalAmount))
+                .orElse(StructuralHotCluster.unavailable());
     }
 
     private boolean hasReliableMarketCoverage(AshareQuoteSnapshot snapshot) {
@@ -879,7 +994,7 @@ public class ShortTermService {
                     "右侧早期结构和基本面校验同时通过，可按短线纪律分批试错。",
                     List.of(
                             "股价站上关键均线且距离 20 日线不远。",
-                            "量能温和放大，不是纯题材情绪急拉。",
+                            "量价关系健康，可能是温和放量突破或缩量上涨惜售。",
                             "估值和最近年报质量没有明显冲突。"
                     ),
                     List.of(
@@ -922,8 +1037,16 @@ public class ShortTermService {
     private ShortTermCandidate enrichTailSignal(ShortTermCandidate candidate) {
         ShortTermTailSignal tailSignal = tailSignal(candidate.symbol(), expectedTailTradeDate(candidate));
         EvidenceCompleteness completeness = evidenceCompleteness(candidate, tailSignal);
+        TradingAdvice tailAdjusted = isGoldenCrossWatchLayer(candidate.technical())
+                ? candidate.todayAdvice()
+                : tailAdjustedAdvice(
+                        candidate.todayAdvice(),
+                        candidate.action(),
+                        tailSignal,
+                        hasRecentConfirmedGoldenCross(candidate.technical())
+                );
         TradingAdvice adjustedAdvice = evidenceCompletenessService.gateAdvice(
-                tailAdjustedAdvice(candidate.todayAdvice(), candidate.action(), tailSignal),
+                tailAdjusted,
                 completeness
         );
         return new ShortTermCandidate(
@@ -1206,14 +1329,28 @@ public class ShortTermService {
         return scale(clamp(score));
     }
 
-    private TradingAdvice tailAdjustedAdvice(TradingAdvice base, String candidateAction, ShortTermTailSignal tailSignal) {
+    private TradingAdvice tailAdjustedAdvice(
+            TradingAdvice base,
+            String candidateAction,
+            ShortTermTailSignal tailSignal
+    ) {
+        return tailAdjustedAdvice(base, candidateAction, tailSignal, true);
+    }
+
+    private TradingAdvice tailAdjustedAdvice(
+            TradingAdvice base,
+            String candidateAction,
+            ShortTermTailSignal tailSignal,
+            boolean recentConfirmedGoldenCross
+    ) {
         LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
         boolean executableEntryWindow = TradingClockService.SHORT_TERM_ENTRY_CHECKPOINT.equals(
                 tradingClockService.shortTermDecisionCheckpoint());
         boolean evidenceAvailableAtDecision = tailEvidenceAvailableAtDecision(tailSignal, decisionAt);
         boolean executableEvidence = executableEntryWindow && evidenceAvailableAtDecision;
         if (executableEvidence
-                && "CONFIRMED".equals(tailSignal.status()) && "ADD".equals(base.action())) {
+                && "CONFIRMED".equals(tailSignal.status())
+                && isRightSideExecutableCandidate(candidateAction)) {
             return new TradingAdvice(
                     "ADD",
                     "加仓",
@@ -1237,7 +1374,7 @@ public class ShortTermService {
             );
         }
         if (executableEvidence
-                && shouldLightTrial(base, candidateAction, tailSignal)) {
+                && shouldLightTrial(base, candidateAction, tailSignal, recentConfirmedGoldenCross)) {
             return new TradingAdvice(
                     "LIGHT_TRIAL",
                     "轻仓试错",
@@ -1255,16 +1392,6 @@ public class ShortTermService {
                     "日线结构值得继续跟踪，但今天尾盘承接没有达到买点，列为次日关注，等回踩或放量再确认。",
                     merge(List.of("右侧形态仍在，但今日分时不支持执行买入。"), base.reasons()),
                     merge(tailSignal.riskControls(), List.of("次日若缩量回踩不破 5/10/20 日线再重新评估。", "次日若高开急拉，不追第一笔。"))
-            );
-        }
-        if (executableEntryWindow && "CONFIRMED".equals(tailSignal.status())) {
-            return new TradingAdvice(
-                    "NEXT_WATCH",
-                    "次日关注",
-                    nextWatchConfidence(base),
-                    "收盘集合竞价分时较强，但日线结构或量能条件仍未达到买入阈值，先放入次日关注，不只凭尾盘拉升追入。",
-                    merge(List.of("14:57-15:00 承接较好。"), base.reasons()),
-                    merge(base.riskControls(), List.of("日线结构未过买入阈值时，尾盘确认也只作为次日关注。"))
             );
         }
         String summary = switch (tailSignal.status()) {
@@ -1307,20 +1434,24 @@ public class ShortTermService {
         }
     }
 
-    private boolean shouldLightTrial(TradingAdvice base, String candidateAction, ShortTermTailSignal tailSignal) {
-        return isRightSideExecutableCandidate(base, candidateAction)
+    private boolean shouldLightTrial(
+            TradingAdvice base,
+            String candidateAction,
+            ShortTermTailSignal tailSignal,
+            boolean recentConfirmedGoldenCross
+    ) {
+        return recentConfirmedGoldenCross
+                && isRightSideExecutableCandidate(candidateAction)
                 && ("CONFIRMED".equals(tailSignal.status()) || "WATCH".equals(tailSignal.status()));
     }
 
     private boolean shouldNextDayWatch(TradingAdvice base, String candidateAction, ShortTermTailSignal tailSignal) {
-        return isRightSideExecutableCandidate(base, candidateAction)
+        return isRightSideExecutableCandidate(candidateAction)
                 && ("WEAK".equals(tailSignal.status()) || "POST_CLOSE_FIXED_PRICE".equals(tailSignal.status()));
     }
 
-    private boolean isRightSideExecutableCandidate(TradingAdvice base, String candidateAction) {
-        return "ADD".equals(base.action())
-                || "RIGHT_EARLY_ADD".equals(candidateAction)
-                || "WATCH_RIGHT_SIDE".equals(candidateAction);
+    private boolean isRightSideExecutableCandidate(String candidateAction) {
+        return "RIGHT_EARLY_ADD".equals(candidateAction);
     }
 
     private boolean isPullbackAdvice(TradingAdvice base) {
@@ -1358,7 +1489,7 @@ public class ShortTermService {
 
     private List<String> withTailEntryRule(List<String> rules) {
         List<String> merged = new ArrayList<>(rules);
-        merged.add("14:57-15:00 必须复核收盘集合竞价分时：站稳均价线、尾盘回落可控、动态成交占比达标才允许加仓；尾盘仅观察时最多只能轻仓试错。");
+        merged.add("最近三根已完成交易日内确认金叉后，14:57-15:00 仍必须复核收盘集合竞价分时；尾盘只能确认买点，不能为旧金叉或未确认金叉创造买点。");
         merged.add("15:05-15:30 盘后固定价格需要单独分析，不能替代普通尾盘确认。");
         return merged.stream().distinct().toList();
     }
@@ -1426,6 +1557,14 @@ public class ShortTermService {
         return quoteFreshness != null && "FRESH".equals(quoteFreshness.status());
     }
 
+    private boolean isGoldenCrossWatchLayer(ShortTermTechnicalSnapshot technical) {
+        return technical != null && technical.goldenCross() != null && technical.goldenCross().watchLayer();
+    }
+
+    private boolean hasRecentConfirmedGoldenCross(ShortTermTechnicalSnapshot technical) {
+        return technical != null && technical.goldenCross() != null && technical.goldenCross().confirmedRecent();
+    }
+
     private boolean isPostCloseFixedPriceMinute(LocalTime time) {
         return !time.isBefore(POST_CLOSE_FIXED_PRICE_START) && !time.isAfter(POST_CLOSE_FIXED_PRICE_END);
     }
@@ -1460,11 +1599,18 @@ public class ShortTermService {
             ValuationContext valuationContext
     ) {
         List<String> strengths = new ArrayList<>();
-        if (technical.rightSideSignal() != null && technical.rightSideSignal().contains("右侧")) {
+        if (isQualifiedRightSideSignal(technical.rightSideSignal())) {
             strengths.add("K 线处于" + technical.rightSideSignal() + "，不是纯左侧猜底。");
         }
         if (technical.volumeRatio20() != null && technical.volumeRatio20().compareTo(new BigDecimal("1.10")) >= 0) {
             strengths.add("20 日量比约 " + technical.volumeRatio20() + "，有温和放量迹象。");
+        }
+        if (quote.changePercent() != null && quote.changePercent().compareTo(BigDecimal.ZERO) > 0
+                && technical.volumeRatio20() != null
+                && technical.volumeRatio20().compareTo(new BigDecimal("0.55")) >= 0
+                && technical.volumeRatio20().compareTo(new BigDecimal("1.05")) <= 0
+                && isQualifiedRightSideSignal(technical.rightSideSignal())) {
+            strengths.add("上涨时 20 日量比约 " + technical.volumeRatio20() + "，属于缩量上涨，可能反映惜售和抛压减轻。");
         }
         if (technical.ma20SlopePercent() != null && technical.ma20SlopePercent().compareTo(new BigDecimal("-0.20")) >= 0) {
             strengths.add("20 日线斜率约 " + technical.ma20SlopePercent() + "%，中短均线开始走平或上拐。");
@@ -1495,6 +1641,16 @@ public class ShortTermService {
         List<String> risks = new ArrayList<>();
         if (quoteFreshness != null && quoteFreshness.blocksRealtimeDecision()) {
             risks.add(quoteFreshness.reason());
+        }
+        ShortTermGoldenCrossSnapshot goldenCross = technical.goldenCross();
+        if (goldenCross == null || "UNAVAILABLE".equals(goldenCross.state())) {
+            risks.add("均线金叉数据不足，不能把未复核的均线关系当作执行依据。");
+        } else if ("FORMING".equals(goldenCross.state())) {
+            risks.add("金叉仍在形成中，最新日线未完成前只能观察。");
+        } else if ("APPROACHING".equals(goldenCross.state())) {
+            risks.add("均线仍处于临界交汇，尚未形成确认金叉，不能执行买入。");
+        } else if ("CONFIRMED".equals(goldenCross.state()) && isChaseRisk(quote, technical, ruleSet)) {
+            risks.add("确认金叉后价格已明显拉开，短线只等回踩，不追高。");
         }
         if (quote.changePercent() != null && quote.changePercent().compareTo(ruleSet.maxEntryRisePercent()) > 0) {
             risks.add("单日涨幅超过入场上限，短线追高风险上升。");
@@ -1584,9 +1740,23 @@ public class ShortTermService {
                         + "，距 20 日线 " + valueText(technical.distanceToMa20Percent())
                         + "%，20 日线斜率 " + valueText(technical.ma20SlopePercent())
                         + "%，突破前 20 日高点 " + valueText(technical.breakoutFromPreviousHigh20Percent())
-                        + "%，20 日量比 " + valueText(technical.volumeRatio20()) + "。",
+                        + "%，20 日量比 " + valueText(technical.volumeRatio20())
+                        + "；上涨且量比低于 1 时按缩量上涨惜售信号复核。",
                 quote.quoteUrl(),
                 40
+        ));
+        ShortTermGoldenCrossSnapshot goldenCross = technical.goldenCross() == null
+                ? ShortTermGoldenCrossSnapshot.unavailable()
+                : technical.goldenCross();
+        evidence.add(new ShortTermEvidence(
+                "均线金叉",
+                "状态 " + goldenCross.state() + "，交叉日期 " + (goldenCross.crossDate() == null ? "待复核" : goldenCross.crossDate())
+                        + "，距交叉 " + (goldenCross.tradingDaysSinceCross() == null ? "待复核" : goldenCross.tradingDaysSinceCross()) + " 个交易日，"
+                        + "MA5-MA10 有符号差值 " + valueText(goldenCross.ma5Ma10SpreadPercent()) + "%"
+                        + "，差值趋势 " + goldenCross.spreadTrend() + "，均线排列 " + goldenCross.maAlignment()
+                        + "，优先层级 " + goldenCross.priorityTier() + "，规则版本 " + goldenCross.ruleVersion() + "。",
+                quote.quoteUrl(),
+                35
         ));
         if (financial == null || financial.reportDate() == null) {
             evidence.add(new ShortTermEvidence("财报质量", "最近年报指标暂不可用，不能确认价值回归。", null, 20));
@@ -1907,6 +2077,63 @@ public class ShortTermService {
         };
     }
 
+    private int eligibilityGatePriority(String action) {
+        return Set.of("DATA_REVIEW", "MARKET_RISK_WAIT", "VALUATION_REVIEW").contains(action) ? 0 : 1;
+    }
+
+    private int goldenCrossTechnicalPriority(TechnicalCandidate candidate) {
+        return qualifiedGoldenCrossPriority(candidate.technical().snapshot());
+    }
+
+    private int eligibleGoldenCrossPriority(ShortTermCandidate candidate) {
+        int tier = qualifiedGoldenCrossPriority(candidate.technical());
+        if (tier == 3 && Set.of("RIGHT_EARLY_ADD", "WATCH_RIGHT_SIDE").contains(candidate.action())) return 3;
+        if (tier == 2 && !Set.of("DATA_REVIEW", "MARKET_RISK_WAIT", "VALUATION_REVIEW").contains(candidate.action())) return 2;
+        return Math.min(tier, 1);
+    }
+
+    private int qualifiedGoldenCrossPriority(ShortTermTechnicalSnapshot technical) {
+        if (technical == null || technical.goldenCross() == null) {
+            return 0;
+        }
+        int tier = technical.goldenCross().priorityTier();
+        if (tier == 2 && !isEarlyRightSideSignal(technical.rightSideSignal())) {
+            return 0;
+        }
+        return tier;
+    }
+
+    private int rightSideMaturityPriority(ShortTermCandidate candidate) {
+        String signal = candidate.technical() == null ? null : candidate.technical().rightSideSignal();
+        if ("右侧早期确认".equals(signal)) {
+            return 6;
+        }
+        if ("右侧早期观察".equals(signal)) {
+            return 5;
+        }
+        if ("RIGHT_EARLY".equals(candidate.phase())) {
+            return 5;
+        }
+        if ("BASE_TURNING".equals(candidate.phase())) {
+            return 4;
+        }
+        if ("RIGHT_EXTENDED".equals(candidate.phase())) {
+            return 3;
+        }
+        if (isQualifiedRightSideSignal(signal)) {
+            return 2;
+        }
+        return 1;
+    }
+
+    private boolean isQualifiedRightSideSignal(String signal) {
+        return Set.of("右侧早期确认", "右侧早期观察", "右侧已拉开", "右侧雏形").contains(signal);
+    }
+
+    private boolean isEarlyRightSideSignal(String signal) {
+        return Set.of("右侧早期确认", "右侧早期观察").contains(signal);
+    }
+
     private boolean isTradableCommonShare(EastMoneyQuote quote) {
         if (quote == null || quote.symbol() == null || quote.name() == null) {
             return false;
@@ -2096,6 +2323,15 @@ public class ShortTermService {
         return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
     }
 
+    private String moneyInYi(BigDecimal value) {
+        if (value == null) {
+            return "待复核";
+        }
+        return value.divide(new BigDecimal("100000000"), 2, RoundingMode.HALF_UP)
+                .stripTrailingZeros()
+                .toPlainString() + " 亿";
+    }
+
     private BigDecimal positiveOrDefault(BigDecimal value, BigDecimal fallback) {
         return value == null || value.compareTo(BigDecimal.ZERO) <= 0 ? fallback : value;
     }
@@ -2199,6 +2435,71 @@ public class ShortTermService {
                             + "%，上涨占比 " + valueText(positiveRatio)
                             + "%，样本 " + sampleCount + " 只。"
             );
+        }
+    }
+
+    private static final class IndustryMomentumStats {
+
+        private final String industry;
+        private int sampleCount;
+        private int advancingCount;
+        private BigDecimal totalAmount = BigDecimal.ZERO;
+        private BigDecimal changeSum = BigDecimal.ZERO;
+
+        private IndustryMomentumStats(String industry) {
+            this.industry = industry;
+        }
+
+        private void add(EastMoneyQuote quote) {
+            sampleCount++;
+            BigDecimal change = quote.changePercent() == null ? BigDecimal.ZERO : quote.changePercent();
+            if (change.compareTo(BigDecimal.ZERO) > 0) {
+                advancingCount++;
+            }
+            changeSum = changeSum.add(change);
+            if (quote.amount() != null && quote.amount().compareTo(BigDecimal.ZERO) > 0) {
+                totalAmount = totalAmount.add(quote.amount());
+            }
+        }
+
+        private StructuralHotCluster toCluster() {
+            if (sampleCount == 0) {
+                return StructuralHotCluster.unavailable();
+            }
+            BigDecimal averageChange = changeSum.divide(BigDecimal.valueOf(sampleCount), 4, RoundingMode.HALF_UP);
+            BigDecimal advancingRatio = BigDecimal.valueOf(advancingCount)
+                    .multiply(new BigDecimal("100"))
+                    .divide(BigDecimal.valueOf(sampleCount), 4, RoundingMode.HALF_UP);
+            boolean available = sampleCount >= 4
+                    && advancingRatio.compareTo(new BigDecimal("75")) >= 0
+                    && averageChange.compareTo(new BigDecimal("1.80")) >= 0
+                    && totalAmount.compareTo(DEFAULT_MIN_AMOUNT.multiply(new BigDecimal("20"))) >= 0;
+            BigDecimal heatScore = averageChange.multiply(new BigDecimal("12"))
+                    .add(advancingRatio.multiply(new BigDecimal("0.45")))
+                    .add(totalAmount.divide(DEFAULT_MIN_AMOUNT, 4, RoundingMode.HALF_UP).min(new BigDecimal("40")));
+            return new StructuralHotCluster(
+                    available,
+                    industry,
+                    sampleCount,
+                    advancingCount,
+                    averageChange.setScale(2, RoundingMode.HALF_UP),
+                    totalAmount.setScale(2, RoundingMode.HALF_UP),
+                    heatScore
+            );
+        }
+    }
+
+    private record StructuralHotCluster(
+            boolean available,
+            String industry,
+            int sampleCount,
+            int advancingCount,
+            BigDecimal averageChangePercent,
+            BigDecimal totalAmount,
+            BigDecimal heatScore
+    ) {
+        private static StructuralHotCluster unavailable() {
+            return new StructuralHotCluster(false, null, 0, 0, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
         }
     }
 

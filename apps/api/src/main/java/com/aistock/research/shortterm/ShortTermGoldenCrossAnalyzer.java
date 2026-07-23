@@ -57,9 +57,11 @@ class ShortTermGoldenCrossAnalyzer {
         }
         int completedCrossIndex = latestCrossIndex(rows, completedIndex);
         int daysSinceCross = completedCrossIndex < 0 ? -1 : completedIndex - completedCrossIndex;
-        boolean approaching = isApproaching(rows, completedIndex);
+        boolean activePositiveRelationship = completedMa5.compareTo(completedMa10) > 0;
+        boolean approaching = (completedCrossIndex < 0 || daysSinceCross > 3)
+                && isApproaching(rows, completedIndex);
 
-        if (completedCrossIndex >= 0 && daysSinceCross <= 3) {
+        if (activePositiveRelationship && completedCrossIndex >= 0 && daysSinceCross <= 3) {
             return snapshot(
                     rows.get(completedCrossIndex).tradeDate(),
                     daysSinceCross,
@@ -71,7 +73,7 @@ class ShortTermGoldenCrossAnalyzer {
                     "COMPLETE"
             );
         }
-        if (completedCrossIndex >= 0) {
+        if (activePositiveRelationship && completedCrossIndex >= 0) {
             return snapshot(
                     rows.get(completedCrossIndex).tradeDate(),
                     daysSinceCross,
