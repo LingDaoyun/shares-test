@@ -360,6 +360,27 @@ export interface ShortTermRuleSet {
   minFinancialScore: number
 }
 
+export type ShortTermGoldenCrossState =
+  | 'NONE'
+  | 'APPROACHING'
+  | 'FORMING'
+  | 'CONFIRMED'
+  | 'ESTABLISHED'
+  | 'UNAVAILABLE'
+
+export interface ShortTermGoldenCrossSnapshot {
+  ruleVersion: string
+  state: ShortTermGoldenCrossState
+  stateLabel: string
+  crossDate: string | null
+  tradingDaysSinceCross: number | null
+  ma5Ma10SpreadPercent: number | null
+  spreadTrend: 'NARROWING' | 'WIDENING' | 'FLAT' | 'UNAVAILABLE'
+  maAlignment: 'BEARISH' | 'CONVERGING' | 'MA5_ABOVE_MA10' | 'BULLISH_STACK' | 'UNAVAILABLE'
+  priorityTier: number
+  evidenceStatus: 'COMPLETE' | 'PARTIAL' | 'UNAVAILABLE'
+}
+
 export interface ShortTermTechnicalSnapshot {
   tradeDate: string | null
   ma5: number | null
@@ -383,6 +404,7 @@ export interface ShortTermTechnicalSnapshot {
   todayAmplitudePercent: number | null
   consecutiveAboveMa20Days: number
   rightSideSignal: string
+  goldenCross?: ShortTermGoldenCrossSnapshot | null
 }
 
 export interface ShortTermFinancialSnapshot {
@@ -1057,4 +1079,63 @@ export interface V2SampleSignalParams {
   symbol: string
   companyName?: string
   strategyCode?: string
+}
+
+export interface AgentEvidenceFinding {
+  agentName: string
+  role: string
+  vote: 'SUPPORT' | 'OPPOSE' | 'ABSTAIN'
+  sourceUrl: string
+  sourceTitle: string
+  publishedAt: string | null
+  evidenceHash: string
+  claim: string
+}
+
+export interface AgentEvidenceReview {
+  findings: AgentEvidenceFinding[]
+  supportCount: number
+  opposeCount: number
+  abstainCount: number
+  sourceOverlapCount: number
+  hasConflict: boolean
+  warnings: string[]
+}
+
+export interface V2StrategyBundleResponse {
+  symbol: string
+  companyName: string
+  generatedAt: string
+  longTermSignals: V2SignalResponse[]
+  shortRightSideSignal: V2SignalResponse
+  agentEvidenceReview: AgentEvidenceReview
+}
+
+export interface V2StrategyBundleParams {
+  symbol: string
+  companyName?: string
+  industry?: string
+  valuationDiscountScore?: number
+  qualityScore?: number
+  moatScore?: number
+  profitabilityScore?: number
+  cashFlowScore?: number
+  cyclePositionScore?: number
+  cycleRecoveryScore?: number
+  industryLeaderScore?: number
+  policyCatalystScore?: number
+  liquidityScore?: number
+  hotDirection?: string
+  tradingCheckpoint?: string
+  marketHotScore?: number
+  rightSideStructureScore?: number
+  supplyAbsorptionScore?: number
+  volumeBreakoutScore?: number
+  shrinkRiseScore?: number
+  fundamentalFloorScore?: number
+  crowdingRiskScore?: number
+  goldenCrossState?: ShortTermGoldenCrossState
+  goldenCrossTradingDays?: number
+  goldenCrossPriorityTier?: number
+  recommendationToken?: string
 }

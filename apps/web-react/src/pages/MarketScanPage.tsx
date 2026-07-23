@@ -6,12 +6,14 @@ import type { MarketScanParams } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOverlay'
 import { Loader } from '../components/ui/Loader'
 import { RecommendationEvidenceBundlePanel } from '../components/recommendation/EvidenceBundlePanel'
+import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { SectionBanner } from '../components/ui/SectionBanner'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPerSharePrice, formatSignedPercent, formatValuationState } from '../lib/format'
-import type { MarketScanCandidate, MarketScanReport, TradingAdvice } from '../types'
+import type { MarketScanCandidate, MarketScanReport, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -26,7 +28,7 @@ interface DraftParams {
 }
 
 const DEFAULT_DRAFT: DraftParams = {
-  limit: 12,
+  limit: 3,
   scanLimit: 6000,
   minAmountYi: 0.8,
   maxPe: 35,
@@ -34,7 +36,7 @@ const DEFAULT_DRAFT: DraftParams = {
   minFinancialScore: 45,
   excludeSideways: true,
   includeNorthExchange: true,
-  mode: 'ALL'
+  mode: 'VALUE'
 }
 
 export function MarketScanPage() {
@@ -65,23 +67,21 @@ export function MarketScanPage() {
   }, [params])
 
   useEffect(() => {
-    if (!report?.candidates.length) return
-    if (!selectedSymbol || !report.candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
-      setSelectedSymbol(report.candidates[0].symbol)
+    if (selectedSymbol && !report?.candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
+      setSelectedSymbol(null)
     }
   }, [report, selectedSymbol])
 
   const selected = useMemo(() => {
-    if (!report?.candidates.length) return null
-    return report.candidates.find((candidate) => candidate.symbol === selectedSymbol) ?? report.candidates[0]
+    return resolveDetailSelection(report?.candidates ?? [], selectedSymbol, (candidate) => candidate.symbol)
   }, [report, selectedSymbol])
 
   return (
     <div className="flex flex-col gap-4">
       <SectionBanner
-        eyebrow="MARKET SCAN"
-        title="全市场扫描"
-        description="覆盖沪深北 A 股并核对数据完整度，再按长投、周期或短线模式应用各自的资格门槛。"
+        eyebrow="LONG VALUE"
+        title="长期价投"
+        description="覆盖沪深北 A 股并核对数据完整度，默认按长期价值投资模式输出三支候选。"
         extra={
           <Button
             variant="primary"
@@ -98,12 +98,12 @@ export function MarketScanPage() {
         title={
           <span className="inline-flex items-center gap-2">
             <SlidersHorizontal className="h-4 w-4 text-brand-500" />
-            全市场漏斗阈值
+            长期价投阈值
           </span>
         }
       >
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
-          <NumberField label="候选数量" value={draft.limit} min={4} max={40} onChange={(value) => setDraft({ ...draft, limit: value })} />
+          <NumberField label="候选数量" value={draft.limit} min={3} max={20} onChange={(value) => setDraft({ ...draft, limit: value })} />
           <NumberField label="扫描数量" value={draft.scanLimit} min={50} max={6000} step={100} onChange={(value) => setDraft({ ...draft, scanLimit: value })} />
           <NumberField label="成交额下限(亿)" value={draft.minAmountYi} min={0.8} max={20} step={0.05} onChange={(value) => setDraft({ ...draft, minAmountYi: value })} />
           <NumberField label="PE 参考带" value={draft.maxPe} min={4} max={120} onChange={(value) => setDraft({ ...draft, maxPe: value })} />
@@ -132,7 +132,7 @@ export function MarketScanPage() {
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
           <p className="text-xs leading-relaxed text-ink-500">
-            参考带只影响估值语境分和风险提示，不决定股票是否入选；成交额和横盘门槛只在对应策略模式生效。
+            长投默认输出三支全市场价投候选；参考带只影响估值语境分和风险提示，不决定股票是否入选。
           </p>
           <Button variant="secondary" onClick={() => setParams({ ...draft })}>应用阈值</Button>
         </div>
@@ -176,24 +176,27 @@ export function MarketScanPage() {
             </Card>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_430px]">
-            <Card title={<span className="inline-flex items-center gap-2"><DatabaseZap className="h-4 w-4 text-brand-500" />候选股票</span>} flush>
-              <div className="divide-y divide-line-soft">
-                {report.candidates.map((candidate) => (
-                  <CandidateRow
-                    key={candidate.symbol}
-                    candidate={candidate}
-                    selected={selected?.symbol === candidate.symbol}
-                    onSelect={() => setSelectedSymbol(candidate.symbol)}
-                  />
-                ))}
-              </div>
-            </Card>
-
-            <div className="xl:sticky xl:top-4 xl:self-start">
-              {selected ? <CandidateDetail candidate={selected} /> : <Card><Loader text="等待候选数据" /></Card>}
+          <Card title={<span className="inline-flex items-center gap-2"><DatabaseZap className="h-4 w-4 text-brand-500" />候选股票</span>} flush>
+            <div className="divide-y divide-line-soft">
+              {report.candidates.map((candidate) => (
+                <CandidateRow
+                  key={candidate.symbol}
+                  candidate={candidate}
+                  selected={selected?.symbol === candidate.symbol}
+                  onSelect={() => setSelectedSymbol(candidate.symbol)}
+                />
+              ))}
             </div>
-          </div>
+          </Card>
+
+          <DetailOverlay
+            open={selected !== null}
+            title={selected ? `${selected.name} ${selected.symbol}` : '长期价投候选详情'}
+            subtitle={selected ? `${selected.market ?? 'A股'} · ${selected.industry ?? '行业待补'} · 排名 #${selected.rank}` : undefined}
+            onClose={() => setSelectedSymbol(null)}
+          >
+            {selected ? <CandidateDetail candidate={selected} /> : null}
+          </DetailOverlay>
 
           <ExclusionPanel report={report} />
         </>
@@ -307,19 +310,13 @@ function CandidateRow({
 
 function CandidateDetail({ candidate }: { candidate: MarketScanCandidate }) {
   return (
-    <Card className="transition hover:border-brand-300">
-      <div className="flex flex-col gap-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="eyebrow">#{candidate.rank} · {candidate.market ?? 'A股'} · {candidate.industry ?? '行业待补'}</div>
-            <h2 className="mt-1 text-xl font-semibold text-ink-900">{candidate.name}</h2>
-            <div className="mt-1 font-mono text-xs text-ink-400">{candidate.symbol}</div>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-2">
-            <WatchButton symbol={candidate.symbol} />
+    <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft pb-4">
+          <div className="flex flex-wrap items-center gap-2">
             <ScoreBadge value={candidate.score.finalScore} />
             <Tag tone={adviceTone(candidate.todayAdvice.action)}>今日：{candidate.todayAdvice.actionLabel}</Tag>
           </div>
+          <WatchButton symbol={candidate.symbol} />
         </div>
 
         <p className="text-sm leading-relaxed text-ink-600">{candidate.reason}</p>
@@ -352,6 +349,12 @@ function CandidateDetail({ candidate }: { candidate: MarketScanCandidate }) {
         </div>
 
         <TodayAdvicePanel advice={candidate.todayAdvice} />
+        <V2StrategyBundlePanel
+          symbol={candidate.symbol}
+          companyName={candidate.name}
+          focus="long"
+          factorContext={marketFactorContext(candidate)}
+        />
         <EvidenceCompletenessPanel completeness={candidate.evidenceCompleteness} />
         <RecommendationEvidenceBundlePanel symbol={candidate.symbol} bundle={candidate.evidenceBundle} compact />
 
@@ -384,8 +387,7 @@ function CandidateDetail({ candidate }: { candidate: MarketScanCandidate }) {
             ))}
           </div>
         </div>
-      </div>
-    </Card>
+    </div>
   )
 }
 
@@ -414,6 +416,29 @@ function visibleDataGaps(items: string[]) {
   return filtered.length ? filtered : ['暂无新增缺口']
 }
 
+function marketFactorContext(candidate: MarketScanCandidate): Omit<V2StrategyBundleParams, 'symbol' | 'companyName'> {
+  const qualityScore = candidate.score.qualityProxyScore
+  const evidenceScore = candidate.evidenceCompleteness.score
+  return {
+    industry: candidate.industry ?? '全市场候选',
+    valuationDiscountScore: candidate.score.valuationScore,
+    qualityScore,
+    moatScore: qualityScore,
+    profitabilityScore: qualityScore,
+    cashFlowScore: evidenceScore,
+    cyclePositionScore: candidate.score.priceActionScore,
+    cycleRecoveryScore: candidate.score.priceActionScore,
+    industryLeaderScore: qualityScore,
+    policyCatalystScore: evidenceScore,
+    liquidityScore: candidate.score.liquidityScore,
+    fundamentalFloorScore: qualityScore,
+    marketHotScore: candidate.score.priceActionScore,
+    rightSideStructureScore: candidate.score.priceActionScore,
+    supplyAbsorptionScore: candidate.score.liquidityScore,
+    crowdingRiskScore: Math.max(0, Math.min(100, candidate.score.riskScore))
+  }
+}
+
 function TodayAdvicePanel({ advice }: { advice: TradingAdvice }) {
   return (
     <div className="rounded-lg border border-line-soft bg-line-soft/30 p-3">
@@ -435,7 +460,9 @@ function TodayAdvicePanel({ advice }: { advice: TradingAdvice }) {
 
 function adviceTone(action: string): 'success' | 'brand' | 'warning' | 'danger' | 'neutral' {
   if (action === 'ADD') return 'success'
+  if (action === 'LIGHT_TRIAL') return 'brand'
   if (action === 'HOLD') return 'brand'
+  if (action === 'WAIT_PULLBACK') return 'warning'
   if (action === 'BATCH_SELL') return 'warning'
   if (action === 'SELL_ALL') return 'danger'
   return 'neutral'

@@ -4,6 +4,7 @@ import { analyzeWatchlistSymbol, fetchWatchlistHistory } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOverlay'
 import { Empty } from '../components/ui/Empty'
 import { Loader } from '../components/ui/Loader'
 import { SectionBanner } from '../components/ui/SectionBanner'
@@ -32,17 +33,13 @@ export function WatchlistPage() {
   }, [load])
 
   useEffect(() => {
-    if (!entries.length) {
+    if (selectedSymbol && !entries.some((entry) => entry.symbol === selectedSymbol)) {
       setSelectedSymbol(null)
-      return
-    }
-    if (!selectedSymbol || !entries.some((entry) => entry.symbol === selectedSymbol)) {
-      setSelectedSymbol(entries[0].symbol)
     }
   }, [entries, selectedSymbol])
 
   const selected = useMemo(
-    () => entries.find((entry) => entry.symbol === selectedSymbol) ?? null,
+    () => resolveDetailSelection(entries, selectedSymbol, (entry) => entry.symbol),
     [entries, selectedSymbol]
   )
 
@@ -112,6 +109,7 @@ export function WatchlistPage() {
     try {
       await remove(entry.symbol)
       if (analysis?.symbol === entry.symbol) setAnalysis(null)
+      if (selectedSymbol === entry.symbol) setSelectedSymbol(null)
       toast.info(`${entry.companyName} 已取消特别关注`)
     } catch (error) {
       toast.error(`取消失败：${extractErrorMessage(error)}`)
@@ -164,88 +162,87 @@ export function WatchlistPage() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
-        <Card title="关注列表" flush>
-          {loading && !entries.length ? <Loader text="关注列表加载中" /> : null}
-          {!loading && !entries.length ? <Empty text="还没有特别关注的股票" /> : null}
-          <div className="divide-y divide-line-soft">
-            {entries.map((entry) => (
-              <div
-                key={entry.symbol}
-                className={`group flex cursor-pointer items-start gap-3 px-4 py-4 transition hover:bg-amber-50/60 ${selected?.symbol === entry.symbol ? 'bg-amber-50' : 'bg-white'}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => {
+      <Card title="关注列表" flush>
+        {loading && !entries.length ? <Loader text="关注列表加载中" /> : null}
+        {!loading && !entries.length ? <Empty text="还没有特别关注的股票" /> : null}
+        <div className="divide-y divide-line-soft">
+          {entries.map((entry) => (
+            <div
+              key={entry.symbol}
+              className={`group flex cursor-pointer items-start gap-3 px-4 py-4 outline-none transition hover:bg-amber-50/60 focus-visible:bg-amber-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-300 ${selected?.symbol === entry.symbol ? 'bg-amber-50' : 'bg-white'}`}
+              role="button"
+              tabIndex={0}
+              onClick={(event) => {
+                event.currentTarget.focus()
+                setSelectedSymbol(entry.symbol)
+                if (analysis?.symbol !== entry.symbol) setAnalysis(null)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
                   setSelectedSymbol(entry.symbol)
                   if (analysis?.symbol !== entry.symbol) setAnalysis(null)
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') setSelectedSymbol(entry.symbol)
+                }
+              }}
+            >
+              <Star className="mt-0.5 h-4 w-4 shrink-0 fill-amber-400 text-amber-500" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <span className="font-semibold text-ink-900">{entry.companyName}</span>
+                  <span className="font-mono text-xs text-ink-400">{entry.symbol}</span>
+                </div>
+                <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-ink-500">{entry.note || '暂无关注备注'}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Tag tone={entry.lastActionLabel ? 'brand' : 'neutral'}>{entry.lastActionLabel ?? '尚未分析'}</Tag>
+                  {entry.lastDecisionScore !== null ? <span className="tabular text-xs text-ink-400">{formatNumber(entry.lastDecisionScore)}</span> : null}
+                </div>
+              </div>
+              <button
+                type="button"
+                title="取消特别关注"
+                aria-label={`取消特别关注 ${entry.companyName}`}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-300 opacity-100 transition hover:bg-red-50 hover:text-danger sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void removeEntry(entry)
                 }}
               >
-                <Star className="mt-0.5 h-4 w-4 shrink-0 fill-amber-400 text-amber-500" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="font-semibold text-ink-900">{entry.companyName}</span>
-                    <span className="font-mono text-xs text-ink-400">{entry.symbol}</span>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-ink-500">{entry.note || '暂无关注备注'}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Tag tone={entry.lastActionLabel ? 'brand' : 'neutral'}>{entry.lastActionLabel ?? '尚未分析'}</Tag>
-                    {entry.lastDecisionScore !== null ? <span className="tabular text-xs text-ink-400">{formatNumber(entry.lastDecisionScore)}</span> : null}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  title="取消特别关注"
-                  aria-label={`取消特别关注 ${entry.companyName}`}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-300 opacity-100 transition hover:bg-red-50 hover:text-danger sm:opacity-0 sm:group-hover:opacity-100"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void removeEntry(entry)
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <div className="min-w-0">
-          {!selected ? <Card><Empty text="选择一只特别关注股票" /></Card> : (
-            <Card>
-              <div className="flex flex-col gap-4">
-                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line-soft pb-4">
-                  <div>
-                    <div className="eyebrow">ACTIVE REVIEW · {selected.symbol}</div>
-                    <h2 className="mt-1 text-xl font-semibold text-ink-900">{selected.companyName}</h2>
-                    <p className="mt-1 text-sm text-ink-500">{selected.note || '暂无关注备注'}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button variant="secondary" icon={<RefreshCw className="h-4 w-4" />} onClick={() => void load(true)}>刷新</Button>
-                    <Button variant="primary" loading={analyzing} icon={<Play className="h-4 w-4" />} onClick={() => void runAnalysis()}>
-                      主动分析
-                    </Button>
-                  </div>
-                </div>
-
-                {analyzing ? <Loader text="正在核验财报、估值、公告和 Agent 共识" /> : null}
-                {!analyzing && !analysis ? (
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                    <Metric label="最近结论" value={selected.lastActionLabel ?? '尚未分析'} />
-                    <Metric label="决策分" value={formatNumber(selected.lastDecisionScore)} />
-                    <Metric label="分析时间" value={formatDateTime(selected.lastAnalyzedAt)} />
-                    <Metric label="加入时间" value={formatDateTime(selected.createdAt)} />
-                  </div>
-                ) : null}
-                {analysis ? <AnalysisResult report={analysis} /> : null}
-                <DecisionHistory items={history} error={historyError} />
-              </div>
-            </Card>
-          )}
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
         </div>
-      </div>
+      </Card>
+
+      <DetailOverlay
+        open={selected !== null}
+        title={selected ? `${selected.companyName} ${selected.symbol}` : '特别关注详情'}
+        subtitle={selected?.note || '暂无关注备注'}
+        onClose={() => setSelectedSymbol(null)}
+      >
+        {selected ? (
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap justify-end gap-2 border-b border-line-soft pb-4">
+              <Button variant="secondary" icon={<RefreshCw className="h-4 w-4" />} onClick={() => void load(true)}>刷新</Button>
+              <Button variant="primary" loading={analyzing} icon={<Play className="h-4 w-4" />} onClick={() => void runAnalysis()}>
+                主动分析
+              </Button>
+            </div>
+
+            {analyzing ? <Loader text="正在核验财报、估值、公告和 Agent 共识" /> : null}
+            {!analyzing && !analysis ? (
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <Metric label="最近结论" value={selected.lastActionLabel ?? '尚未分析'} />
+                <Metric label="决策分" value={formatNumber(selected.lastDecisionScore)} />
+                <Metric label="分析时间" value={formatDateTime(selected.lastAnalyzedAt)} />
+                <Metric label="加入时间" value={formatDateTime(selected.createdAt)} />
+              </div>
+            ) : null}
+            {analysis ? <AnalysisResult report={analysis} /> : null}
+            <DecisionHistory items={history} error={historyError} />
+          </div>
+        ) : null}
+      </DetailOverlay>
     </div>
   )
 }

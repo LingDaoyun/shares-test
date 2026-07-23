@@ -23,6 +23,10 @@ interface DataTableProps<T> {
 
 const alignClass = { left: 'text-left', right: 'text-right', center: 'text-center' } as const
 
+export function isRowActivationKey(key: string) {
+  return key === 'Enter' || key === ' '
+}
+
 export function DataTable<T>({
   columns,
   data,
@@ -53,7 +57,17 @@ export function DataTable<T>({
               <tr
                 key={rowKey(row, index)}
                 className={selected ? 'row-selected' : ''}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+                aria-selected={onRowClick ? selected : undefined}
+                onClick={onRowClick ? (event) => {
+                  event.currentTarget.focus()
+                  onRowClick(row)
+                } : undefined}
+                onKeyDown={onRowClick ? (event) => {
+                  if (event.target !== event.currentTarget || !isRowActivationKey(event.key)) return
+                  event.preventDefault()
+                  onRowClick(row)
+                } : undefined}
                 style={onRowClick ? { cursor: 'pointer' } : undefined}
               >
                 {columns.map((col) => (

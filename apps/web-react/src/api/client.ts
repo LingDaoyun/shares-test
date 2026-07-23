@@ -22,6 +22,8 @@ import type {
   UpsertTradeFillRequest,
   WatchlistEntry,
   V2SampleSignalParams,
+  V2StrategyBundleParams,
+  V2StrategyBundleResponse,
   V2SignalResponse
 } from '../types'
 
@@ -238,4 +240,17 @@ export async function fetchV2SampleSignal(params: V2SampleSignalParams): Promise
   if (params.companyName) search.set('companyName', params.companyName)
   if (params.strategyCode) search.set('strategyCode', params.strategyCode)
   return http.get<V2SignalResponse>(`/v2/signals/sample?${search.toString()}`).then((res) => res.data)
+}
+
+export async function fetchV2StrategyBundle(params: V2StrategyBundleParams): Promise<V2StrategyBundleResponse> {
+  const { symbol, companyName, ...factorParams } = params
+  const search = new URLSearchParams()
+  search.set('symbol', symbol)
+  if (companyName) search.set('companyName', companyName)
+  Object.entries(factorParams).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      search.set(key, String(value))
+    }
+  })
+  return http.get<V2StrategyBundleResponse>(`/v2/signals/strategy-bundle?${search.toString()}`).then((res) => res.data)
 }

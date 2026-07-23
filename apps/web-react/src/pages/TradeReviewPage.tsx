@@ -10,7 +10,7 @@ import {
 import { Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { DataTable, type Column } from '../components/ui/DataTable'
-import { Empty } from '../components/ui/Empty'
+import { DetailOverlay, acquireBodyScrollLock } from '../components/ui/DetailOverlay'
 import { Loader } from '../components/ui/Loader'
 import { toast } from '../components/ui/Toast'
 import { changeClass, extractErrorMessage, formatDateTime, formatNumber, formatSignedPercent } from '../lib/format'
@@ -77,7 +77,6 @@ export function TradeReviewPage() {
   const [mutation, setMutation] = useState<CaseMutation | null>(null)
   const [fillModal, setFillModal] = useState<{ fill?: TradeFillView; returnFocus: HTMLElement | null } | null>(null)
   const [cancelDialog, setCancelDialog] = useState<{ caseId: string; symbol: string; returnFocus: HTMLElement | null } | null>(null)
-  const detailPaneRef = useRef<HTMLElement>(null)
   const mutationSequenceRef = useRef(0)
   const activeMutationIdRef = useRef<number | null>(null)
   const selectedIdRef = useRef<string | null>(null)
@@ -128,11 +127,10 @@ export function TradeReviewPage() {
   }, [loadCases])
 
   useEffect(() => {
-    setSelectedId((current) => {
-      if (current && filteredCases.some((tradeCase) => tradeCase.caseId === current)) return current
-      return filteredCases[0]?.caseId ?? null
-    })
-  }, [filteredCases])
+    if (selectedId && !filteredCases.some((tradeCase) => tradeCase.caseId === selectedId)) {
+      setSelectedId(null)
+    }
+  }, [filteredCases, selectedId])
 
   useLayoutEffect(() => {
     selectedIdRef.current = selectedId
@@ -168,9 +166,6 @@ export function TradeReviewPage() {
   const selectCase = useCallback((caseId: string) => {
     selectedIdRef.current = caseId
     setSelectedId(caseId)
-    if (window.matchMedia('(max-width: 1279px)').matches) {
-      window.requestAnimationFrame(() => detailPaneRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
-    }
   }, [])
 
   const columns = useMemo<Column<TradeCase>[]>(() => [
@@ -315,8 +310,7 @@ export function TradeReviewPage() {
         </div>
       </header>
 
-      <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(380px,460px)]">
-        <section aria-labelledby="trade-cases-heading" className="min-w-0 border-y border-line">
+      <section aria-labelledby="trade-cases-heading" className="min-w-0 border-y border-line">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft py-3">
             <h2 id="trade-cases-heading" className="section-title">复盘单</h2>
             <div className="trade-review-tabs" role="group" aria-label="按复盘状态筛选">
@@ -362,31 +356,36 @@ export function TradeReviewPage() {
               </Button>
             </div>
           ) : null}
-        </section>
-        <aside ref={detailPaneRef} aria-labelledby="trade-case-detail-heading" className="min-w-0 scroll-mt-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:self-start xl:overflow-y-auto">
-          {!selected ? (
-            <Empty text="选择一张复盘单查看详情" />
-          ) : detailLoadingId === selected.caseId && !isTradeCaseDetail(selected) ? (
-            <div role="status"><Loader text="详情加载中" className="py-12" /></div>
-          ) : isTradeCaseDetail(selected) ? (
-            <CaseDetail
-              tradeCase={selected}
-              error={detailError}
-              action={mutation?.kind ?? null}
-              busy={mutation !== null}
-              onAddFill={(returnFocus) => { if (!mutation) setFillModal({ returnFocus }) }}
-              onEditFill={(fill, returnFocus) => { if (!mutation) setFillModal({ fill, returnFocus }) }}
-              onDeleteFill={(fill) => void removeFill(fill)}
-              onRefresh={() => void runCaseAction('refresh', selected.caseId)}
-              onRequestCancel={(returnFocus) => setCancelDialog({ caseId: selected.caseId, symbol: selected.symbol, returnFocus })}
-            />
-          ) : (
-            <div role="alert" className="border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
-              {detailError || '复盘详情暂时不可用'}
-            </div>
-          )}
-        </aside>
-      </div>
+      </section>
+
+      <DetailOverlay
+        open={selectedId !== null}
+        title={selected ? `${selected.symbol} ${selected.companyName}` : '交易复盘详情'}
+        subtitle={selected ? `${selected.sourceModule} · ${selected.ruleVersion}` : '加载复盘记录'}
+        onClose={() => setSelectedId(null)}
+      >
+        {!selected ? (
+          <div role="status"><Loader text="详情加载中" className="py-12" /></div>
+        ) : detailLoadingId === selected.caseId && !isTradeCaseDetail(selected) ? (
+          <div role="status"><Loader text="详情加载中" className="py-12" /></div>
+        ) : isTradeCaseDetail(selected) ? (
+          <CaseDetail
+            tradeCase={selected}
+            error={detailError}
+            action={mutation?.kind ?? null}
+            busy={mutation !== null}
+            onAddFill={(returnFocus) => { if (!mutation) setFillModal({ returnFocus }) }}
+            onEditFill={(fill, returnFocus) => { if (!mutation) setFillModal({ fill, returnFocus }) }}
+            onDeleteFill={(fill) => void removeFill(fill)}
+            onRefresh={() => void runCaseAction('refresh', selected.caseId)}
+            onRequestCancel={(returnFocus) => setCancelDialog({ caseId: selected.caseId, symbol: selected.symbol, returnFocus })}
+          />
+        ) : (
+          <div role="alert" className="border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+            {detailError || '复盘详情暂时不可用'}
+          </div>
+        )}
+      </DetailOverlay>
 
       {fillModal && selected && isTradeCaseDetail(selected) ? (
         <FillModal
@@ -452,16 +451,12 @@ function CaseDetail({
   return (
     <div className="border-y border-line bg-white">
       <div className="border-b border-line px-4 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 id="trade-case-detail-heading" className="text-lg font-semibold text-ink-900">{tradeCase.symbol} {tradeCase.companyName}</h2>
-              <StatusTag status={tradeCase.status} />
-              <Tag tone={tradeCase.recommendationVerified ? 'success' : 'neutral'}>
-                {tradeCase.recommendationVerified ? '系统认证' : '历史未认证'}
-              </Tag>
-            </div>
-            <p className="mt-1 break-words text-xs text-ink-500">{tradeCase.sourceModule} · {tradeCase.ruleVersion}</p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusTag status={tradeCase.status} />
+            <Tag tone={tradeCase.recommendationVerified ? 'success' : 'neutral'}>
+              {tradeCase.recommendationVerified ? '系统认证' : '历史未认证'}
+            </Tag>
           </div>
           <div className="flex flex-wrap gap-2">
             <IconButton label="刷新后续表现" loading={action === 'refresh'} disabled={busy} onClick={onRefresh} icon={<RotateCcw className="h-4 w-4" />} />
@@ -575,19 +570,21 @@ function CancelPlanDialog({ symbol, returnFocus, busy, onClose, onConfirm }: {
   const dialogRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const releaseScrollLock = acquireBodyScrollLock(document.body)
     dialogRef.current?.querySelector<HTMLButtonElement>('[data-cancel-plan-confirm]')?.focus()
     return () => {
-      document.body.style.overflow = previousOverflow
+      releaseScrollLock()
       returnFocus?.focus()
     }
   }, [returnFocus])
 
   const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape' && !busy) {
-      event.preventDefault()
-      onClose()
+    if (event.key === 'Escape') {
+      event.stopPropagation()
+      if (!busy) {
+        event.preventDefault()
+        onClose()
+      }
       return
     }
     if (event.key !== 'Tab') return
@@ -606,6 +603,7 @@ function CancelPlanDialog({ symbol, returnFocus, busy, onClose, onConfirm }: {
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-ink-900/40 p-0 sm:items-center sm:p-4" onMouseDown={(event) => {
+      event.stopPropagation()
       if (event.target === event.currentTarget && !busy) onClose()
     }}>
       <div
@@ -650,19 +648,21 @@ function FillModal({ tradeCase, fill, returnFocus, busy, onClose, onSubmit, onSa
   const [error, setError] = useState('')
 
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const releaseScrollLock = acquireBodyScrollLock(document.body)
     firstFieldRef.current?.focus()
     return () => {
-      document.body.style.overflow = previousOverflow
+      releaseScrollLock()
       returnFocus?.focus()
     }
   }, [returnFocus])
 
   const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape' && !busy) {
-      event.preventDefault()
-      onClose()
+    if (event.key === 'Escape') {
+      event.stopPropagation()
+      if (!busy) {
+        event.preventDefault()
+        onClose()
+      }
       return
     }
     if (event.key !== 'Tab') return
@@ -719,6 +719,7 @@ function FillModal({ tradeCase, fill, returnFocus, busy, onClose, onSubmit, onSa
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-ink-900/40 p-0 sm:items-center sm:p-4" onMouseDown={(event) => {
+      event.stopPropagation()
       if (event.target === event.currentTarget && !busy) onClose()
     }}>
       <div

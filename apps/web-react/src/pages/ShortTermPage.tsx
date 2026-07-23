@@ -6,12 +6,16 @@ import type { ShortTermParams } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOverlay'
 import { Loader } from '../components/ui/Loader'
 import { SectionBanner } from '../components/ui/SectionBanner'
+import { CompositeScoreBadge, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
+import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
-import type { BacktestReport, BacktestSummary, ShortTermCandidate, ShortTermHotDirection, ShortTermReport, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice } from '../types'
+import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCounterEvidenceTone, goldenCrossDisplayLabel, goldenCrossSpreadLabel, goldenCrossSpreadTrendLabel, goldenCrossTone, goldenCrossV2Context } from '../lib/shortTermGoldenCross'
+import type { BacktestReport, BacktestSummary, ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermReport, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -27,7 +31,7 @@ interface DraftParams {
 }
 
 const DEFAULT_DRAFT: DraftParams = {
-  limit: 8,
+  limit: 3,
   scanLimit: 6000,
   klineLimit: 60,
   minAmountYi: 0.8,
@@ -125,9 +129,8 @@ export function ShortTermPage() {
   }, [params])
 
   useEffect(() => {
-    if (!report?.candidates.length) return
-    if (!selectedSymbol || !report.candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
-      setSelectedSymbol(report.candidates[0].symbol)
+    if (selectedSymbol && !report?.candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
+      setSelectedSymbol(null)
     }
   }, [report, selectedSymbol])
 
@@ -168,8 +171,7 @@ export function ShortTermPage() {
   }, [report?.generatedAt, report?.candidateCount, params.minVolumeRatio, params.maxDistanceToMa20])
 
   const selected = useMemo(() => {
-    if (!report?.candidates.length) return null
-    return report.candidates.find((candidate) => candidate.symbol === selectedSymbol) ?? report.candidates[0]
+    return resolveDetailSelection(report?.candidates ?? [], selectedSymbol, (candidate) => candidate.symbol)
   }, [report, selectedSymbol])
 
   const backtestBySymbol = useMemo(() => {
@@ -204,7 +206,7 @@ export function ShortTermPage() {
         }
       >
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          <NumberField label="候选数量" value={draft.limit} min={4} max={40} onChange={(value) => setDraft({ ...draft, limit: value })} />
+          <NumberField label="候选数量" value={draft.limit} min={3} max={12} onChange={(value) => setDraft({ ...draft, limit: value })} />
           <NumberField label="扫描数量" value={draft.scanLimit} min={50} max={6000} step={100} onChange={(value) => setDraft({ ...draft, scanLimit: value })} />
           <NumberField label="K线复核数" value={draft.klineLimit} min={10} max={160} step={10} onChange={(value) => setDraft({ ...draft, klineLimit: value })} />
           <NumberField label="成交额下限(亿)" value={draft.minAmountYi} min={0.8} max={30} step={0.05} onChange={(value) => setDraft({ ...draft, minAmountYi: value })} />
@@ -282,40 +284,43 @@ export function ShortTermPage() {
             <HotDirectionsCard directions={report.hotDirections} />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_450px]">
-            <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧候选</span>} flush>
-              {report.candidates.length ? (
-                <div className="divide-y divide-line-soft">
+          <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧候选</span>} flush>
+            {report.candidates.length ? (
+              <div className="divide-y divide-line-soft">
                 {report.candidates.map((candidate) => (
-                    <CandidateRow
-                      key={candidate.symbol}
-                      candidate={candidate}
-                      selected={selected?.symbol === candidate.symbol}
-                      backtestSummary={backtestBySymbol.get(candidate.symbol)}
-                      backtestLoading={backtestLoading}
-                      onSelect={() => setSelectedSymbol(candidate.symbol)}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="p-5"><Loader text="暂无候选" /></div>
-              )}
-            </Card>
+                  <CandidateRow
+                    key={candidate.symbol}
+                    candidate={candidate}
+                    selected={selected?.symbol === candidate.symbol}
+                    backtestSummary={backtestBySymbol.get(candidate.symbol)}
+                    backtestLoading={backtestLoading}
+                    onSelect={() => setSelectedSymbol(candidate.symbol)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="p-5"><Loader text="暂无候选" /></div>
+            )}
+          </Card>
 
-            <div className="xl:sticky xl:top-4 xl:self-start">
-              {selected ? (
-                <CandidateDetail
-                  candidate={selected}
-                  backtestSummary={backtestBySymbol.get(selected.symbol)}
-                  backtestLoading={backtestLoading}
-                  backtestError={backtestError}
-                  weightProfile={report.weightProfile}
-                  generatedAt={report.generatedAt}
-                  tradeCaptureToken={report.tradeCaptureTokens?.[selected.symbol] ?? null}
-                />
-              ) : <Card><Loader text="等待候选数据" /></Card>}
-            </div>
-          </div>
+          <DetailOverlay
+            open={selected !== null}
+            title={selected ? `${selected.name} ${selected.symbol}` : '短线候选详情'}
+            subtitle={selected ? `${selected.market ?? 'A股'} · ${selected.industry ?? '行业待补'} · 排名 #${selected.rank}` : undefined}
+            onClose={() => setSelectedSymbol(null)}
+          >
+            {selected ? (
+              <CandidateDetail
+                candidate={selected}
+                backtestSummary={backtestBySymbol.get(selected.symbol)}
+                backtestLoading={backtestLoading}
+                backtestError={backtestError}
+                weightProfile={report.weightProfile}
+                generatedAt={report.generatedAt}
+                tradeCaptureToken={report.tradeCaptureTokens?.[selected.symbol] ?? null}
+              />
+            ) : null}
+          </DetailOverlay>
         </>
       ) : null}
     </div>
@@ -390,6 +395,7 @@ function CandidateRow({
   backtestLoading: boolean
   onSelect: () => void
 }) {
+  const goldenCross = candidate.technical.goldenCross
   return (
     <button
       type="button"
@@ -405,7 +411,13 @@ function CandidateRow({
         </div>
         <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-ink-500">{candidate.reason}</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
-          <Tag tone="neutral">{candidate.technical.rightSideSignal}</Tag>
+          <RightSideSignalTag signal={candidate.technical.rightSideSignal} />
+          <Tag tone={goldenCrossTone(goldenCross?.state)}>
+            {goldenCrossDisplayLabel(goldenCross)}
+            {goldenCross?.tradingDaysSinceCross != null
+              ? ` · ${goldenCross.tradingDaysSinceCross}日`
+              : ''}
+          </Tag>
           <Tag tone="neutral">20日斜率 {formatNumber(candidate.technical.ma20SlopePercent)}%</Tag>
           {backtestSummary ? (
             <Tag tone={backtestTone(backtestSummary)}>历史验证：{backtestSupportLabel(backtestSummary)}</Tag>
@@ -430,7 +442,7 @@ function CandidateRow({
       </div>
 
       <div className="flex items-center justify-between gap-3 md:flex-col md:items-end md:justify-center">
-        <ScoreBadge value={candidate.score.finalScore} />
+        <CompositeScoreBadge value={candidate.score.finalScore} />
         <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
         <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
         <Tag tone={tailTone(candidate.tailSignal.status)}>{candidate.tailSignal.statusLabel}</Tag>
@@ -457,15 +469,14 @@ function CandidateDetail({
   tradeCaptureToken: string | null
 }) {
   return (
-    <Card className="transition hover:border-brand-300">
-      <div className="flex flex-col gap-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="eyebrow">#{candidate.rank} · {candidate.market ?? 'A股'} · {candidate.industry ?? '行业待补'}</div>
-            <h2 className="mt-1 text-xl font-semibold text-ink-900">{candidate.name}</h2>
-            <div className="mt-1 font-mono text-xs text-ink-400">{candidate.symbol}</div>
+    <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft pb-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <ScoreBadge value={candidate.score.finalScore} />
+            <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
+            <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
           </div>
-          <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <WatchButton symbol={candidate.symbol} />
             <TradeReviewButton
               symbol={candidate.symbol}
@@ -474,9 +485,6 @@ function CandidateDetail({
               recommendedAt={generatedAt}
               attestationToken={tradeCaptureToken}
             />
-            <ScoreBadge value={candidate.score.finalScore} />
-            <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
-            <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
           </div>
         </div>
 
@@ -532,9 +540,17 @@ function CandidateDetail({
           <Metric label="现金流年数" value={`${candidate.financial.positiveCashFlowYears}/3`} />
         </div>
 
+        <GoldenCrossDetail snapshot={candidate.technical.goldenCross} />
+
         <TailSignalPanel signal={candidate.tailSignal} />
 
         <TodayAdvicePanel advice={candidate.todayAdvice} />
+        <V2StrategyBundlePanel
+          symbol={candidate.symbol}
+          companyName={candidate.name}
+          focus="short"
+          factorContext={shortTermFactorContext(candidate, tradeCaptureToken)}
+        />
         <EvidenceCompletenessPanel completeness={candidate.evidenceCompleteness} />
 
         <BacktestSummaryPanel summary={backtestSummary} loading={backtestLoading} error={backtestError} />
@@ -566,8 +582,35 @@ function CandidateDetail({
             ))}
           </div>
         </div>
+    </div>
+  )
+}
+
+function GoldenCrossDetail({ snapshot }: { snapshot: ShortTermGoldenCrossSnapshot | null | undefined }) {
+  const counterEvidence = goldenCrossCounterEvidence(snapshot)
+  const counterTone = goldenCrossCounterEvidenceTone(snapshot)
+  const counterClassName = counterTone === 'warning'
+    ? 'border-amber-300 text-amber-700'
+    : 'border-line-soft text-ink-500'
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2">
+        <Metric label="金叉状态" value={<Tag tone={goldenCrossTone(snapshot?.state)}>{goldenCrossDisplayLabel(snapshot)}</Tag>} />
+        <Metric label="交叉日期" value={snapshot?.crossDate ?? '数据不足'} />
+        <Metric label="完成交易日" value={snapshot?.tradingDaysSinceCross != null ? `${snapshot.tradingDaysSinceCross} 日` : '数据不足'} />
+        <Metric label="MA5/10差" value={goldenCrossSpreadLabel(snapshot)} />
+        <Metric label="差值趋势" value={goldenCrossSpreadTrendLabel(snapshot?.spreadTrend)} />
+        <Metric label="均线关系" value={goldenCrossAlignmentLabel(snapshot?.maAlignment)} />
+        <Metric label="优先级" value={snapshot?.priorityTier != null ? `第 ${snapshot.priorityTier} 档` : '数据不足'} />
+        <Metric label="规则版本" value={snapshot?.ruleVersion ?? '数据不足'} />
       </div>
-    </Card>
+      {counterEvidence ? (
+        <p className={`border-l-2 pl-3 text-xs leading-relaxed ${counterClassName}`}>
+          {counterEvidence}
+        </p>
+      ) : null}
+    </>
   )
 }
 
@@ -691,6 +734,45 @@ function BacktestSummaryPanel({
       </p>
     </div>
   )
+}
+
+function shortTermFactorContext(
+  candidate: ShortTermCandidate,
+  recommendationToken: string | null
+): Omit<V2StrategyBundleParams, 'symbol' | 'companyName'> {
+  const liquidityScore = liquidityScoreFromAmount(candidate.amount)
+  const shrinkRiseScore = candidate.tailSignal.score ?? candidate.score.volumeScore
+  return {
+    industry: candidate.industry ?? '短线候选',
+    valuationDiscountScore: candidate.score.valuationScore,
+    qualityScore: candidate.score.financialScore,
+    moatScore: candidate.score.financialScore,
+    profitabilityScore: candidate.score.financialScore,
+    cashFlowScore: candidate.financial.positiveCashFlowYears >= 2 ? 78 : 55,
+    cyclePositionScore: candidate.technical.rangePosition120 ?? candidate.score.technicalScore,
+    cycleRecoveryScore: candidate.score.technicalScore,
+    industryLeaderScore: candidate.score.financialScore,
+    policyCatalystScore: candidate.score.marketHeatScore,
+    liquidityScore,
+    hotDirection: candidate.industry ?? '热门方向优先',
+    recommendationToken: recommendationToken ?? undefined,
+    marketHotScore: candidate.score.marketHeatScore,
+    rightSideStructureScore: candidate.score.technicalScore,
+    supplyAbsorptionScore: candidate.score.volumeScore,
+    volumeBreakoutScore: candidate.score.volumeScore,
+    shrinkRiseScore,
+    fundamentalFloorScore: candidate.score.financialScore,
+    crowdingRiskScore: Math.max(0, Math.min(100, candidate.score.riskPenalty * 2.5)),
+    ...goldenCrossV2Context(candidate.technical.goldenCross)
+  }
+}
+
+function liquidityScoreFromAmount(amount: number | null | undefined) {
+  if (amount === null || amount === undefined) return 60
+  if (amount >= 2_000_000_000) return 90
+  if (amount >= 800_000_000) return 78
+  if (amount >= 300_000_000) return 66
+  return 50
 }
 
 function adviceTone(action: string): 'success' | 'brand' | 'warning' | 'danger' | 'sky' | 'neutral' {
