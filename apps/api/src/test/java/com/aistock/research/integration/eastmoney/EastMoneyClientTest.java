@@ -264,7 +264,30 @@ class EastMoneyClientTest {
         AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(Integer.MAX_VALUE);
 
         assertThat(snapshot.expectedCount()).isZero();
-        assertThat(snapshot.fetchedCount()).isEqualTo(200);
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void snapshotRejectsZeroReportedTotalOnLaterNonEmptyPage() {
+        MissingLaterTotalStubClient snapshotClient = new MissingLaterTotalStubClient();
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(snapshot.expectedCount()).isZero();
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void snapshotAllowsZeroReportedTotalOnEmptyTerminalPage() {
+        EmptyTerminalPageStubClient snapshotClient = new EmptyTerminalPageStubClient();
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(snapshot.expectedCount()).isEqualTo(2);
+        assertThat(snapshot.fetchedCount()).isEqualTo(1);
+        assertThat(snapshot.missingCount()).isEqualTo(1);
         assertThat(snapshot.complete()).isFalse();
     }
 
@@ -401,19 +424,53 @@ class EastMoneyClientTest {
         @Override
         AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
             if (pageNumber > 2) {
-                return new AshareQuotePage(4999, List.of());
+                return new AshareQuotePage(3, List.of());
             }
-            int offset = (pageNumber - 1) * 100;
             return new AshareQuotePage(
-                    pageNumber == 1 ? 5000 : 4999,
-                    IntStream.range(offset, offset + 100)
-                            .mapToObj(index -> SnapshotStubClient.quote(
-                                    String.format("600%03d", index),
-                                    "工业",
-                                    "东方财富实时全市场"
-                            ))
-                            .toList()
+                    pageNumber == 1 ? 2 : 3,
+                    List.of(SnapshotStubClient.quote(
+                            pageNumber == 1 ? "600001" : "600002",
+                            "工业",
+                            "东方财富实时全市场"
+                    ))
             );
+        }
+    }
+
+    private static final class MissingLaterTotalStubClient extends EastMoneyClient {
+
+        private MissingLaterTotalStubClient() {
+            super(null, new ObjectMapper(), null);
+        }
+
+        @Override
+        AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+            if (pageNumber > 2) {
+                return new AshareQuotePage(0, List.of());
+            }
+            return new AshareQuotePage(
+                    pageNumber == 1 ? 2 : 0,
+                    List.of(SnapshotStubClient.quote(
+                            pageNumber == 1 ? "600001" : "600002",
+                            "工业",
+                            "东方财富实时全市场"
+                    ))
+            );
+        }
+    }
+
+    private static final class EmptyTerminalPageStubClient extends EastMoneyClient {
+
+        private EmptyTerminalPageStubClient() {
+            super(null, new ObjectMapper(), null);
+        }
+
+        @Override
+        AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+            return pageNumber == 1
+                    ? new AshareQuotePage(2, List.of(SnapshotStubClient.quote(
+                            "600001", "工业", "东方财富实时全市场")))
+                    : new AshareQuotePage(0, List.of());
         }
     }
 }

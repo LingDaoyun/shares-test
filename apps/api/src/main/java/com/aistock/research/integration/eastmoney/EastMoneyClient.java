@@ -143,10 +143,16 @@ public class EastMoneyClient {
                 pageFailure = exception;
                 break;
             }
-            if (page == null || page.quotes().isEmpty()) {
+            if (page == null) {
                 break;
             }
-            if (page.totalCount() > 0) {
+            // An empty page is the provider's normal page-after-end sentinel; its total is not authoritative.
+            if (page.quotes().isEmpty()) {
+                break;
+            }
+            if (page.totalCount() <= 0) {
+                reportedTotalConsistent = false;
+            } else {
                 if (reportedTotal > 0 && reportedTotal != page.totalCount()) {
                     reportedTotalConsistent = false;
                 }
