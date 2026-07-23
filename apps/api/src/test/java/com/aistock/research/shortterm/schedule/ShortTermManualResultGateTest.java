@@ -88,6 +88,39 @@ class ShortTermManualResultGateTest {
     }
 
     @Test
+    void allowsScheduledResultAtExactFinalDeadline() {
+        Instant decisionAt = Instant.parse("2026-07-23T06:53:59Z");
+
+        ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
+                TRADE_DATE,
+                report(
+                        Instant.parse("2026-07-23T06:53:00Z"), true,
+                        new BigDecimal("0.99"), true, List.of()),
+                decisionAt,
+                decisionAt
+        );
+
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.NO_TRADE);
+    }
+
+    @Test
+    void blocksScheduledResultOneSecondAfterFinalDeadline() {
+        Instant decisionAt = Instant.parse("2026-07-23T06:54:00Z");
+
+        ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
+                TRADE_DATE,
+                report(
+                        Instant.parse("2026-07-23T06:53:00Z"), true,
+                        new BigDecimal("0.99"), true, List.of()),
+                decisionAt,
+                decisionAt
+        );
+
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
+        assertThat(result.blockedReasons()).containsExactly("FINAL_DEADLINE_EXPIRED");
+    }
+
+    @Test
     void blocksWrongTradeDate() {
         ShortTermFinalResultGate.Result result = gate.evaluateManual(
                 report(

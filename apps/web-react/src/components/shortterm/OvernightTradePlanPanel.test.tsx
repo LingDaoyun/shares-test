@@ -87,12 +87,17 @@ describe('OvernightTradePlanPanel', () => {
           status: 'BLOCKED',
           blockedReasons: ['行情覆盖不足', '尾盘报价已过期'],
           analysisBasis: ['参考入场价 10.20 元', 'ATR14 波动率 3%'],
-          riskWarnings: ['当前计划不可执行']
+          riskWarnings: [
+            '普通 A 股新买仓位遵循 T+1：买入当日无法卖出，盘中急跌也只能等次一交易日处理。',
+            '最大仓位比例是相对于短线资金分配，不是总账户资产。',
+            'T+2 只允许保留不超过计划仓位的 50.00%，并必须在 14:50 前退出。'
+          ]
         }}
       />
     )
 
     expect(html).toContain('不可执行')
+    expect(html).toContain('当前证据未通过执行闸门，本计划不可执行。')
     expect(html).toContain('行情覆盖不足')
     expect(html).toContain('尾盘报价已过期')
     expect(html).not.toContain('精确入场区间')
@@ -101,5 +106,8 @@ describe('OvernightTradePlanPanel', () => {
     expect(html).not.toContain('第一目标价')
     expect(html).not.toContain('第二目标价')
     expect(html).not.toContain('ATR14 波动率')
+    for (const executionTerm of ['T+1', 'T+2', '新买仓位', '最大仓位', '计划仓位', '退出', '截止', '目标', '入场']) {
+      expect(html).not.toContain(executionTerm)
+    }
   })
 })

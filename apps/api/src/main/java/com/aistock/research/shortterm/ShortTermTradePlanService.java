@@ -20,6 +20,8 @@ public class ShortTermTradePlanService {
     private static final BigDecimal MINIMUM_PRICE_TICK = new BigDecimal("0.01");
     private static final BigDecimal FIRST_REDUCTION_RATIO = new BigDecimal("0.50");
     private static final String STRATEGY_LABEL = "隔夜超短波段";
+    private static final List<String> BLOCKED_RISK_WARNINGS = List.of(
+            "当前计划未通过执行闸门，仅保留风险依据，不构成可执行交易建议。");
 
     private final TradingClockService tradingClockService;
 
@@ -208,7 +210,7 @@ public class ShortTermTradePlanService {
                 calculated.t2ExtensionConditions(),
                 calculated.openScenarios(),
                 calculated.analysisBasis(),
-                calculated.riskWarnings()
+                BLOCKED_RISK_WARNINGS
         );
     }
 
@@ -262,13 +264,19 @@ public class ShortTermTradePlanService {
                 ),
                 openScenarios(),
                 List.copyOf(analysisBasis),
-                List.of(
-                        "普通 A 股新买仓位遵循 T+1：买入当日无法卖出，盘中急跌也只能等次一交易日处理。",
-                        "最大仓位比例是相对于短线资金分配，不是总账户资产。",
-                        "T+2 只允许保留不超过计划仓位的 "
-                                + percent(rules.maxT2PositionRatio().movePointRight(2)) + "%，"
-                                + "并必须在 " + time(rules.normalExitTime()) + " 前退出。"
-                )
+                "BLOCKED".equals(status)
+                        ? BLOCKED_RISK_WARNINGS
+                        : actionableRiskWarnings(rules)
+        );
+    }
+
+    private List<String> actionableRiskWarnings(OvernightRuleSet rules) {
+        return List.of(
+                "普通 A 股新买仓位遵循 T+1：买入当日无法卖出，盘中急跌也只能等次一交易日处理。",
+                "最大仓位比例是相对于短线资金分配，不是总账户资产。",
+                "T+2 只允许保留不超过计划仓位的 "
+                        + percent(rules.maxT2PositionRatio().movePointRight(2)) + "%，"
+                        + "并必须在 " + time(rules.normalExitTime()) + " 前退出。"
         );
     }
 

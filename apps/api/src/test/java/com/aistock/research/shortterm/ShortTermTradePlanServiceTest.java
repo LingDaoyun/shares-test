@@ -8,6 +8,7 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -185,6 +186,26 @@ class ShortTermTradePlanServiceTest {
         assertThat(plan.secondTargetPrice()).isNull();
         assertThat(plan.hardStopPrice()).isNull();
         assertThat(plan.analysisBasis()).contains("缺少完成 K 线计算的 ATR14，未生成目标价和止损价");
+    }
+
+    @Test
+    void blockedPlanUsesIndependentNonExecutableRiskWarnings() {
+        ShortTermTradePlan plan = service.blocked(
+                LocalDate.of(2026, 7, 23),
+                bd("10.00"),
+                bd("9.90"),
+                bd("10.05"),
+                technicalWithAtrAndSupport("3.00", "9.72"),
+                rules(),
+                List.of("行情覆盖不足", "尾盘报价已过期")
+        );
+
+        assertThat(plan.status()).isEqualTo("BLOCKED");
+        assertThat(plan.blockedReasons()).containsExactly("行情覆盖不足", "尾盘报价已过期");
+        assertThat(plan.riskWarnings()).containsExactly(
+                "当前计划未通过执行闸门，仅保留风险依据，不构成可执行交易建议。");
+        assertThat(String.join("；", plan.riskWarnings()))
+                .doesNotContain("T+1", "T+2", "仓位", "入场", "目标", "退出", "截止");
     }
 
     @Test

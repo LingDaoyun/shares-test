@@ -21,16 +21,13 @@ export function OvernightTradePlanPanel({ plan }: { plan: ShortTermTradePlan | n
           <span className="text-xs">{plan.strategyLabel}</span>
         </div>
         <p className="mt-2 text-xs leading-relaxed text-amber-800">
-          当前证据未通过执行闸门，不展示入场、仓位或目标动作。
+          当前证据未通过执行闸门，本计划不可执行。
         </p>
         {plan.blockedReasons?.length ? (
           <div className="mt-3 border-t border-amber-200 pt-2 text-xs leading-relaxed text-ink-700">
             <div className="font-semibold text-amber-900">风险依据</div>
             <p className="mt-1">{plan.blockedReasons.join('；')}</p>
           </div>
-        ) : null}
-        {plan.riskWarnings.length ? (
-          <p className="mt-2 text-xs leading-relaxed text-amber-800">{plan.riskWarnings.join('；')}</p>
         ) : null}
       </section>
     )
