@@ -26,6 +26,8 @@ public record ShortTermTechnicalSnapshot(
         BigDecimal todayAmplitudePercent,
         int consecutiveAboveMa20Days,
         String rightSideSignal,
-        ShortTermGoldenCrossSnapshot goldenCross
+        ShortTermGoldenCrossSnapshot goldenCross,
+        BigDecimal atr14Percent,
+        BigDecimal recentSupportPrice
 ) {
 }

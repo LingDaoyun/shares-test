@@ -6,8 +6,11 @@ import com.aistock.research.integration.eastmoney.EastMoneyClient;
 import com.aistock.research.integration.eastmoney.EastMoneyIntradayPoint;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
+import com.aistock.research.quality.EvidenceCompleteness;
 import com.aistock.research.quality.EvidenceCompletenessService;
+import com.aistock.research.trading.QuoteFreshnessSnapshot;
 import com.aistock.research.trading.QuoteFreshnessService;
+import com.aistock.research.trading.TradingAdvice;
 import com.aistock.research.trading.TradingClockService;
 import com.aistock.research.valuation.ValuationContextState;
 import org.junit.jupiter.api.Test;
@@ -17,6 +20,7 @@ import java.time.Instant;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -70,6 +74,89 @@ class ShortTermServiceTest {
         assertThat(report.candidates()).hasSize(3);
         assertThat(report.methodology()).anySatisfy(item ->
                 assertThat(item).contains("只输出前三个", "热门方向", "分歧低吸"));
+    }
+
+    @Test
+    void shouldComputeAtrAndSupportFromCompletedDailyBars() {
+        eastMoneyClient.quotes = List.of(
+                quote("600107", "波动样本", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600107", rightEarlyKLines("600107", "10.62", "180000"));
+        eastMoneyClient.financials.put("600107", goodFinancial("600107"));
+
+        ShortTermCandidate candidate = find(
+                service.report(1, 100, 5, null, null, null, null, null, null, null),
+                "600107"
+        );
+
+        assertThat(candidate.technical().atr14Percent()).isPositive();
+        assertThat(candidate.technical().recentSupportPrice()).isPositive();
+        assertThat(candidate.technical().recentSupportPrice()).isLessThan(candidate.latestPrice());
+    }
+
+    @Test
+    void shouldAttachActionablePlanOnlyAfterFreshnessEvidenceAndActionGatesPass() {
+        eastMoneyClient.quotes = List.of(
+                quote("600108", "计划样本", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600108", rightEarlyKLines("600108", "10.62", "180000"));
+        eastMoneyClient.financials.put("600108", goodFinancial("600108"));
+
+        ShortTermCandidate blocked = find(
+                service.report(1, 100, 5, null, null, null, null, null, null, null),
+                "600108"
+        );
+
+        assertThat(blocked.tradePlan().status()).isEqualTo("BLOCKED");
+
+        ShortTermCandidate executable = copyWithExecutionState(
+                blocked,
+                new TradingAdvice("LIGHT_TRIAL", "轻仓试错", 72, "测试可执行动作", List.of(), List.of()),
+                new QuoteFreshnessSnapshot(
+                        "REALTIME",
+                        "实时",
+                        true,
+                        false,
+                        LocalDate.of(2026, 7, 7),
+                        Instant.parse("2026-07-07T06:54:00Z"),
+                        60L,
+                        "测试实时行情"
+                ),
+                new EvidenceCompleteness(
+                        100,
+                        "COMPLETE",
+                        "证据完整",
+                        true,
+                        List.of("实时行情", "K线", "财报", "尾盘分时"),
+                        List.of(),
+                        List.of()
+                )
+        );
+
+        ShortTermCandidate planned = service.attachTradePlan(executable, overnightRules());
+
+        assertThat(planned.tradePlan().status()).isEqualTo("ACTIONABLE");
+        assertThat(planned.tradePlan().referenceEntryPrice()).isEqualByComparingTo(executable.latestPrice());
+        assertThat(planned.tradePlan().firstTargetPrice()).isNotNull();
+        assertThat(planned.tradePlan().normalExitDate()).isAfter(executable.technical().tradeDate());
+
+        ShortTermCandidate stale = copyWithExecutionState(
+                executable,
+                executable.todayAdvice(),
+                new QuoteFreshnessSnapshot(
+                        "STALE",
+                        "过期",
+                        true,
+                        true,
+                        LocalDate.of(2026, 7, 7),
+                        Instant.parse("2026-07-07T06:40:00Z"),
+                        900L,
+                        "行情已过期"
+                ),
+                executable.evidenceCompleteness()
+        );
+
+        assertThat(service.attachTradePlan(stale, overnightRules()).tradePlan().status()).isEqualTo("BLOCKED");
     }
 
     @Test
@@ -797,6 +884,66 @@ class ShortTermServiceTest {
                 .filter(candidate -> symbol.equals(candidate.symbol()))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private ShortTermCandidate copyWithExecutionState(
+            ShortTermCandidate candidate,
+            TradingAdvice advice,
+            QuoteFreshnessSnapshot freshness,
+            EvidenceCompleteness completeness
+    ) {
+        return new ShortTermCandidate(
+                candidate.rank(),
+                candidate.symbol(),
+                candidate.name(),
+                candidate.market(),
+                candidate.industry(),
+                candidate.latestPrice(),
+                candidate.changePercent(),
+                candidate.peTtm(),
+                candidate.pbRatio(),
+                candidate.amount(),
+                freshness,
+                candidate.valuationContext(),
+                candidate.phase(),
+                candidate.phaseLabel(),
+                candidate.action(),
+                candidate.actionLabel(),
+                candidate.reason(),
+                advice,
+                candidate.tailSignal(),
+                candidate.score(),
+                candidate.technical(),
+                candidate.financial(),
+                candidate.buyZoneLow(),
+                candidate.buyZoneHigh(),
+                candidate.stopPrice(),
+                candidate.strengths(),
+                candidate.risks(),
+                candidate.entryRules(),
+                candidate.exitRules(),
+                completeness,
+                candidate.evidence(),
+                candidate.tradePlan()
+        );
+    }
+
+    private OvernightRuleSet overnightRules() {
+        return new OvernightRuleSet(
+                LocalTime.of(14, 45),
+                LocalTime.of(14, 56, 59),
+                LocalTime.of(14, 50),
+                2,
+                new BigDecimal("0.3333"),
+                new BigDecimal("0.50"),
+                new BigDecimal("2.5"),
+                new BigDecimal("4.0"),
+                new BigDecimal("4.5"),
+                new BigDecimal("7.0"),
+                new BigDecimal("2.5"),
+                new BigDecimal("4.5"),
+                new BigDecimal("2.0")
+        );
     }
 
     private List<EastMoneyKLine> rightEarlyKLines(String symbol, String finalClose, String finalVolume) {

@@ -39,6 +39,7 @@ public record ShortTermCandidate(
         List<String> entryRules,
         List<String> exitRules,
         EvidenceCompleteness evidenceCompleteness,
-        List<ShortTermEvidence> evidence
+        List<ShortTermEvidence> evidence,
+        ShortTermTradePlan tradePlan
 ) {
 }

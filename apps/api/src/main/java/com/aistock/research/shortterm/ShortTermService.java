@@ -11,6 +11,7 @@ import com.aistock.research.quality.EvidenceCompleteness;
 import com.aistock.research.quality.EvidenceCompletenessInput;
 import com.aistock.research.quality.EvidenceCompletenessService;
 import com.aistock.research.quality.RecommendationQuality;
+import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
 import com.aistock.research.trading.TradingAdvice;
 import com.aistock.research.trading.AsharePriceLimitRule;
 import com.aistock.research.trading.QuoteFreshnessService;
@@ -20,6 +21,7 @@ import com.aistock.research.valuation.ValuationContext;
 import com.aistock.research.valuation.ValuationContextCalculator;
 import com.aistock.research.valuation.ValuationContextState;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.StandardEnvironment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -134,6 +136,8 @@ public class ShortTermService {
     private final TradingClockService tradingClockService;
     private final QuoteFreshnessService quoteFreshnessService;
     private final ShortTermGoldenCrossAnalyzer goldenCrossAnalyzer;
+    private final ShortTermTradePlanService tradePlanService;
+    private final ShortTermAutomationSettings automationSettings;
     private final ValuationContextCalculator valuationContextCalculator = new ValuationContextCalculator();
 
     public ShortTermService(EastMoneyClient eastMoneyClient) {
@@ -168,7 +172,6 @@ public class ShortTermService {
                 new ShortTermGoldenCrossAnalyzer());
     }
 
-    @Autowired
     public ShortTermService(
             EastMoneyClient eastMoneyClient,
             EvidenceCompletenessService evidenceCompletenessService,
@@ -176,11 +179,34 @@ public class ShortTermService {
             QuoteFreshnessService quoteFreshnessService,
             ShortTermGoldenCrossAnalyzer goldenCrossAnalyzer
     ) {
+        this(
+                eastMoneyClient,
+                evidenceCompletenessService,
+                tradingClockService,
+                quoteFreshnessService,
+                goldenCrossAnalyzer,
+                new ShortTermTradePlanService(tradingClockService),
+                new ShortTermAutomationSettings(new StandardEnvironment())
+        );
+    }
+
+    @Autowired
+    public ShortTermService(
+            EastMoneyClient eastMoneyClient,
+            EvidenceCompletenessService evidenceCompletenessService,
+            TradingClockService tradingClockService,
+            QuoteFreshnessService quoteFreshnessService,
+            ShortTermGoldenCrossAnalyzer goldenCrossAnalyzer,
+            ShortTermTradePlanService tradePlanService,
+            ShortTermAutomationSettings automationSettings
+    ) {
         this.eastMoneyClient = eastMoneyClient;
         this.evidenceCompletenessService = evidenceCompletenessService;
         this.tradingClockService = tradingClockService;
         this.quoteFreshnessService = quoteFreshnessService;
         this.goldenCrossAnalyzer = goldenCrossAnalyzer;
+        this.tradePlanService = tradePlanService;
+        this.automationSettings = automationSettings;
     }
 
     public ShortTermReport report(
@@ -275,7 +301,10 @@ public class ShortTermService {
 
         int safeLimit = Math.min(resolveLimit(limit), scored.size());
         List<ShortTermCandidate> candidates = IntStream.range(0, safeLimit)
-                .mapToObj(index -> enrichTailSignal(rerank(scored.get(index).candidate(), index + 1)))
+                .mapToObj(index -> attachTradePlan(
+                        enrichTailSignal(rerank(scored.get(index).candidate(), index + 1)),
+                        automationSettings.overnightRules()
+                ))
                 .toList();
 
         long validKlineCount = reviewedTechnicalCandidates.size();
@@ -398,7 +427,8 @@ public class ShortTermService {
                 entryRules(decision, ruleSet),
                 exitRules(ruleSet),
                 pendingEvidenceCompleteness(quote, technical, financial, quoteFreshness),
-                evidence(quote, technical, financial, item.technical(), valuationContext, quoteFreshness)
+                evidence(quote, technical, financial, item.technical(), valuationContext, quoteFreshness),
+                null
         );
         return new ScoredShortTerm(candidate);
     }
@@ -413,7 +443,8 @@ public class ShortTermService {
                     quote,
                     sorted,
                     new ShortTermTechnicalSnapshot(null, null, null, null, null, null, null, null, null, null, null, null, null,
-                            null, null, null, null, null, null, null, 0, "K线不足", ShortTermGoldenCrossSnapshot.unavailable()),
+                            null, null, null, null, null, null, null, 0, "K线不足", ShortTermGoldenCrossSnapshot.unavailable(),
+                            null, null),
                     null,
                     null,
                     List.of("近一年 K 线不足，不能确认右侧启动")
@@ -446,6 +477,11 @@ public class ShortTermService {
         BigDecimal previousRange20 = percent(nullToZero(previousHigh20).subtract(nullToZero(previousLow20)), previousLow20);
         BigDecimal drawdownFromHigh120 = percent(nullToZero(high120).subtract(close), high120);
         BigDecimal amplitude = last.high() == null || last.low() == null ? null : percent(last.high().subtract(last.low()), close);
+        List<EastMoneyKLine> completedRows = sorted.stream()
+                .filter(row -> tradingClockService.isCompletedDailyBar(row.tradeDate()))
+                .toList();
+        BigDecimal atr14Percent = atr14Percent(completedRows);
+        BigDecimal recentSupportPrice = low(completedRows, 20);
         int consecutiveAboveMa20 = consecutiveAboveMa(sorted, 20);
         boolean latestBarCompleted = tradingClockService.isCompletedDailyBar(last.tradeDate());
         ShortTermGoldenCrossSnapshot goldenCross = goldenCrossAnalyzer.analyze(sorted, latestBarCompleted);
@@ -492,7 +528,9 @@ public class ShortTermService {
                         scale(amplitude),
                         consecutiveAboveMa20,
                         rightSideSignal,
-                        goldenCross
+                        goldenCross,
+                        scale(atr14Percent),
+                        scale(recentSupportPrice)
                 ),
                 last,
                 previous,
@@ -1080,7 +1118,91 @@ public class ShortTermService {
                 withTailEntryRule(candidate.entryRules()),
                 candidate.exitRules(),
                 completeness,
-                withTailEvidence(candidate.evidence(), tailSignal)
+                withTailEvidence(candidate.evidence(), tailSignal),
+                candidate.tradePlan()
+        );
+    }
+
+    ShortTermCandidate attachTradePlan(ShortTermCandidate candidate, OvernightRuleSet rules) {
+        boolean executableAction = candidate.todayAdvice() != null
+                && Set.of("ADD", "LIGHT_TRIAL").contains(candidate.todayAdvice().action());
+        boolean freshnessAllowsExecution = candidate.quoteFreshness() != null
+                && !candidate.quoteFreshness().blocksRealtimeDecision();
+        boolean evidenceAllowsExecution = candidate.evidenceCompleteness() != null
+                && candidate.evidenceCompleteness().allowsBuy();
+        LocalDate tradeDate = candidate.quoteFreshness() != null
+                && candidate.quoteFreshness().tradeDate() != null
+                ? candidate.quoteFreshness().tradeDate()
+                : candidate.technical() == null ? null : candidate.technical().tradeDate();
+
+        ShortTermTradePlan plan;
+        if (executableAction && freshnessAllowsExecution && evidenceAllowsExecution) {
+            plan = tradePlanService.create(
+                    tradeDate,
+                    candidate.latestPrice(),
+                    candidate.buyZoneLow(),
+                    candidate.buyZoneHigh(),
+                    candidate.technical(),
+                    rules
+            );
+        } else {
+            List<String> blockedReasons = new ArrayList<>();
+            if (!executableAction) {
+                blockedReasons.add("当前建议不是可执行的加仓或轻仓试错动作");
+            }
+            if (!freshnessAllowsExecution) {
+                blockedReasons.add("实时行情新鲜度未通过，交易计划不可执行");
+            }
+            if (!evidenceAllowsExecution) {
+                blockedReasons.add("证据完整度未通过，交易计划不可执行");
+            }
+            plan = tradePlanService.blocked(
+                    tradeDate,
+                    candidate.latestPrice(),
+                    candidate.buyZoneLow(),
+                    candidate.buyZoneHigh(),
+                    candidate.technical(),
+                    rules,
+                    blockedReasons
+            );
+        }
+        return copyWithTradePlan(candidate, plan);
+    }
+
+    private ShortTermCandidate copyWithTradePlan(ShortTermCandidate candidate, ShortTermTradePlan plan) {
+        return new ShortTermCandidate(
+                candidate.rank(),
+                candidate.symbol(),
+                candidate.name(),
+                candidate.market(),
+                candidate.industry(),
+                candidate.latestPrice(),
+                candidate.changePercent(),
+                candidate.peTtm(),
+                candidate.pbRatio(),
+                candidate.amount(),
+                candidate.quoteFreshness(),
+                candidate.valuationContext(),
+                candidate.phase(),
+                candidate.phaseLabel(),
+                candidate.action(),
+                candidate.actionLabel(),
+                candidate.reason(),
+                candidate.todayAdvice(),
+                candidate.tailSignal(),
+                candidate.score(),
+                candidate.technical(),
+                candidate.financial(),
+                candidate.buyZoneLow(),
+                candidate.buyZoneHigh(),
+                candidate.stopPrice(),
+                candidate.strengths(),
+                candidate.risks(),
+                candidate.entryRules(),
+                candidate.exitRules(),
+                candidate.evidenceCompleteness(),
+                candidate.evidence(),
+                plan
         );
     }
 
@@ -2063,7 +2185,8 @@ public class ShortTermService {
                 candidate.entryRules(),
                 candidate.exitRules(),
                 candidate.evidenceCompleteness(),
-                candidate.evidence()
+                candidate.evidence(),
+                candidate.tradePlan()
         );
     }
 
@@ -2204,6 +2327,46 @@ public class ShortTermService {
             return null;
         }
         return average(slice.stream().map(EastMoneyKLine::close).toList());
+    }
+
+    private BigDecimal atr14Percent(List<EastMoneyKLine> completedRows) {
+        if (completedRows == null || completedRows.size() < 15) {
+            return null;
+        }
+        int start = Math.max(1, completedRows.size() - 14);
+        BigDecimal totalTrueRange = BigDecimal.ZERO;
+        int count = 0;
+        for (int index = start; index < completedRows.size(); index++) {
+            BigDecimal trueRange = trueRange(completedRows.get(index), completedRows.get(index - 1));
+            if (trueRange != null) {
+                totalTrueRange = totalTrueRange.add(trueRange);
+                count++;
+            }
+        }
+        EastMoneyKLine latest = completedRows.get(completedRows.size() - 1);
+        if (count < 14 || latest.close() == null || latest.close().compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+        BigDecimal averageTrueRange = totalTrueRange.divide(
+                BigDecimal.valueOf(count),
+                6,
+                RoundingMode.HALF_UP
+        );
+        return percent(averageTrueRange, latest.close());
+    }
+
+    private BigDecimal trueRange(EastMoneyKLine current, EastMoneyKLine previous) {
+        if (current == null
+                || previous == null
+                || current.high() == null
+                || current.low() == null
+                || previous.close() == null) {
+            return null;
+        }
+        BigDecimal intradayRange = current.high().subtract(current.low()).abs();
+        BigDecimal highGap = current.high().subtract(previous.close()).abs();
+        BigDecimal lowGap = current.low().subtract(previous.close()).abs();
+        return intradayRange.max(highGap).max(lowGap);
     }
 
     private BigDecimal movingAverageSlope(List<EastMoneyKLine> rows, int window, int lookbackDays) {
