@@ -1,6 +1,7 @@
 package com.aistock.research.shortterm.schedule;
 
 import com.aistock.research.shortterm.ShortTermReport;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -23,6 +24,9 @@ import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.FI
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.FAILED;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.PRESELECT_READY;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.RUNNING;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest
 class ShortTermScheduledSnapshotStoreTest {
@@ -35,6 +39,9 @@ class ShortTermScheduledSnapshotStoreTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @AfterEach
     void clean() {
@@ -178,11 +185,19 @@ class ShortTermScheduledSnapshotStoreTest {
     void propagatesNonDuplicatePersistenceViolation() {
         LocalDate date = LocalDate.of(2026, 7, 31);
         String snapshotKey = date + ":FINAL:rules-v1";
+        DataIntegrityViolationException storageFailure =
+                new DataIntegrityViolationException("unrelated storage constraint");
+        ShortTermScheduledSnapshotRepository failingRepository =
+                mock(ShortTermScheduledSnapshotRepository.class);
+        when(failingRepository.saveAndFlush(any(ShortTermScheduledSnapshotEntity.class)))
+                .thenThrow(storageFailure);
+        when(failingRepository.existsById(snapshotKey)).thenReturn(false);
+        ShortTermScheduledSnapshotStore failingStore =
+                new ShortTermScheduledSnapshotStore(failingRepository, objectMapper);
 
-        assertThatThrownBy(() -> store.claim(
-                date, FINAL, "rules-v1", null, Instant.parse("2026-07-31T06:48:00Z")))
-                .isInstanceOf(DataIntegrityViolationException.class);
-        assertThat(repository.existsById(snapshotKey)).isFalse();
+        assertThatThrownBy(() -> failingStore.claim(
+                date, FINAL, "rules-v1", "{}", Instant.parse("2026-07-31T06:48:00Z")))
+                .isSameAs(storageFailure);
     }
 
     @Test
@@ -238,6 +253,63 @@ class ShortTermScheduledSnapshotStoreTest {
                 restarted.plusSeconds(20), "恢复后结果已就绪", List.of());
         assertThat(published.status()).isEqualTo(FINAL_READY);
         assertThat(published.message()).isEqualTo("恢复后结果已就绪");
+    }
+
+    @Test
+    void recoversStaleRunningSnapshotAfterRestartUsingPersistedIdentity() {
+        LocalDate date = LocalDate.of(2026, 8, 4);
+        Instant started = Instant.parse("2026-08-04T06:48:00Z");
+        Instant restarted = started.plusSeconds(120);
+        store.claim(date, FINAL, "rules-v1", "{}", started).orElseThrow();
+
+        ShortTermScheduledSnapshot loadedAfterRestart =
+                store.find(date, FINAL, "rules-v1").orElseThrow();
+        assertThat(loadedAfterRestart.status()).isEqualTo(RUNNING);
+        assertThat(loadedAfterRestart.attemptCount()).isEqualTo(1);
+
+        ShortTermSnapshotClaim recovered = store.recoverStaleRunning(
+                date, FINAL, "rules-v1", loadedAfterRestart.attemptCount(), started, restarted)
+                .orElseThrow();
+        assertThat(recovered.snapshotKey()).isEqualTo(loadedAfterRestart.snapshotKey());
+        assertThat(recovered.attemptCount()).isEqualTo(2);
+
+        ShortTermSnapshotClaim oldPersistedAttempt = new ShortTermSnapshotClaim(
+                loadedAfterRestart.snapshotKey(), loadedAfterRestart.attemptCount());
+        assertThatIllegalStateException().isThrownBy(() -> store.fail(
+                oldPersistedAttempt, restarted.plusSeconds(10), "旧进程迟到失败", List.of()));
+
+        ShortTermScheduledSnapshot published = store.finish(
+                recovered, FINAL_READY, sampleReport(), restarted.plusSeconds(20),
+                restarted.plusSeconds(20), "重启恢复结果已就绪", List.of());
+        assertThat(published.status()).isEqualTo(FINAL_READY);
+        assertThat(published.attemptCount()).isEqualTo(2);
+    }
+
+    @Test
+    void rejectsInvalidClaimInputsBeforePersistenceEvenWhenKeyExists() {
+        LocalDate date = LocalDate.of(2026, 8, 5);
+        Instant started = Instant.parse("2026-08-05T06:48:00Z");
+        ShortTermSnapshotClaim original =
+                store.claim(date, FINAL, "rules-v1", "{}", started).orElseThrow();
+
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                store.claim(date, FINAL, "rules-v1", null, started.plusSeconds(1)));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                store.claim(null, FINAL, "rules-v1", "{}", started));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                store.claim(date, null, "rules-v1", "{}", started));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                store.claim(date, FINAL, null, "{}", started));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                store.claim(date, FINAL, " ", "{}", started));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                store.claim(date, FINAL, "x".repeat(65), "{}", started));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                store.claim(date, FINAL, "rules-v1", "{}", null));
+
+        ShortTermScheduledSnapshotEntity persisted = repository.findById(original.snapshotKey()).orElseThrow();
+        assertThat(persisted.getStatus()).isEqualTo(RUNNING);
+        assertThat(persisted.getAttemptCount()).isEqualTo(1);
     }
 
     private ShortTermReport sampleReport() {

@@ -19,6 +19,8 @@ public class ShortTermScheduledSnapshotStore {
 
     private static final TypeReference<List<String>> BLOCKED_REASONS_TYPE = new TypeReference<>() { };
     private static final String RUNNING_MESSAGE = "正在执行";
+    private static final int PARAMETER_FINGERPRINT_MAX_LENGTH = 64;
+    private static final int SNAPSHOT_KEY_MAX_LENGTH = 160;
     private static final Set<ShortTermSnapshotStatus> FINISH_STATUSES = Set.of(
             ShortTermSnapshotStatus.PRESELECT_READY,
             ShortTermSnapshotStatus.FINAL_READY,
@@ -44,7 +46,8 @@ public class ShortTermScheduledSnapshotStore {
             String parametersJson,
             Instant startedAt
     ) {
-        String snapshotKey = snapshotKey(tradeDate, stage, parameterFingerprint);
+        String snapshotKey = validatedClaimSnapshotKey(
+                tradeDate, stage, parameterFingerprint, parametersJson, startedAt);
         try {
             ShortTermScheduledSnapshotEntity entity = repository.saveAndFlush(new ShortTermScheduledSnapshotEntity(
                     snapshotKey, tradeDate, stage, parameterFingerprint, parametersJson, startedAt));
@@ -76,6 +79,20 @@ public class ShortTermScheduledSnapshotStore {
             return Optional.empty();
         }
         return Optional.of(currentClaim(staleClaim.snapshotKey()));
+    }
+
+    @Transactional
+    public Optional<ShortTermSnapshotClaim> recoverStaleRunning(
+            LocalDate tradeDate,
+            ShortTermSnapshotStage stage,
+            String parameterFingerprint,
+            int expectedAttemptCount,
+            Instant staleCutoff,
+            Instant restartedAt
+    ) {
+        String snapshotKey = validatedSnapshotKey(tradeDate, stage, parameterFingerprint);
+        return recoverStaleRunning(
+                new ShortTermSnapshotClaim(snapshotKey, expectedAttemptCount), staleCutoff, restartedAt);
     }
 
     @Transactional
@@ -147,7 +164,8 @@ public class ShortTermScheduledSnapshotStore {
     private ShortTermScheduledSnapshot toSnapshot(ShortTermScheduledSnapshotEntity entity) {
         return new ShortTermScheduledSnapshot(
                 entity.getSnapshotKey(), entity.getTradeDate(), entity.getStage(), entity.getStatus(),
-                entity.getParameterFingerprint(), entity.getDataCutoffAt(), entity.getStartedAt(),
+                entity.getAttemptCount(), entity.getParameterFingerprint(), entity.getDataCutoffAt(),
+                entity.getStartedAt(),
                 entity.getCompletedAt(), entity.getMessage(), readBlockedReasons(entity.getBlockedReasonsJson()),
                 readReport(entity.getReportJson()));
     }
@@ -158,8 +176,45 @@ public class ShortTermScheduledSnapshotStore {
         return new ShortTermSnapshotClaim(snapshotKey, entity.getAttemptCount());
     }
 
-    private String snapshotKey(LocalDate tradeDate, ShortTermSnapshotStage stage, String parameterFingerprint) {
-        return tradeDate + ":" + stage + ":" + parameterFingerprint;
+    private String validatedClaimSnapshotKey(
+            LocalDate tradeDate,
+            ShortTermSnapshotStage stage,
+            String parameterFingerprint,
+            String parametersJson,
+            Instant startedAt
+    ) {
+        String snapshotKey = validatedSnapshotKey(tradeDate, stage, parameterFingerprint);
+        if (parametersJson == null) {
+            throw new IllegalArgumentException("parametersJson must not be null");
+        }
+        if (startedAt == null) {
+            throw new IllegalArgumentException("startedAt must not be null");
+        }
+        return snapshotKey;
+    }
+
+    private String validatedSnapshotKey(
+            LocalDate tradeDate,
+            ShortTermSnapshotStage stage,
+            String parameterFingerprint
+    ) {
+        if (tradeDate == null) {
+            throw new IllegalArgumentException("tradeDate must not be null");
+        }
+        if (stage == null) {
+            throw new IllegalArgumentException("stage must not be null");
+        }
+        if (parameterFingerprint == null || parameterFingerprint.isBlank()) {
+            throw new IllegalArgumentException("parameterFingerprint must not be blank");
+        }
+        if (parameterFingerprint.length() > PARAMETER_FINGERPRINT_MAX_LENGTH) {
+            throw new IllegalArgumentException("parameterFingerprint exceeds schema length 64");
+        }
+        String snapshotKey = tradeDate + ":" + stage + ":" + parameterFingerprint;
+        if (snapshotKey.length() > SNAPSHOT_KEY_MAX_LENGTH) {
+            throw new IllegalArgumentException("snapshotKey exceeds schema length 160");
+        }
+        return snapshotKey;
     }
 
     private String writeReport(ShortTermReport report) {
