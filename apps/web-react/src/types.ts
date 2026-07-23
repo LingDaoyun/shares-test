@@ -479,7 +479,8 @@ export interface ShortTermOpenScenario {
 
 export interface ShortTermTradePlan {
   strategyLabel: string
-  status: string
+  status: 'ACTIONABLE' | 'BLOCKED'
+  blockedReasons: string[]
   entryWindow: string
   validUntil: string
   referenceEntryPrice: number | null
@@ -596,6 +597,7 @@ export interface ShortTermScheduledSnapshot {
   tradeDate: string
   stage: 'PRESELECT' | 'FINAL' | 'READINESS_GUARD' | 'MANUAL'
   status: ShortTermSnapshotStatus
+  strategyVersion: string
   message: string
   dataCutoffAt: string | null
   completedAt: string | null
@@ -619,6 +621,10 @@ export type ShortTermScanJobState = 'RUNNING' | 'SUCCEEDED' | 'FAILED'
 export interface ShortTermScanJobStatus {
   jobId: string
   status: ShortTermScanJobState
+  tradeDate: string
+  resultStatus: ShortTermSnapshotStatus
+  strategyVersion: string
+  blockedReasons: string[]
   createdAt: string
   startedAt: string | null
   finishedAt: string | null

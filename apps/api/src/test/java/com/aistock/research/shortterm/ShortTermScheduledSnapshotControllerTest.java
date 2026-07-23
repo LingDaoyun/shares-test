@@ -39,18 +39,23 @@ class ShortTermScheduledSnapshotControllerTest {
     void returnsLatestPreparedSnapshotForCurrentMarketDate() throws Exception {
         ShortTermScheduledSnapshotStore store = mock(ShortTermScheduledSnapshotStore.class);
         TradingClockService clock = mock(TradingClockService.class);
+        RecommendationAttestationService attestations = mock(RecommendationAttestationService.class);
+        ShortTermScheduledSnapshot stored = finalReadySnapshot();
         when(clock.currentMarketDate()).thenReturn(TODAY);
-        when(store.latest(TODAY)).thenReturn(Optional.of(finalReadySnapshot()));
+        when(store.latest(TODAY)).thenReturn(Optional.of(stored));
+        when(attestations.attest(stored.report())).thenReturn(stored.report());
 
-        mockMvc(store, clock, mock(ShortTermAutomationSettings.class))
+        mockMvc(store, clock, mock(ShortTermAutomationSettings.class), attestations)
                 .perform(get("/api/short-term/scheduled-snapshots/latest"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.tradeDate").value("2026-07-23"))
                 .andExpect(jsonPath("$.status").value("FINAL_READY"))
+                .andExpect(jsonPath("$.strategyVersion").value("short-term-right-side-v2"))
                 .andExpect(jsonPath("$.report.candidates[0].tradePlan.strategyLabel")
                         .value("隔夜超短波段"));
 
         verify(store).latest(TODAY);
+        verify(attestations).attest(stored.report());
     }
 
     @Test
@@ -62,7 +67,7 @@ class ShortTermScheduledSnapshotControllerTest {
         when(store.latest(TODAY)).thenReturn(Optional.empty());
         when(settings.preselectCron()).thenReturn("0 30 14 * * MON-FRI");
 
-        mockMvc(store, clock, settings)
+        mockMvc(store, clock, settings, mock(RecommendationAttestationService.class))
                 .perform(get("/api/short-term/scheduled-snapshots/latest"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.tradeDate").value("2026-07-23"))
@@ -77,12 +82,13 @@ class ShortTermScheduledSnapshotControllerTest {
     private MockMvc mockMvc(
             ShortTermScheduledSnapshotStore store,
             TradingClockService clock,
-            ShortTermAutomationSettings settings
+            ShortTermAutomationSettings settings,
+            RecommendationAttestationService attestations
     ) {
         ShortTermController controller = new ShortTermController(
                 mock(ShortTermService.class),
                 mock(ShortTermScanJobService.class),
-                mock(RecommendationAttestationService.class),
+                attestations,
                 clock,
                 store,
                 settings
@@ -192,7 +198,8 @@ class ShortTermScheduledSnapshotControllerTest {
     private ShortTermTradePlan tradePlan() {
         return new ShortTermTradePlan(
                 "隔夜超短波段",
-                "EXECUTABLE",
+                "ACTIONABLE",
+                List.of(),
                 "14:45-14:56",
                 Instant.parse("2026-07-23T06:56:59Z"),
                 new BigDecimal("10.20"),

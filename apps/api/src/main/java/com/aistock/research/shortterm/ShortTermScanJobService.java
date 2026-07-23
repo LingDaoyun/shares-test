@@ -1,19 +1,25 @@
 package com.aistock.research.shortterm;
 
 import com.aistock.research.history.ResearchHistoryService;
+import com.aistock.research.shortterm.schedule.ShortTermFinalResultGate;
+import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
+import com.aistock.research.trading.TradingClockService;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Comparator;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -32,21 +38,37 @@ public class ShortTermScanJobService {
 
     private final ShortTermService shortTermService;
     private final ResearchHistoryService researchHistoryService;
+    private final TradingClockService tradingClockService;
+    private final ShortTermFinalResultGate finalResultGate;
+    private final Clock clock;
     private final ConcurrentMap<String, MutableJob> jobs = new ConcurrentHashMap<>();
     private final AtomicInteger threadSequence = new AtomicInteger();
     private final ExecutorService executorService;
 
-    public ShortTermScanJobService(ShortTermService shortTermService) {
-        this(shortTermService, null);
-    }
-
     @Autowired
     public ShortTermScanJobService(
             ShortTermService shortTermService,
-            ResearchHistoryService researchHistoryService
+            ResearchHistoryService researchHistoryService,
+            TradingClockService tradingClockService,
+            ShortTermFinalResultGate finalResultGate
+    ) {
+        this(
+                shortTermService, researchHistoryService, tradingClockService, finalResultGate,
+                Clock.system(TradingClockService.CHINA_MARKET_ZONE));
+    }
+
+    ShortTermScanJobService(
+            ShortTermService shortTermService,
+            ResearchHistoryService researchHistoryService,
+            TradingClockService tradingClockService,
+            ShortTermFinalResultGate finalResultGate,
+            Clock clock
     ) {
         this.shortTermService = shortTermService;
         this.researchHistoryService = researchHistoryService;
+        this.tradingClockService = tradingClockService;
+        this.finalResultGate = finalResultGate;
+        this.clock = clock.withZone(TradingClockService.CHINA_MARKET_ZONE);
         this.executorService = new ThreadPoolExecutor(
                 WORKER_COUNT,
                 WORKER_COUNT,
@@ -62,7 +84,7 @@ public class ShortTermScanJobService {
         cleanupFinishedJobs();
         ShortTermScanRequest safeRequest = request == null ? ShortTermScanRequest.empty() : request;
         String jobId = UUID.randomUUID().toString();
-        MutableJob job = MutableJob.running(jobId);
+        MutableJob job = MutableJob.running(jobId, tradingClockService.currentMarketDate(), clock.instant());
         jobs.put(jobId, job);
         try {
             executorService.submit(() -> runJob(job, safeRequest));
@@ -100,11 +122,14 @@ public class ShortTermScanJobService {
                     request.maxDistanceToMa20(),
                     request.minFinancialScore()
             );
+            Instant finishedAt = clock.instant();
+            ShortTermFinalResultGate.Result result =
+                    finalResultGate.evaluateManual(report, finishedAt);
             recordHistorySafely(report);
-            job.succeed(report);
+            job.succeed(report, result, finishedAt);
         } catch (Exception exception) {
             logger.warn("短线右侧扫描任务失败，jobId={}", job.jobId(), exception);
-            job.fail(rootMessage(exception));
+            job.fail(rootMessage(exception), clock.instant());
         }
     }
 
@@ -120,7 +145,7 @@ public class ShortTermScanJobService {
     }
 
     private void cleanupFinishedJobs() {
-        Instant expiredBefore = Instant.now().minus(FINISHED_JOB_RETENTION);
+        Instant expiredBefore = clock.instant().minus(FINISHED_JOB_RETENTION);
         jobs.entrySet().removeIf(entry -> {
             MutableJob job = entry.getValue();
             ShortTermScanJobStatus snapshot = job.snapshot();
@@ -157,45 +182,61 @@ public class ShortTermScanJobService {
 
     private static final class MutableJob {
         private final String jobId;
+        private final LocalDate tradeDate;
         private final Instant createdAt;
         private Instant startedAt;
         private Instant finishedAt;
         private String status;
         private String message;
         private ShortTermReport report;
+        private ShortTermSnapshotStatus resultStatus;
+        private List<String> blockedReasons;
 
-        private MutableJob(String jobId) {
+        private MutableJob(String jobId, LocalDate tradeDate, Instant createdAt) {
             this.jobId = jobId;
-            this.createdAt = Instant.now();
+            this.tradeDate = tradeDate;
+            this.createdAt = createdAt;
             this.startedAt = this.createdAt;
             this.status = "RUNNING";
+            this.resultStatus = ShortTermSnapshotStatus.RUNNING;
+            this.blockedReasons = List.of();
             this.message = "短线右侧实时扫描中";
         }
 
-        static MutableJob running(String jobId) {
-            return new MutableJob(jobId);
+        static MutableJob running(String jobId, LocalDate tradeDate, Instant createdAt) {
+            return new MutableJob(jobId, tradeDate, createdAt);
         }
 
         String jobId() {
             return jobId;
         }
 
-        synchronized void succeed(ShortTermReport report) {
+        synchronized void succeed(
+                ShortTermReport report,
+                ShortTermFinalResultGate.Result result,
+                Instant finishedAt
+        ) {
             this.status = "SUCCEEDED";
-            this.finishedAt = Instant.now();
-            this.message = "短线右侧扫描完成";
+            this.resultStatus = result.status();
+            this.blockedReasons = result.blockedReasons();
+            this.finishedAt = finishedAt;
+            this.message = result.message();
             this.report = report;
         }
 
-        synchronized void fail(String message) {
+        synchronized void fail(String message, Instant finishedAt) {
             this.status = "FAILED";
-            this.finishedAt = Instant.now();
+            this.resultStatus = ShortTermSnapshotStatus.FAILED;
+            this.blockedReasons = List.of();
+            this.finishedAt = finishedAt;
             this.message = message == null || message.isBlank() ? "短线右侧扫描失败" : message;
             this.report = null;
         }
 
         synchronized ShortTermScanJobStatus snapshot() {
-            return new ShortTermScanJobStatus(jobId, status, createdAt, startedAt, finishedAt, message, report);
+            return new ShortTermScanJobStatus(
+                    jobId, status, tradeDate, resultStatus, blockedReasons,
+                    createdAt, startedAt, finishedAt, message, report);
         }
     }
 }

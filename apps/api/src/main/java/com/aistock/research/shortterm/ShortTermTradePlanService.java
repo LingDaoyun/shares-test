@@ -175,15 +175,16 @@ public class ShortTermTradePlanService {
                 technical,
                 rules
         );
-        List<String> analysisBasis = new ArrayList<>(calculated.analysisBasis());
+        List<String> blockedBasis = new ArrayList<>(calculated.blockedReasons());
         if (blockedReasons != null) {
             blockedReasons.stream()
                     .filter(reason -> reason != null && !reason.isBlank())
-                    .forEach(analysisBasis::add);
+                    .forEach(blockedBasis::add);
         }
         return new ShortTermTradePlan(
                 calculated.strategyLabel(),
                 "BLOCKED",
+                List.copyOf(blockedBasis),
                 calculated.entryWindow(),
                 calculated.validUntil(),
                 calculated.referenceEntryPrice(),
@@ -206,7 +207,7 @@ public class ShortTermTradePlanService {
                 calculated.absoluteExitTime(),
                 calculated.t2ExtensionConditions(),
                 calculated.openScenarios(),
-                List.copyOf(analysisBasis),
+                calculated.analysisBasis(),
                 calculated.riskWarnings()
         );
     }
@@ -231,6 +232,7 @@ public class ShortTermTradePlanService {
         return new ShortTermTradePlan(
                 STRATEGY_LABEL,
                 status,
+                "BLOCKED".equals(status) ? List.copyOf(analysisBasis) : List.of(),
                 time(rules.entryStart()) + "-" + time(rules.entryEnd()),
                 validUntil,
                 money(referencePrice),

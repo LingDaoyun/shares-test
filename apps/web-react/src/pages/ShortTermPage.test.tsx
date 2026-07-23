@@ -98,6 +98,7 @@ const finalReadySnapshot: ShortTermScheduledSnapshot = {
   tradeDate: '2026-07-23',
   stage: 'FINAL',
   status: 'FINAL_READY',
+  strategyVersion: 'short-term-right-side-v2',
   message: '尾盘最终结果已就绪',
   dataCutoffAt: '2026-07-23T14:52:00+08:00',
   completedAt: '2026-07-23T14:53:00+08:00',
@@ -149,6 +150,10 @@ describe('ShortTermPage prepared snapshot mount', () => {
     vi.mocked(startShortTermScanJob).mockResolvedValue({
       jobId: 'manual-1',
       status: 'RUNNING',
+      tradeDate: '2026-07-23',
+      resultStatus: 'RUNNING',
+      strategyVersion: 'short-term-right-side-v2',
+      blockedReasons: [],
       createdAt: '2026-07-23T14:54:00+08:00',
       startedAt: null,
       finishedAt: null,
@@ -158,6 +163,10 @@ describe('ShortTermPage prepared snapshot mount', () => {
     vi.mocked(fetchShortTermScanJob).mockResolvedValue({
       jobId: 'manual-1',
       status: 'SUCCEEDED',
+      tradeDate: '2026-07-23',
+      resultStatus: 'NO_TRADE',
+      strategyVersion: 'short-term-right-side-v2',
+      blockedReasons: [],
       createdAt: '2026-07-23T14:54:00+08:00',
       startedAt: '2026-07-23T14:54:00+08:00',
       finishedAt: '2026-07-23T14:55:00+08:00',
@@ -179,6 +188,67 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(fetchLatestShortTermScheduledSnapshot).toHaveBeenCalledTimes(1)
     }
   )
+
+  it('keeps the manual result when the older scheduled request resolves later', async () => {
+    const prepared = deferred<ShortTermScheduledSnapshot>()
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockReturnValue(prepared.promise)
+    vi.mocked(startShortTermScanJob).mockResolvedValue({
+      jobId: 'manual-2',
+      status: 'RUNNING',
+      tradeDate: '2026-07-23',
+      resultStatus: 'RUNNING',
+      strategyVersion: 'short-term-right-side-v2',
+      blockedReasons: [],
+      createdAt: '2026-07-23T14:54:00+08:00',
+      startedAt: null,
+      finishedAt: null,
+      message: '手动扫描中',
+      report: null
+    })
+    vi.mocked(fetchShortTermScanJob).mockResolvedValue({
+      jobId: 'manual-2',
+      status: 'SUCCEEDED',
+      tradeDate: '2026-07-23',
+      resultStatus: 'DATA_BLOCKED',
+      strategyVersion: 'short-term-right-side-v2',
+      blockedReasons: ['QUOTE_STALE'],
+      createdAt: '2026-07-23T14:54:00+08:00',
+      startedAt: '2026-07-23T14:54:00+08:00',
+      finishedAt: '2026-07-23T14:55:00+08:00',
+      message: '尾盘行情已经过期',
+      report: emptyReport
+    })
+    await renderPage(root)
+
+    await clickButton('重新扫描')
+    await act(async () => {
+      prepared.resolve(finalReadySnapshot)
+      await flushPromises()
+    })
+
+    expect(document.body.textContent).toContain('手动重算')
+    expect(document.body.textContent).toContain('数据质量阻断')
+    expect(document.body.textContent).toContain('QUOTE_STALE')
+    expect(document.body.textContent).not.toContain('计划任务')
+  })
+
+  it('keeps manual loading and error ownership when the older scheduled request rejects', async () => {
+    const prepared = deferred<ShortTermScheduledSnapshot>()
+    const manualStart = deferred<Awaited<ReturnType<typeof startShortTermScanJob>>>()
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockReturnValue(prepared.promise)
+    vi.mocked(startShortTermScanJob).mockReturnValue(manualStart.promise)
+    await renderPage(root)
+
+    await clickButton('重新扫描')
+    await act(async () => {
+      prepared.reject(new Error('旧计划快照失败'))
+      await flushPromises()
+    })
+
+    expect(document.body.textContent).toContain('提交实时扫描任务')
+    expect(document.body.textContent).toContain('手动重算')
+    expect(document.body.textContent).not.toContain('旧计划快照失败')
+  })
 })
 
 describe('ScheduledSnapshotStatus', () => {
@@ -207,6 +277,23 @@ describe('ScheduledSnapshotStatus', () => {
     expect(html).toContain(label)
     expect(html).toContain(tone)
     expect(html).toContain('short-term-right-side-v2')
+  })
+
+  it.each([
+    ['RUNNING', '手动扫描执行中'],
+    ['FAILED', '手动扫描失败'],
+    ['FINAL_READY', '手动最终结果已就绪']
+  ] as const)('uses manual copy for %s', (status, label) => {
+    const html = renderToStaticMarkup(
+      <ScheduledSnapshotStatus
+        snapshot={{ ...finalReadySnapshot, status, message: '' }}
+        origin="MANUAL"
+      />
+    )
+
+    expect(html).toContain(label)
+    expect(html).not.toContain('自动任务')
+    expect(html).not.toContain('自动预选')
   })
 
   it('shows the configured waiting message when there is no same-day record', () => {
@@ -243,4 +330,24 @@ async function renderPage(root: Root) {
 
 async function flushPromises() {
   await new Promise((resolve) => window.setTimeout(resolve, 0))
+}
+
+async function clickButton(label: string) {
+  const button = [...document.querySelectorAll('button')]
+    .find((item) => item.textContent?.includes(label))
+  expect(button).toBeDefined()
+  await act(async () => {
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+  })
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }

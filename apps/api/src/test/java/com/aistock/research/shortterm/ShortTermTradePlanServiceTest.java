@@ -105,6 +105,8 @@ class ShortTermTradePlanServiceTest {
         );
 
         assertThat(plan.status()).isEqualTo("BLOCKED");
+        assertThat(plan.blockedReasons())
+                .contains("缺少可验证的参考入场价，未生成目标价和止损价");
         assertThat(plan.referenceEntryPrice()).isNull();
         assertThat(plan.firstTargetPrice()).isNull();
         assertThat(plan.secondTargetPrice()).isNull();
@@ -176,6 +178,8 @@ class ShortTermTradePlanServiceTest {
         );
 
         assertThat(plan.status()).isEqualTo("BLOCKED");
+        assertThat(plan.blockedReasons())
+                .contains("缺少完成 K 线计算的 ATR14，未生成目标价和止损价");
         assertThat(plan.referenceEntryPrice()).isEqualByComparingTo("10.00");
         assertThat(plan.firstTargetPrice()).isNull();
         assertThat(plan.secondTargetPrice()).isNull();

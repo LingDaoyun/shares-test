@@ -9,6 +9,7 @@ import java.util.List;
 public record ShortTermTradePlan(
         String strategyLabel,
         String status,
+        List<String> blockedReasons,
         String entryWindow,
         Instant validUntil,
         BigDecimal referenceEntryPrice,
@@ -34,4 +35,7 @@ public record ShortTermTradePlan(
         List<String> analysisBasis,
         List<String> riskWarnings
 ) {
+    public ShortTermTradePlan {
+        blockedReasons = blockedReasons == null ? List.of() : List.copyOf(blockedReasons);
+    }
 }

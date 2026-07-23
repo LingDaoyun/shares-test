@@ -9,6 +9,7 @@ import com.aistock.research.mispricing.MispricingReport;
 import com.aistock.research.shortterm.ShortTermCandidate;
 import com.aistock.research.shortterm.ShortTermReport;
 import com.aistock.research.shortterm.ShortTermScanJobStatus;
+import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
 import com.aistock.research.tech.TechTrackedStock;
 import com.aistock.research.tech.TechTrackingReport;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -189,11 +190,13 @@ public class RecommendationAttestationService {
     }
 
     public ShortTermScanJobStatus attest(ShortTermScanJobStatus status) {
-        if (status == null || status.report() == null) {
+        if (status == null || status.report() == null
+                || status.resultStatus() != ShortTermSnapshotStatus.FINAL_READY) {
             return status;
         }
         return new ShortTermScanJobStatus(
-                status.jobId(), status.status(), status.createdAt(), status.startedAt(), status.finishedAt(),
+                status.jobId(), status.status(), status.tradeDate(), status.resultStatus(),
+                status.blockedReasons(), status.createdAt(), status.startedAt(), status.finishedAt(),
                 status.message(), attest(status.report()));
     }
 

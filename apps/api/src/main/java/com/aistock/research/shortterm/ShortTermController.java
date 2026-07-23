@@ -3,6 +3,7 @@ package com.aistock.research.shortterm;
 import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
 import com.aistock.research.shortterm.schedule.ShortTermScheduledSnapshot;
 import com.aistock.research.shortterm.schedule.ShortTermScheduledSnapshotStore;
+import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
 import com.aistock.research.tradefeedback.RecommendationAttestationService;
 import com.aistock.research.trading.TradingClockService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -84,7 +85,15 @@ public class ShortTermController {
     public ShortTermScheduledSnapshot latestScheduledSnapshot() {
         LocalDate today = tradingClockService.currentMarketDate();
         return snapshotStore.latest(today)
+                .map(this::attestEligibleSnapshot)
                 .orElseGet(() -> ShortTermScheduledSnapshot.waiting(
                         today, "等待 " + automationSettings.preselectCron() + " 自动预选"));
+    }
+
+    private ShortTermScheduledSnapshot attestEligibleSnapshot(ShortTermScheduledSnapshot snapshot) {
+        if (snapshot.status() != ShortTermSnapshotStatus.FINAL_READY || snapshot.report() == null) {
+            return snapshot;
+        }
+        return snapshot.withReport(attestationService.attest(snapshot.report()));
     }
 }

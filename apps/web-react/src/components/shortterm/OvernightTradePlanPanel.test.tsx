@@ -5,7 +5,8 @@ import { OvernightTradePlanPanel } from './OvernightTradePlanPanel'
 
 const plan: ShortTermTradePlan = {
   strategyLabel: '隔夜超短波段',
-  status: 'EXECUTABLE',
+  status: 'ACTIONABLE',
+  blockedReasons: [],
   entryWindow: '14:45-14:56',
   validUntil: '2026-07-23T14:56:59+08:00',
   referenceEntryPrice: 10.2,
@@ -55,10 +56,12 @@ const plan: ShortTermTradePlan = {
 }
 
 describe('OvernightTradePlanPanel', () => {
-  it('renders exact prices, position limit, deadlines, and all open scenarios', () => {
+  it('renders executable details only for an actionable plan in one definition grid', () => {
     const html = renderToStaticMarkup(<OvernightTradePlanPanel plan={plan} />)
 
     expect(html).toContain('隔夜交易纪律')
+    expect(html).toContain('可执行')
+    expect(html).toContain('<dl')
     expect(html).toContain('14:45-14:56')
     expect(html).toContain('10.20')
     expect(html).toContain('10.10')
@@ -74,5 +77,29 @@ describe('OvernightTradePlanPanel', () => {
     expect(html).toContain('平开')
     expect(html).toContain('低开')
     expect(html).toContain('推荐不等于持仓')
+  })
+
+  it('renders a blocked plan as non-executable evidence without buy or position actions', () => {
+    const html = renderToStaticMarkup(
+      <OvernightTradePlanPanel
+        plan={{
+          ...plan,
+          status: 'BLOCKED',
+          blockedReasons: ['行情覆盖不足', '尾盘报价已过期'],
+          analysisBasis: ['参考入场价 10.20 元', 'ATR14 波动率 3%'],
+          riskWarnings: ['当前计划不可执行']
+        }}
+      />
+    )
+
+    expect(html).toContain('不可执行')
+    expect(html).toContain('行情覆盖不足')
+    expect(html).toContain('尾盘报价已过期')
+    expect(html).not.toContain('精确入场区间')
+    expect(html).not.toContain('参考入场价')
+    expect(html).not.toContain('短线额度最大仓位')
+    expect(html).not.toContain('第一目标价')
+    expect(html).not.toContain('第二目标价')
+    expect(html).not.toContain('ATR14 波动率')
   })
 })

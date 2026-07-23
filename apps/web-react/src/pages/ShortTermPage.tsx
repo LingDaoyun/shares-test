@@ -18,7 +18,7 @@ import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
 import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCounterEvidenceTone, goldenCrossDisplayLabel, goldenCrossSpreadLabel, goldenCrossSpreadTrendLabel, goldenCrossTone, goldenCrossV2Context } from '../lib/shortTermGoldenCross'
-import type { BacktestReport, BacktestSummary, ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermReport, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { BacktestReport, BacktestSummary, ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermReport, ShortTermScanJobStatus, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -81,19 +81,23 @@ export function ShortTermPage() {
     setError('')
     setScanMessage('读取当日计划快照')
     const request = preparedSnapshotRequest.current ?? fetchLatestShortTermScheduledSnapshot()
+    const requestGeneration = manualRunGeneration.current
+    const ownsRequest = () => alive
+      && manualRunGeneration.current === requestGeneration
+      && !manualScanRequested.current
     preparedSnapshotRequest.current = request
     request
       .then((prepared) => {
-        if (!alive || manualScanRequested.current) return
+        if (!ownsRequest()) return
         setSnapshot(prepared)
         setOrigin('SCHEDULED')
         setReport(visibleSnapshotReport(prepared))
       })
       .catch((e) => {
-        if (alive) setError(extractErrorMessage(e))
+        if (ownsRequest()) setError(extractErrorMessage(e))
       })
       .finally(() => {
-        if (alive) setLoading(false)
+        if (ownsRequest()) setLoading(false)
       })
     return () => {
       alive = false
@@ -120,6 +124,7 @@ export function ShortTermPage() {
       tradeDate: current?.tradeDate ?? currentShanghaiDate(),
       stage: 'MANUAL',
       status: 'RUNNING',
+      strategyVersion: current?.strategyVersion ?? '',
       message: '提交实时扫描任务',
       dataCutoffAt: null,
       completedAt: null,
@@ -134,6 +139,10 @@ export function ShortTermPage() {
       setScanMessage(started.message || '短线右侧实时扫描中')
       setSnapshot((current) => current ? {
         ...current,
+        tradeDate: started.tradeDate,
+        status: started.resultStatus,
+        strategyVersion: started.strategyVersion,
+        blockedReasons: started.blockedReasons,
         message: started.message || '短线右侧实时扫描中'
       } : current)
 
@@ -144,16 +153,17 @@ export function ShortTermPage() {
           setScanMessage(job.message || '短线右侧实时扫描中')
           if (job.status === 'SUCCEEDED') {
             if (job.report) {
-              const manualSnapshot = snapshotFromManualReport(job.report, job.message || '手动扫描完成')
+              const manualSnapshot = snapshotFromManualJob(job)
               setSnapshot(manualSnapshot)
-              setReport(job.report)
+              setReport(visibleSnapshotReport(manualSnapshot))
               setError('')
             } else {
               setSnapshot((current) => current ? {
                 ...current,
                 status: 'FAILED',
+                blockedReasons: job.blockedReasons,
                 message: '短线扫描任务已完成，但没有返回报告。',
-                completedAt: new Date().toISOString()
+                completedAt: job.finishedAt
               } : current)
               setError('短线扫描任务已完成，但没有返回报告。')
             }
@@ -165,6 +175,8 @@ export function ShortTermPage() {
             setSnapshot((current) => current ? {
               ...current,
               status: 'FAILED',
+              strategyVersion: job.strategyVersion,
+              blockedReasons: job.blockedReasons,
               message,
               completedAt: job.finishedAt
             } : current)
@@ -174,6 +186,9 @@ export function ShortTermPage() {
           }
           setSnapshot((current) => current ? {
             ...current,
+            status: job.resultStatus,
+            strategyVersion: job.strategyVersion,
+            blockedReasons: job.blockedReasons,
             message: job.message || '短线右侧实时扫描中'
           } : current)
           pollTimer.current = window.setTimeout(() => void poll(), 1500)
@@ -269,7 +284,7 @@ export function ShortTermPage() {
           <Button
             variant="primary"
             icon={<RefreshCw className="h-4 w-4" />}
-            loading={loading}
+            loading={origin === 'MANUAL' && loading}
             onClick={() => void runManualScan({ ...draft })}
           >
             重新扫描
@@ -303,7 +318,7 @@ export function ShortTermPage() {
           <p className="text-xs leading-relaxed text-ink-500">
             参考带只影响估值语境分和风险提示，不决定股票是否入选；低流动性、长期横盘、急拉和离均线过远仍受约束。
           </p>
-          <Button variant="secondary" disabled={loading} onClick={() => void runManualScan({ ...draft })}>应用阈值</Button>
+          <Button variant="secondary" disabled={origin === 'MANUAL' && loading} onClick={() => void runManualScan({ ...draft })}>应用阈值</Button>
         </div>
       </Card>
 
@@ -460,16 +475,17 @@ function visibleSnapshotReport(snapshot: ShortTermScheduledSnapshot) {
   return snapshot.report
 }
 
-function snapshotFromManualReport(report: ShortTermReport, message: string): ShortTermScheduledSnapshot {
+function snapshotFromManualJob(job: ShortTermScanJobStatus): ShortTermScheduledSnapshot {
   return {
-    tradeDate: report.dataCutoffAt?.slice(0, 10) ?? currentShanghaiDate(),
+    tradeDate: job.tradeDate,
     stage: 'MANUAL',
-    status: report.candidates.length ? 'FINAL_READY' : 'NO_TRADE',
-    message,
-    dataCutoffAt: report.dataCutoffAt,
-    completedAt: report.generatedAt,
-    blockedReasons: [],
-    report
+    status: job.resultStatus,
+    strategyVersion: job.strategyVersion,
+    message: job.message,
+    dataCutoffAt: job.report?.dataCutoffAt ?? null,
+    completedAt: job.finishedAt,
+    blockedReasons: job.blockedReasons,
+    report: job.report
   }
 }
 

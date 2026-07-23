@@ -20,7 +20,7 @@ const toneClasses: Record<ShortTermSnapshotStatus, string> = {
 
 export function ScheduledSnapshotStatus({ snapshot, origin }: ScheduledSnapshotStatusProps) {
   const coverage = snapshot.report?.coverage
-  const label = statusLabel(snapshot.status)
+  const label = statusLabel(snapshot.status, origin)
 
   return (
     <section className={`border px-4 py-3 ${toneClasses[snapshot.status]}`} aria-live="polite">
@@ -56,7 +56,7 @@ export function ScheduledSnapshotStatus({ snapshot, origin }: ScheduledSnapshotS
             : '待生成'}
         />
         <StatusMetric label="数据来源" value={coverage?.source ?? '待生成'} icon={<Database className="h-3 w-3" />} />
-        <StatusMetric label="策略版本" value="short-term-right-side-v2" />
+        <StatusMetric label="策略版本" value={snapshot.strategyVersion || '待生成'} />
       </div>
     </section>
   )
@@ -74,7 +74,23 @@ function StatusMetric({ label, value, icon }: { label: string; value: string; ic
   )
 }
 
-function statusLabel(status: ShortTermSnapshotStatus) {
+function statusLabel(status: ShortTermSnapshotStatus, origin: ReportOrigin) {
+  if (origin === 'MANUAL') {
+    switch (status) {
+      case 'FINAL_READY':
+        return '手动最终结果已就绪'
+      case 'PRESELECT_READY':
+        return '手动预选已就绪'
+      case 'RUNNING':
+        return '手动扫描执行中'
+      case 'NO_TRADE':
+        return '手动扫描：今日不交易'
+      case 'DATA_BLOCKED':
+        return '手动扫描：数据质量阻断'
+      case 'FAILED':
+        return '手动扫描失败'
+    }
+  }
   switch (status) {
     case 'FINAL_READY':
       return '尾盘最终结果已就绪'

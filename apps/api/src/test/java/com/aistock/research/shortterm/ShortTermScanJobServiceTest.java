@@ -1,11 +1,17 @@
 package com.aistock.research.shortterm;
 
 import com.aistock.research.history.ResearchHistoryService;
+import com.aistock.research.shortterm.schedule.ShortTermFinalResultGate;
+import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
+import com.aistock.research.trading.TradingClockService;
 import com.aistock.research.trading.TradingSessionSnapshot;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -13,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -36,7 +43,7 @@ class ShortTermScanJobServiceTest {
                 eq(new BigDecimal("7.00")),
                 eq(new BigDecimal("60"))
         )).thenReturn(report);
-        ShortTermScanJobService service = new ShortTermScanJobService(shortTermService, researchHistoryService);
+        ShortTermScanJobService service = service(shortTermService, researchHistoryService);
 
         try {
             ShortTermScanRequest request = new ShortTermScanRequest(
@@ -54,11 +61,16 @@ class ShortTermScanJobServiceTest {
             ShortTermScanJobStatus started = service.start(request);
 
             assertThat(started.status()).isEqualTo("RUNNING");
+            assertThat(started.resultStatus()).isEqualTo(
+                    com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.RUNNING);
             ShortTermScanJobStatus finished = awaitFinished(service, started.jobId());
 
             assertThat(finished.status()).isEqualTo("SUCCEEDED");
+            assertThat(finished.resultStatus()).isEqualTo(
+                    com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.DATA_BLOCKED);
+            assertThat(finished.strategyVersion()).isEqualTo("short-term-right-side-v2");
             assertThat(finished.report()).isSameAs(report);
-            assertThat(finished.message()).contains("完成");
+            assertThat(finished.message()).contains("不可执行");
             verify(shortTermService).report(
                     eq(3),
                     eq(120),
@@ -82,13 +94,15 @@ class ShortTermScanJobServiceTest {
         ShortTermService shortTermService = mock(ShortTermService.class);
         when(shortTermService.report(null, null, null, null, null, null, null, null, null, null))
                 .thenThrow(new IllegalStateException("短线右侧实时行情加载失败"));
-        ShortTermScanJobService service = new ShortTermScanJobService(shortTermService);
+        ShortTermScanJobService service = service(shortTermService, null);
 
         try {
             ShortTermScanJobStatus started = service.start(ShortTermScanRequest.empty());
             ShortTermScanJobStatus finished = awaitFinished(service, started.jobId());
 
             assertThat(finished.status()).isEqualTo("FAILED");
+            assertThat(finished.resultStatus()).isEqualTo(
+                    com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.FAILED);
             assertThat(finished.report()).isNull();
             assertThat(finished.message()).contains("实时行情加载失败");
         } finally {
@@ -107,7 +121,7 @@ class ShortTermScanJobServiceTest {
                     release.await(10, TimeUnit.SECONDS);
                     return sampleReport();
                 });
-        ShortTermScanJobService service = new ShortTermScanJobService(shortTermService);
+        ShortTermScanJobService service = service(shortTermService, null);
 
         try {
             for (int index = 0; index < 6; index++) {
@@ -133,6 +147,28 @@ class ShortTermScanJobServiceTest {
             Thread.sleep(50);
         }
         throw new AssertionError("scan job did not finish in time");
+    }
+
+    private ShortTermScanJobService service(
+            ShortTermService shortTermService,
+            ResearchHistoryService researchHistoryService
+    ) {
+        Instant now = Instant.parse("2026-07-23T06:52:00Z");
+        TradingClockService tradingClock = mock(TradingClockService.class);
+        when(tradingClock.currentMarketDate()).thenReturn(LocalDate.parse("2026-07-23"));
+        ShortTermFinalResultGate gate = mock(ShortTermFinalResultGate.class);
+        when(gate.evaluateManual(any(), any())).thenReturn(new ShortTermFinalResultGate.Result(
+                ShortTermSnapshotStatus.DATA_BLOCKED,
+                "手动扫描不在当日尾盘决策窗口，结果不可执行",
+                List.of("MANUAL_OUTSIDE_DECISION_WINDOW")
+        ));
+        return new ShortTermScanJobService(
+                shortTermService,
+                researchHistoryService,
+                tradingClock,
+                gate,
+                Clock.fixed(now, ZoneOffset.UTC)
+        );
     }
 
     private ShortTermReport sampleReport() {

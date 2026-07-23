@@ -2,7 +2,6 @@ package com.aistock.research.shortterm.schedule;
 
 import com.aistock.research.history.ResearchHistoryService;
 import com.aistock.research.shortterm.OvernightRuleSet;
-import com.aistock.research.shortterm.ShortTermCoverageSnapshot;
 import com.aistock.research.shortterm.ShortTermReport;
 import com.aistock.research.shortterm.ShortTermScanRequest;
 import com.aistock.research.shortterm.ShortTermService;
@@ -20,7 +19,6 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -52,7 +50,6 @@ import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.RU
 public class ShortTermScheduledScanService {
 
     private static final Logger log = LoggerFactory.getLogger(ShortTermScheduledScanService.class);
-    private static final BigDecimal MINIMUM_COVERAGE = new BigDecimal("0.90");
     private static final Duration DEFAULT_STALE_RUN_TIMEOUT = Duration.ofMinutes(10);
     private static final String EXECUTOR_SATURATED = "SCHEDULED_EXECUTOR_SATURATED";
 
@@ -66,6 +63,7 @@ public class ShortTermScheduledScanService {
     private final ExecutorService executor;
     private final Clock clock;
     private final Duration staleRunTimeout;
+    private final ShortTermFinalResultGate finalResultGate;
 
     @Autowired
     public ShortTermScheduledScanService(
@@ -108,6 +106,7 @@ public class ShortTermScheduledScanService {
         this.executor = executor;
         this.clock = clock.withZone(TradingClockService.CHINA_MARKET_ZONE);
         this.staleRunTimeout = requirePositive(staleRunTimeout);
+        this.finalResultGate = new ShortTermFinalResultGate(settings, tradingClock);
     }
 
     public void submit(ShortTermSnapshotStage stage) {
@@ -305,25 +304,24 @@ public class ShortTermScheduledScanService {
             return;
         }
         Instant completedAt = clock.instant();
-        Optional<GateFailure> failure = validateFinal(
+        ShortTermFinalResultGate.Result result = finalResultGate.evaluateScheduled(
                 run.tradeDate(), report, completedAt, completedAt);
-        if (failure.isPresent()) {
-            GateFailure blocked = failure.orElseThrow();
+        if (result.status() == DATA_BLOCKED) {
             publishBlocked(
                     run.claim(), report, report == null ? null : report.dataCutoffAt(),
-                    blocked.message(), List.of(blocked.reason()), completedAt);
+                    result.message(), result.blockedReasons(), completedAt);
             return;
         }
-        if (report.candidates().isEmpty()) {
+        if (result.status() == NO_TRADE) {
             store.finish(
                     run.claim(), NO_TRADE, report, report.dataCutoffAt(), completedAt,
-                    "全部执行闸门通过，今日无合格候选", List.of());
+                    result.message(), List.of());
             return;
         }
 
         store.finish(
                 run.claim(), FINAL_READY, report, report.dataCutoffAt(), completedAt,
-                "尾盘最终结果已就绪", List.of());
+                result.message(), List.of());
         archiveFinalHistory(run.claim().snapshotKey(), report);
     }
 
@@ -369,9 +367,9 @@ public class ShortTermScheduledScanService {
                     List.of("FINAL_STALE"), checkedAt);
             return;
         }
-        Optional<GateFailure> failure = validateFinal(
+        ShortTermFinalResultGate.Result result = finalResultGate.evaluateScheduled(
                 run.tradeDate(), snapshot.report(), snapshot.completedAt(), checkedAt);
-        if (failure.isPresent()) {
+        if (result.status() == DATA_BLOCKED) {
             publishBlocked(
                     run.claim(), null, null, "尾盘最终快照已经过期",
                     List.of("FINAL_STALE"), checkedAt);
@@ -380,42 +378,6 @@ public class ShortTermScheduledScanService {
         store.finish(
                 run.claim(), snapshot.status(), snapshot.report(), snapshot.dataCutoffAt(), checkedAt,
                 "尾盘最终快照通过就绪检查", List.of());
-    }
-
-    private Optional<GateFailure> validateFinal(
-            LocalDate tradeDate,
-            ShortTermReport report,
-            Instant decisionCompletedAt,
-            Instant freshnessCheckedAt
-    ) {
-        if (afterFinalDeadline(tradeDate, decisionCompletedAt)) {
-            return Optional.of(new GateFailure(
-                    "FINAL_DEADLINE_EXPIRED", "尾盘终选已超过完成截止时间"));
-        }
-        if (report == null) {
-            return Optional.of(new GateFailure("FINAL_REPORT_MISSING", "尾盘终选报告缺失"));
-        }
-        ShortTermCoverageSnapshot coverage = report.coverage();
-        if (coverage == null || !coverage.executionReliable()
-                || coverage.coverageRatio() == null
-                || coverage.coverageRatio().compareTo(MINIMUM_COVERAGE) < 0) {
-            return Optional.of(new GateFailure("COVERAGE_BELOW_90", "全市场行情覆盖率低于90%"));
-        }
-        Instant cutoff = report.dataCutoffAt();
-        if (cutoff == null) {
-            return Optional.of(new GateFailure("CUTOFF_MISSING", "尾盘行情截止时间缺失"));
-        }
-        ZoneId zone = resolvedZone();
-        if (!LocalDateTime.ofInstant(cutoff, zone).toLocalDate().equals(tradeDate)) {
-            return Optional.of(new GateFailure("CUTOFF_WRONG_DATE", "尾盘行情不是当日数据"));
-        }
-        if (cutoff.isAfter(decisionCompletedAt)) {
-            return Optional.of(new GateFailure("CUTOFF_AFTER_DECISION", "尾盘行情时间晚于决策时刻"));
-        }
-        if (Duration.between(cutoff, freshnessCheckedAt).compareTo(settings.freshness()) > 0) {
-            return Optional.of(new GateFailure("QUOTE_STALE", "尾盘行情已经过期"));
-        }
-        return Optional.empty();
     }
 
     private boolean afterFinalDeadline(LocalDate tradeDate, Instant instant) {
@@ -534,6 +496,4 @@ public class ShortTermScheduledScanService {
     ) {
     }
 
-    private record GateFailure(String reason, String message) {
-    }
 }
