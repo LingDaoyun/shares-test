@@ -1,213 +1,168 @@
-# Task 7 Report: Independent Trade Review Page
+# Task 7 Independent Review Repair Report
 
-## Status
+Status: DONE
 
-Implemented the independent `/trade-review` workspace, navigation entry, monotonic mutation-response upsert, scan table, sticky detail pane, outcome review, and accessible fill management flow.
+Original repair commit: `53c6723`
 
-## Build Evidence
+Configured-risk replay repair commit: this report's
+`fix: replay configured overnight risk rules` commit
 
-Ran from `/Users/mac/Documents/shares-test`:
+## Scope
 
-```text
-npm run build --prefix apps/web-react
-```
-
-Result: exit code 0. TypeScript completed and Vite built the production bundle successfully (`1668 modules transformed`, `built in 1.50s`).
-
-Also ran:
-
-```text
-git diff --check
-```
-
-Result: exit code 0 with no whitespace errors, including the pre-existing unrelated documentation change.
-
-## Interaction Checklist
-
-- Added lazy `/trade-review` route, page metadata, navigation item/count, responsive `lg:5` / `xl:10` navigation grid, and `aria-current` on the active module.
-- Added ALL, PLANNED, HOLDING, CLOSED, and CANCELLED filters with counts. Selection survives list refresh when the case remains valid and otherwise moves to the first valid row.
-- Added a real button in each case identity cell while retaining row-click selection. Mobile selection scrolls to the stacked detail pane.
-- Loads full selected detail and serially hydrates remaining summaries so T1/T5/T20 values become scan-ready. All list, detail, and mutation responses pass through the Task 6 monotonic store merge policy.
-- Shows recommendation source/action/time/price, case status, position, weighted cost, latest price, realized/unrealized/total gross profit, execution deviation, recommendation outcomes, execution outcomes, sources, market times, statuses, and warnings.
-- Keeps `收益未计佣金、印花税、分红和送转股` visible beside profit totals.
-- Recommendation evidence is collapsed by default and rendered as readable formatted JSON.
-- Added add/edit fill modal with BUY/SELL segmented control, `datetime-local`, price step `0.01`, quantity step `100`, local validation, ISO timestamp submission, backend error messages, focus trap, Escape close, focus return, and body-scroll restoration.
-- Added explicit delete confirmation, planned-case cancellation, manual outcome refresh, loading/error live regions, and success/error toasts.
-
-## Files
-
-- `apps/web-react/src/App.tsx`
-- `apps/web-react/src/components/layout/NavRail.tsx`
-- `apps/web-react/src/components/layout/pageMeta.ts`
-- `apps/web-react/src/index.css`
-- `apps/web-react/src/pages/TradeReviewPage.tsx`
-- `apps/web-react/src/store/tradeFeedbackStore.ts`
-- `.superpowers/sdd/task-7-report.md`
-
-## Accessibility And Mobile Self-Review
-
-- Native buttons cover navigation, case selection, filters, icon commands, modal actions, and BUY/SELL selection. Icon-only commands include `aria-label` and `title` tooltips.
-- Loading states use `role="status"`; request and validation failures use `role="alert"` and toasts.
-- The modal uses `role="dialog"`, `aria-modal`, labelled heading, trapped Tab focus, Escape handling, focus return, and a mobile bottom-sheet layout with `92dvh` scrolling.
-- At widths below `xl`, list and detail stack with `min-w-0`; the data table keeps horizontal scrolling and the filter control scrolls horizontally without shrinking labels.
-- At `xl`, the page uses an unframed flexible list plus a `380-460px` sticky detail pane with its own viewport-bounded scroll.
-- Long source, payload, warning, and outcome text uses wrapping or bounded overflow. No page-level fixed action bar competes with the modal.
-- Live browser QA was intentionally not run because the task assigns it to the main controller; this review is source-level as requested.
-
-## Concerns
-
-- There is no frontend test harness, so verification is TypeScript/Vite build plus source-level interaction review.
-- The trade-case summary contract omits outcomes. The page therefore performs one deduplicated, serial detail request per summary to populate all T1/T5/T20 table cells; a future summary API that includes compact outcomes would remove this N+1 read pattern.
-- The frontend was not exercised against a running backend in this task. Backend validation and outcome-refresh failures are surfaced through inline alerts and existing toast conventions.
-- The unrelated modified `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` remains untouched and will not be staged.
-
-## Review Fixes At HEAD 1731593
-
-- Successful outcome reconciliation now advances and saves the locked parent case version. The timestamp is forced to be strictly newer even when the clock has not advanced.
-- `TradeCaseSummary` now includes compact outcomes. The list endpoint fetches outcomes for all filtered case IDs with one bulk repository query, maps them by case, and reuses CURRENT prices for the existing ledger summaries. No per-case outcome read was added.
-- The page no longer hydrates every summary through detail requests. Only the selected summary loads its detail.
-- Fill quantity accepts any positive integer with `min="1"` and `step="1"`.
-- Structured backend field messages are shown in stable field-name order before top-level text. Non-API/parser failures use a safe generic message.
-- `datetime-local` values display Asia/Shanghai wall time with seconds and submit through explicit `+08:00` parsing with `step="1"`.
-- Scan cells distinguish `未评估`, `待成熟`, `数据不可用`, and matured returns.
-- Refresh, cancel, add, edit, and delete share one tokenized selected-case mutation gate. All related controls disable while it is active, and only the matching operation token can clear it.
-- Existing focus trapping, Escape handling, focus restoration, scroll locking, responsive table/detail layout, alerts, labels, and tooltips remain in place. Browser visual QA remains deferred to Task 8.
+- Kept `GET /api/backtests/right-side` and its 20-day `BacktestReport`
+  semantics unchanged.
+- Added `ShortTermTechnicalSignalEvaluator` as the single pure K-line
+  evaluator used by production `ShortTermService` and overnight replay.
+- Replayed each signal with `rows[0..signalDay]` and
+  `latestBarCompleted=false`; only production-analyzer `CONFIRMED` recent
+  golden crosses plus `右侧早期确认` are eligible.
+- Explicitly rejects signal-day `FORMING`, stale `ESTABLISHED`, and
+  `NONE` golden-cross states.
+- Added report `validationScope` and `unreplayedGates` for financial quality,
+  market sentiment, tail-minute confirmation, and live quote freshness.
+- Modeled production `firstReductionRatio=0.5`: first target exits half,
+  while the remainder continues to second target, hard stop, T1/T2 time exit,
+  or delayed limit-down exit.
+- Added auditable exit legs, weighted executable exit price, target-hit flags,
+  proxy-entry-based gap/run-up/drawdown, and non-duplicated slippage costs.
+- Added per-symbol `SOURCE_FAILED`, `INSUFFICIENT_HISTORY`, `NO_SIGNAL`, and
+  `OK` results plus report-level `OK`, `PARTIAL`, and `DATA_BLOCKED`.
+- Limited the batch summary to the area above the candidate list and removed
+  batch-derived labels from individual candidates and details.
+- Added sorted-symbol/full-rule request identity and generation ownership so
+  stale resolve, reject, and finally handlers cannot update a newer batch.
 
 ## RED Evidence
 
-Ran:
+### Backend contract and behavior
 
-```text
-mvn -pl apps/api -Dtest=TradeOutcomeServiceTest,TradeFeedbackControllerTest test
+```bash
+mvn -pl apps/api \
+  -Dtest=BacktestServiceTest,BacktestControllerTest,ShortTermTechnicalSignalEvaluatorTest \
+  test
 ```
 
-After adding the missing bulk repository signature so the behavioral tests could compile, the focused run failed as expected: `Tests run: 23, Failures: 2, Errors: 0, Skipped: 0`.
+Observed: exit 1 during `testCompile`, with expected missing types and methods
+for target-hit fields, split exit legs, weighted exit price, per-symbol
+results, report status/message, validation scope, and unreplayed gates.
 
-- `advancesAndSavesTheLockedCaseVersionAfterEverySuccessfulReconciliation`: refreshed `updatedAt` remained equal to the prior version.
-- `listsCompactOutcomesWithOneBulkQueryAndNoPerCaseOutcomeReads`: list JSON had no summary `outcomes` value.
+### Frontend contract and ownership
+
+```bash
+npm --prefix apps/web-react test -- ShortTermPage.test.tsx
+```
+
+Observed: 5 failed, 16 passed. Failures covered technical-validation wording,
+`DATA_BLOCKED`, partial data gaps, same-size/different-symbol request identity,
+and stale rejection/finally ownership.
 
 ## GREEN Evidence
 
-Focused backend regression run:
+### Production signal and backend regression
 
-```text
-mvn -pl apps/api -Dtest=TradeOutcomeServiceTest,TradeFeedbackControllerTest test
+```bash
+mvn -pl apps/api \
+  -Dtest=BacktestServiceTest,BacktestControllerTest,ShortTermServiceTest,ShortTermGoldenCrossAnalyzerTest,ShortTermTechnicalSignalEvaluatorTest \
+  test
 ```
 
-Result: `Tests run: 23, Failures: 0, Errors: 0, Skipped: 0`. This includes service-level monotonic version saves, refresh-response/list-version equality, compact summary outcomes, retained summary latest price, exactly one bulk outcome repository call, and no per-case outcome repository reads from the list endpoint.
+Result: PASS, 83 tests, 0 failures, 0 errors. This includes 53 production
+short-term service tests, 12 golden-cross analyzer tests, 4 point-in-time
+evaluator boundary tests, 13 backtest tests, and 1 controller contract test.
 
-Full backend suite:
+### Brief Step 6
 
-```text
-mvn -pl apps/api test
+```bash
+mvn -pl apps/api -Dtest=BacktestServiceTest test
+npm --prefix apps/web-react test -- ShortTermPage.test.tsx
+npm --prefix apps/web-react run build
 ```
 
-Result: `Tests run: 202, Failures: 0, Errors: 0, Skipped: 0`.
+Result: PASS. Backend 13/13; frontend 21/21 including deferred Promise batch
+switch, empty-batch, and stale rejection cases; TypeScript and Vite production
+build passed with 1,673 modules transformed. The frontend test also asserts
+that no request contains `holdingDays: 20`.
 
-Frontend production build:
+### Staging Checks
 
-```text
-npm run build --prefix apps/web-react
+```bash
+git diff --cached --check
 ```
 
-Result: exit code 0; TypeScript and Vite completed with `1669 modules transformed`, `built in 1.55s`.
+Result: PASS with no output.
 
-Pure helper/source checks used Node 24 type stripping and source scans. Verified:
+Only Task 7 repair source and test files were staged. This report and all
+unrelated user changes remained unstaged.
 
-```text
-2026-07-13T01:35:42Z -> 2026-07-13T09:35:42 -> 2026-07-13T01:35:42.000Z
-fields { quantity, price } -> 价格错误；股数错误
-raw parser Error -> 请求失败，请稍后重试
-```
+## Concerns
 
-Source scans found no old background hydration, 100-share divisibility, browser-zone offset conversion, or `min/step="100"` code.
+- No blocking concerns.
+- This is intentionally a technical-signal historical validation, not a full
+  replay of production strategy performance. The four unreplayed live or
+  non-K-line gates are explicit in both the API and page.
+- Daily bars cannot identify intraday ordering, so adverse open/hard-stop
+  handling remains conservatively ordered before profit targets.
 
-## Remaining Concerns After Review
+## Configured-Risk Replay Re-review
 
-- There is still no frontend test harness; frontend verification is the production build, executable pure-helper checks, and source-level interaction review.
-- Live backend/frontend and visual browser QA are intentionally deferred to Task 8.
-- The unrelated modified `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md` remained untouched and is excluded from the Task 7 commit.
+### Scope
 
-## Follow-up Fix: Stale Selection And Cancellation Confirmation
+- Added `minVolumeRatio`, `maxDistanceToMa20Percent`, and
+  `trailingDrawdownPercent` to the independent overnight request and report
+  rule contract, with explicit defaults of `1.15`, `8.00`, and `2.00`.
+- The historical technical evaluator now receives the configured production
+  volume and MA20-distance thresholds instead of using fixed backtest
+  constants.
+- `ShortTermPage` sends the exact current report technical thresholds and the
+  current production trade-plan trailing drawdown. The sorted-symbol request
+  identity now includes all overnight rules, so a threshold-only change
+  starts and owns a new request.
+- After the first target exits 50%, replay tracks the post-target peak. On
+  subsequent bars the remaining leg can exit with `TRAILING_STOP`, including
+  its position ratio, base price, executable price, costs, and weighted net
+  return.
+- Daily bars cannot reveal whether a later intraday high preceded a low.
+  Therefore the trailing threshold for a day is based on the previously known
+  post-target peak; hard stop and trailing stop are checked before the second
+  target when both are reachable. A new high only updates the peak after those
+  conservative checks.
 
 ### RED Evidence
 
-Ran from `/Users/mac/Documents/shares-test` before adding the selection-aware completion gate:
-
-```text
-node apps/web-react/scripts/tradeReviewSelectionGate.check.mjs
+```bash
+mvn -pl apps/api \
+  -Dtest=BacktestServiceTest,BacktestControllerTest test
 ```
 
-Result: exit code 1. The deterministic assertion failed because the prior token-only gate accepted operation `7` for case A even after case B was selected:
+Observed: exit 1 during `testCompile` with 10 expected contract errors for the
+three missing request/rule parameters and accessors.
 
-```text
-AssertionError [ERR_ASSERTION]: a completed operation for case A must not update visible detail state after case B is selected
-false !== true
+```bash
+npm --prefix apps/web-react test -- ShortTermPage.test.tsx
 ```
 
-### Fix And GREEN Evidence
+Observed: 2 failed, 20 passed. The request omitted the configured thresholds,
+and changing thresholds for the same symbol did not issue a new owned request.
 
-- Added `shouldApplySelectedCaseOperation` and a deterministic Node check covering stale case selection, matching case selection, and superseded operation tokens.
-- Detail errors are now stored by case ID and are cleared on every selection, including already-hydrated detail cases.
-- Refresh, cancellation, and fill deletion only surface completion/error feedback when both the operation token and current selected case still match; successful responses still update their keyed case cache.
-- Added an accessible cancellation confirmation dialog with initial focus, Tab trapping, Escape/backdrop dismissal, focus restoration, scroll locking, keyboard controls, and mobile bottom-sheet layout.
+### GREEN Evidence
 
-Ran:
-
-```text
-node apps/web-react/scripts/tradeReviewSelectionGate.check.mjs
-npm run build --prefix apps/web-react
+```bash
+mvn -pl apps/api \
+  -Dtest=BacktestServiceTest,BacktestControllerTest,ShortTermTechnicalSignalEvaluatorTest,ShortTermTradePlanServiceTest \
+  test
+npm --prefix apps/web-react test -- ShortTermPage.test.tsx
+npm --prefix apps/web-react run build
 git diff --check
 ```
 
-Results: the focused Node check exited 0; the production build exited 0 (`1669 modules transformed`, `built in 1.54s`); and `git diff --check` exited 0 with no whitespace errors.
+Result: PASS. Backend 31/31; frontend 22/22, including configured-threshold
+behavior, explicit defaults, trailing-stop weighted exit, and deferred
+same-symbol/different-rule request ownership; TypeScript/Vite production build
+passed with 1,673 modules transformed; diff check produced no output.
 
-### Changed Files
+### Re-review Concerns
 
-- `apps/web-react/src/pages/TradeReviewPage.tsx`
-- `apps/web-react/src/lib/tradeReview.ts`
-- `apps/web-react/scripts/tradeReviewSelectionGate.check.mjs`
-- `.superpowers/sdd/task-7-report.md`
-
-## Controller Live Browser Verification
-
-The controller rebuilt the production frontend and exercised `/trade-review` against a Dockerized API with an isolated persistent H2 volume.
-
-- At `1440 x 900`, the document and body stayed within the viewport (`1440px`), no visible button/input reported clipped content, no alert was present, and the browser console had zero errors.
-- The desktop fill dialog measured `512 x 396` inside the viewport; all direction, time, price, quantity, cancel, submit, and close controls were visible and unclipped.
-- At `390 x 844`, the document stayed within the viewport (`380px` content width), no visible button/input reported clipped content, and the browser console had zero errors.
-- The mobile fill sheet measured `390 x 516`, was viewport-bounded and scrollable, and its time, price, and quantity fields were visible. The controller entered price `38.20` and quantity `1` without submitting; both values remained intact.
-- The mobile cancel-plan confirmation measured `390 x 240.5`, initially focused `确认取消`, and dismissing it restored focus to `取消计划` without changing the case.
-- Reloading the page retained the same cases, four-fill closed ledger, T1/T5 matured outcomes, and pending T20 state from the persistent API.
-
-## Follow-up Fix: Commit-Phase Selection Guard
-
-### RED Evidence
-
-Extended the focused check to require layout-phase synchronization for automatic list/filter selection and immediate synchronization for explicit row selection, then ran:
-
-```text
-node apps/web-react/scripts/tradeReviewSelectionGate.check.mjs
-```
-
-Result: exit code 1. The check failed because `selectedIdRef` was only assigned in a passive `useEffect`:
-
-```text
-AssertionError [ERR_ASSERTION]: selected case identity must synchronize in a layout effect, before passive effects can observe stale selection
-```
-
-### Fix And GREEN Evidence
-
-- Replaced the passive ref synchronization with `useLayoutEffect`, so list/filter-driven automatic selection updates the operation guard during React's commit phase.
-- Explicit row selection now updates `selectedIdRef` before scheduling `setSelectedId`; the automatic selection state updater remains side-effect free.
-- Extended `tradeReviewSelectionGate.check.mjs` with source assertions for both synchronization paths.
-
-Ran from `/Users/mac/Documents/shares-test`:
-
-```text
-node apps/web-react/scripts/tradeReviewSelectionGate.check.mjs
-npm run build --prefix apps/web-react
-git diff --check
-```
-
-Results: focused Node check exited 0; production build exited 0 (`1669 modules transformed`, `built in 1.53s`); `git diff --check` exited 0 with no whitespace errors.
+- No blocking concerns.
+- The trailing-stop ordering is deliberately conservative at daily-bar
+  resolution and is documented in the report methodology. It does not claim
+  unavailable intraday sequencing.

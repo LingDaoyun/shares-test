@@ -40,6 +40,7 @@ public class BacktestService {
     private static final BigDecimal DEFAULT_FIRST_TARGET = new BigDecimal("2.50");
     private static final BigDecimal DEFAULT_SECOND_TARGET = new BigDecimal("4.50");
     private static final BigDecimal DEFAULT_HARD_STOP = new BigDecimal("3.50");
+    private static final BigDecimal DEFAULT_TRAILING_DRAWDOWN = new BigDecimal("2.00");
     private static final int DEFAULT_OVERNIGHT_HOLDING_DAYS = 2;
     private static final BigDecimal FIRST_REDUCTION_RATIO = new BigDecimal("0.50");
     private static final int MIN_OVERNIGHT_HISTORY = 72;
@@ -132,7 +133,10 @@ public class BacktestService {
             BigDecimal commissionPercent,
             BigDecimal stampDutyPercent,
             BigDecimal slippagePercent,
-            BigDecimal limitMovePercent
+            BigDecimal limitMovePercent,
+            BigDecimal minVolumeRatio,
+            BigDecimal maxDistanceToMa20Percent,
+            BigDecimal trailingDrawdownPercent
     ) {
         List<String> parsedSymbols = parseSymbols(symbols);
         OvernightBacktestRuleSet ruleSet = new OvernightBacktestRuleSet(
@@ -144,7 +148,10 @@ public class BacktestService {
                 positiveOrDefault(commissionPercent, DEFAULT_COMMISSION),
                 positiveOrDefault(stampDutyPercent, DEFAULT_STAMP_DUTY),
                 positiveOrDefault(slippagePercent, DEFAULT_SLIPPAGE),
-                positiveOrDefault(limitMovePercent, DEFAULT_LIMIT_MOVE)
+                positiveOrDefault(limitMovePercent, DEFAULT_LIMIT_MOVE),
+                positiveOrDefault(minVolumeRatio, DEFAULT_MIN_VOLUME_RATIO),
+                positiveOrDefault(maxDistanceToMa20Percent, DEFAULT_MAX_DISTANCE_TO_MA20),
+                nonNegativeOrDefault(trailingDrawdownPercent, DEFAULT_TRAILING_DRAWDOWN)
         );
         List<OvernightSymbolOutcome> outcomes = parsedSymbols.stream()
                 .map(symbol -> overnightOutcome(symbol, ruleSet))
@@ -188,6 +195,7 @@ public class BacktestService {
                         "信号仅使用信号日及以前 K 线，14:55 成交以信号日收盘价加买入滑点代理。",
                         "T+1 日线先处理不利跳空和硬止损，再处理止盈；只有收盘盈利、强于前收且站上 MA5 才延长至 T+2。",
                         "第一目标成交 50%，剩余仓位继续到第二目标、硬止损或时间退出；同日到达第二目标时按先第一目标、再第二目标处理。",
+                        "首次止盈后的后续日线以前一已知峰值计算移动止损；日内移动止损与第二目标同时可达时，保守地先按移动止损退出。",
                         "正常退出不晚于 T+2；一字跌停无法成交时延后到首个可成交日，并单独标记 LIMIT_DOWN_DELAYED。",
                         "代理入场和每腿退出价已含双边滑点，净收益只再扣双边佣金和卖出印花税。"
                 ),
@@ -282,9 +290,9 @@ public class BacktestService {
                 BigDecimal.ZERO,
                 new BigDecimal("9999"),
                 new BigDecimal("9999"),
-                DEFAULT_MIN_VOLUME_RATIO,
+                ruleSet.minVolumeRatio(),
                 new BigDecimal("4.00"),
-                DEFAULT_MAX_DISTANCE_TO_MA20,
+                ruleSet.maxDistanceToMa20Percent(),
                 BigDecimal.ZERO
         );
     }
@@ -320,14 +328,14 @@ public class BacktestService {
         BigDecimal secondTargetPrice = proxyEntry.multiply(BigDecimal.ONE.add(rate(ruleSet.secondTargetPercent())));
         List<OvernightBaseExitLeg> legs = new ArrayList<>();
         int t1Index = signalIndex + 1;
-        BigDecimal remaining = resolveOvernightDay(
+        OvernightDayState state = resolveOvernightDay(
                 rows, t1Index, stopPrice, firstTargetPrice, secondTargetPrice,
-                BigDecimal.ONE, legs, ruleSet
+                BigDecimal.ONE, null, legs, ruleSet
         );
-        if (remaining == null) {
-            return delayedOvernightExit(rows, t1Index, BigDecimal.ONE, legs, ruleSet);
+        if (state.delayed()) {
+            return delayedOvernightExit(rows, t1Index, state.remaining(), legs, ruleSet);
         }
-        if (remaining.compareTo(BigDecimal.ZERO) == 0) {
+        if (state.remaining().compareTo(BigDecimal.ZERO) == 0) {
             return exitPlan(legs);
         }
 
@@ -342,61 +350,78 @@ public class BacktestService {
                 && t1.close().compareTo(t1Ma5) > 0;
         if (!extendToT2) {
             if (isLimitDownLock(t1, signal, overnightPriceLimitRules(ruleSet))) {
-                return delayedOvernightExit(rows, t1Index, remaining, legs, ruleSet);
+                return delayedOvernightExit(rows, t1Index, state.remaining(), legs, ruleSet);
             }
-            legs.add(new OvernightBaseExitLeg(t1Index, remaining, t1.close(), "T1_TIME_EXIT"));
+            legs.add(new OvernightBaseExitLeg(t1Index, state.remaining(), t1.close(), "T1_TIME_EXIT"));
             return exitPlan(legs);
         }
 
         int t2Index = t1Index + 1;
-        remaining = resolveOvernightDay(
+        state = resolveOvernightDay(
                 rows, t2Index, stopPrice, firstTargetPrice, secondTargetPrice,
-                remaining, legs, ruleSet
+                state.remaining(), state.trailingPeak(), legs, ruleSet
         );
-        if (remaining == null) {
-            BigDecimal delayedRatio = BigDecimal.ONE.subtract(
-                    legs.stream().map(OvernightBaseExitLeg::positionRatio).reduce(BigDecimal.ZERO, BigDecimal::add)
-            );
-            return delayedOvernightExit(rows, t2Index, delayedRatio, legs, ruleSet);
+        if (state.delayed()) {
+            return delayedOvernightExit(rows, t2Index, state.remaining(), legs, ruleSet);
         }
-        if (remaining.compareTo(BigDecimal.ZERO) == 0) {
+        if (state.remaining().compareTo(BigDecimal.ZERO) == 0) {
             return exitPlan(legs);
         }
         EastMoneyKLine t2 = rows.get(t2Index);
         if (isLimitDownLock(t2, t1, overnightPriceLimitRules(ruleSet))) {
-            return delayedOvernightExit(rows, t2Index, remaining, legs, ruleSet);
+            return delayedOvernightExit(rows, t2Index, state.remaining(), legs, ruleSet);
         }
-        legs.add(new OvernightBaseExitLeg(t2Index, remaining, t2.close(), "T2_TIME_EXIT"));
+        legs.add(new OvernightBaseExitLeg(t2Index, state.remaining(), t2.close(), "T2_TIME_EXIT"));
         return exitPlan(legs);
     }
 
-    private BigDecimal resolveOvernightDay(
+    private OvernightDayState resolveOvernightDay(
             List<EastMoneyKLine> rows,
             int index,
             BigDecimal stopPrice,
             BigDecimal firstTargetPrice,
             BigDecimal secondTargetPrice,
             BigDecimal remaining,
+            BigDecimal trailingPeak,
             List<OvernightBaseExitLeg> legs,
             OvernightBacktestRuleSet ruleSet
     ) {
         EastMoneyKLine row = rows.get(index);
         EastMoneyKLine previous = rows.get(index - 1);
         BacktestRuleSet priceLimitRules = overnightPriceLimitRules(ruleSet);
+        BigDecimal trailingStopPrice = trailingPeak == null
+                ? null
+                : trailingPeak.multiply(BigDecimal.ONE.subtract(rate(ruleSet.trailingDrawdownPercent())));
         if (isLimitDownLock(row, previous, priceLimitRules)) {
             if ((row.open() != null && row.open().compareTo(stopPrice) <= 0)
-                    || (row.low() != null && row.low().compareTo(stopPrice) <= 0)) {
-                return null;
+                    || (row.low() != null && row.low().compareTo(stopPrice) <= 0)
+                    || (trailingStopPrice != null && row.open() != null
+                    && row.open().compareTo(trailingStopPrice) <= 0)
+                    || (trailingStopPrice != null && row.low() != null
+                    && row.low().compareTo(trailingStopPrice) <= 0)) {
+                return new OvernightDayState(remaining, trailingPeak, true);
             }
-            return remaining;
+            return new OvernightDayState(remaining, trailingPeak, false);
         }
         if (row.open() != null && row.open().compareTo(stopPrice) <= 0) {
             legs.add(new OvernightBaseExitLeg(index, remaining, row.open(), "HARD_STOP"));
-            return BigDecimal.ZERO;
+            return new OvernightDayState(BigDecimal.ZERO, trailingPeak, false);
         }
         if (row.low() != null && row.low().compareTo(stopPrice) <= 0) {
             legs.add(new OvernightBaseExitLeg(index, remaining, stopPrice, "HARD_STOP"));
-            return BigDecimal.ZERO;
+            return new OvernightDayState(BigDecimal.ZERO, trailingPeak, false);
+        }
+        if (trailingStopPrice != null
+                && row.open() != null
+                && row.open().compareTo(trailingStopPrice) <= 0) {
+            legs.add(new OvernightBaseExitLeg(index, remaining, row.open(), "TRAILING_STOP"));
+            return new OvernightDayState(BigDecimal.ZERO, trailingPeak, false);
+        }
+        if (trailingStopPrice != null
+                && row.low() != null
+                && row.low().compareTo(trailingStopPrice) <= 0) {
+            legs.add(new OvernightBaseExitLeg(index, remaining, trailingStopPrice, "TRAILING_STOP"));
+            return new OvernightDayState(BigDecimal.ZERO, trailingPeak, false);
         }
         boolean firstAlreadyHit = legs.stream()
                 .anyMatch(leg -> "FIRST_TARGET".equals(leg.reason()));
@@ -411,14 +436,18 @@ public class BacktestService {
                     "FIRST_TARGET"
             ));
             remaining = remaining.subtract(FIRST_REDUCTION_RATIO);
+            trailingPeak = max(firstTargetPrice, row.high());
         }
         if (remaining.compareTo(BigDecimal.ZERO) > 0
                 && row.high() != null
                 && row.high().compareTo(secondTargetPrice) >= 0) {
             legs.add(new OvernightBaseExitLeg(index, remaining, secondTargetPrice, "SECOND_TARGET"));
-            return BigDecimal.ZERO;
+            return new OvernightDayState(BigDecimal.ZERO, trailingPeak, false);
         }
-        return remaining;
+        if (firstAlreadyHit && row.high() != null) {
+            trailingPeak = max(trailingPeak, row.high());
+        }
+        return new OvernightDayState(remaining, trailingPeak, false);
     }
 
     private OvernightExitPlan delayedOvernightExit(
@@ -1045,8 +1074,19 @@ public class BacktestService {
         return value == null || value.compareTo(BigDecimal.ZERO) <= 0 ? fallback : value;
     }
 
+    private BigDecimal nonNegativeOrDefault(BigDecimal value, BigDecimal fallback) {
+        return value == null || value.compareTo(BigDecimal.ZERO) < 0 ? fallback : value;
+    }
+
     private BigDecimal nullToZero(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private BigDecimal max(BigDecimal left, BigDecimal right) {
+        if (left == null) {
+            return right;
+        }
+        return right == null ? left : left.max(right);
     }
 
     private BigDecimal scale(BigDecimal value) {
@@ -1091,6 +1131,13 @@ public class BacktestService {
             BigDecimal positionRatio,
             BigDecimal baseExitPrice,
             String reason
+    ) {
+    }
+
+    private record OvernightDayState(
+            BigDecimal remaining,
+            BigDecimal trailingPeak,
+            boolean delayed
     ) {
     }
 

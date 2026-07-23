@@ -142,11 +142,20 @@ const candidate = (symbol: string, name = `候选${symbol}`) => ({
   quoteFreshness: { blocksRealtimeDecision: false, statusLabel: '新鲜' }
 })
 
-function reportWithCandidates(symbols: string[], generatedAt = '2026-07-23T14:53:00+08:00') {
+function reportWithCandidates(
+  symbols: string[],
+  generatedAt = '2026-07-23T14:53:00+08:00',
+  technicalRules: Partial<typeof emptyReport.ruleSet> = {},
+  trailingDrawdownPercent = 2
+) {
   return {
     ...emptyReport,
+    ruleSet: { ...emptyReport.ruleSet, ...technicalRules },
     candidateCount: symbols.length,
-    candidates: symbols.map((symbol) => candidate(symbol)),
+    candidates: symbols.map((symbol) => ({
+      ...candidate(symbol),
+      tradePlan: { trailingDrawdownPercent }
+    })),
     generatedAt
   } as never
 }
@@ -171,7 +180,10 @@ function overnightReport(
       commissionPercent: 0.03,
       stampDutyPercent: 0.05,
       slippagePercent: 0.05,
-      limitMovePercent: 9.8
+      limitMovePercent: 9.8,
+      minVolumeRatio: 1.15,
+      maxDistanceToMa20Percent: 8,
+      trailingDrawdownPercent: 2
     },
     symbols,
     status,
@@ -250,7 +262,10 @@ describe('ShortTermPage prepared snapshot mount', () => {
       firstTargetPercent: 2.5,
       secondTargetPercent: 4.5,
       hardStopPercent: 3.5,
-      maxHoldingTradingDays: 2
+      maxHoldingTradingDays: 2,
+      minVolumeRatio: 1.15,
+      maxDistanceToMa20Percent: 8,
+      trailingDrawdownPercent: 2
     }))
     expect(fetchOvernightBacktest).not.toHaveBeenCalledWith(expect.objectContaining({
       holdingDays: 20
@@ -332,6 +347,48 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(fetchOvernightBacktest).toHaveBeenNthCalledWith(2, expect.objectContaining({ symbols: '600799,600802' }))
     expect(document.body.textContent).toContain('22 笔隔夜样本')
     expect(document.body.textContent).not.toContain('11 笔隔夜样本')
+  })
+
+  it('refetches and owns the latest request when production thresholds change for the same symbols', async () => {
+    const oldBacktest = deferred<OvernightBacktestReport>()
+    const newBacktest = deferred<OvernightBacktestReport>()
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600806'], '2026-07-23T14:53:00+08:00', {
+        minVolumeRatio: 1.15,
+        maxDistanceToMa20Percent: 8
+      })
+    })
+    vi.mocked(fetchOvernightBacktest)
+      .mockReturnValueOnce(oldBacktest.promise)
+      .mockReturnValueOnce(newBacktest.promise)
+    mockManualReport(reportWithCandidates(['600806'], '2026-07-23T14:53:00+08:00', {
+      minVolumeRatio: 1.45,
+      maxDistanceToMa20Percent: 5.5
+    }, 1.6), 'switch-thresholds')
+
+    await renderPagePlain(root)
+    await clickButton('重新扫描')
+    await act(async () => {
+      newBacktest.resolve(overnightReport(['600806'], 26))
+      await flushPromises()
+      oldBacktest.resolve(overnightReport(['600806'], 12))
+      await flushPromises()
+    })
+
+    expect(fetchOvernightBacktest).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      symbols: '600806',
+      minVolumeRatio: 1.15,
+      maxDistanceToMa20Percent: 8
+    }))
+    expect(fetchOvernightBacktest).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      symbols: '600806',
+      minVolumeRatio: 1.45,
+      maxDistanceToMa20Percent: 5.5,
+      trailingDrawdownPercent: 1.6
+    }))
+    expect(document.body.textContent).toContain('26 笔隔夜样本')
+    expect(document.body.textContent).not.toContain('12 笔隔夜样本')
   })
 
   it('clears loading and old results when the candidate batch becomes empty', async () => {

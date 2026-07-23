@@ -59,7 +59,10 @@ public class BacktestController {
             @RequestParam(required = false) BigDecimal commissionPercent,
             @RequestParam(required = false) BigDecimal stampDutyPercent,
             @RequestParam(required = false) BigDecimal slippagePercent,
-            @RequestParam(required = false) BigDecimal limitMovePercent
+            @RequestParam(required = false) BigDecimal limitMovePercent,
+            @RequestParam(required = false) BigDecimal minVolumeRatio,
+            @RequestParam(required = false) BigDecimal maxDistanceToMa20Percent,
+            @RequestParam(required = false) BigDecimal trailingDrawdownPercent
     ) {
         return backtestService.overnightBacktest(
                 symbols,
@@ -71,7 +74,10 @@ public class BacktestController {
                 commissionPercent,
                 stampDutyPercent,
                 slippagePercent,
-                limitMovePercent
+                limitMovePercent,
+                minVolumeRatio,
+                maxDistanceToMa20Percent,
+                trailingDrawdownPercent
         );
     }
 }

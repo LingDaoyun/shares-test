@@ -736,6 +736,9 @@ export interface OvernightBacktestRuleSet {
   stampDutyPercent: number
   slippagePercent: number
   limitMovePercent: number
+  minVolumeRatio: number
+  maxDistanceToMa20Percent: number
+  trailingDrawdownPercent: number
 }
 
 export interface OvernightBacktestTrade {

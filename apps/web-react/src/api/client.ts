@@ -137,6 +137,9 @@ export interface OvernightBacktestParams {
   stampDutyPercent?: number
   slippagePercent?: number
   limitMovePercent?: number
+  minVolumeRatio?: number
+  maxDistanceToMa20Percent?: number
+  trailingDrawdownPercent?: number
 }
 
 export function fetchOvernightBacktest(params: OvernightBacktestParams = {}) {

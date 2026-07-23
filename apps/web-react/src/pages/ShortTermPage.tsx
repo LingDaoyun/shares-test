@@ -46,7 +46,7 @@ const DEFAULT_DRAFT: DraftParams = {
   minFinancialScore: 58
 }
 
-const OVERNIGHT_RULES = {
+const OVERNIGHT_DEFAULT_RULES = {
   lookbackDays: 900,
   firstTargetPercent: 2.5,
   secondTargetPercent: 4.5,
@@ -55,12 +55,11 @@ const OVERNIGHT_RULES = {
   commissionPercent: 0.03,
   stampDutyPercent: 0.05,
   slippagePercent: 0.05,
-  limitMovePercent: 9.8
+  limitMovePercent: 9.8,
+  minVolumeRatio: 1.15,
+  maxDistanceToMa20Percent: 8,
+  trailingDrawdownPercent: 2
 } as const
-
-const OVERNIGHT_RULE_KEY = Object.entries(OVERNIGHT_RULES)
-  .map(([key, value]) => `${key}:${value}`)
-  .join('|')
 
 const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'neutral' | 'sky'> = {
   RIGHT_EARLY_ADD: 'success',
@@ -94,7 +93,23 @@ export function ShortTermPage() {
     () => [...new Set((report?.candidates ?? []).map((candidate) => candidate.symbol))].sort().join(','),
     [report?.candidates]
   )
-  const overnightRequestKey = `${overnightSymbols}|${OVERNIGHT_RULE_KEY}`
+  const overnightRules = useMemo(() => ({
+    ...OVERNIGHT_DEFAULT_RULES,
+    minVolumeRatio: report?.ruleSet.minVolumeRatio ?? OVERNIGHT_DEFAULT_RULES.minVolumeRatio,
+    maxDistanceToMa20Percent: report?.ruleSet.maxDistanceToMa20Percent
+      ?? OVERNIGHT_DEFAULT_RULES.maxDistanceToMa20Percent,
+    trailingDrawdownPercent: report?.candidates
+      .map((candidate) => candidate.tradePlan?.trailingDrawdownPercent)
+      .find((value): value is number => value !== null && value !== undefined)
+      ?? OVERNIGHT_DEFAULT_RULES.trailingDrawdownPercent
+  }), [
+    report?.ruleSet.minVolumeRatio,
+    report?.ruleSet.maxDistanceToMa20Percent,
+    report?.candidates
+  ])
+  const overnightRequestKey = `${overnightSymbols}|${Object.entries(overnightRules)
+    .map(([key, value]) => `${key}:${value}`)
+    .join('|')}`
 
   useEffect(() => {
     let alive = true
@@ -264,7 +279,7 @@ export function ShortTermPage() {
     setBacktestReport(null)
     fetchOvernightBacktest({
       symbols: overnightSymbols,
-      ...OVERNIGHT_RULES
+      ...overnightRules
     })
       .then((data) => {
         if (ownsRequest()) setBacktestReport(data)

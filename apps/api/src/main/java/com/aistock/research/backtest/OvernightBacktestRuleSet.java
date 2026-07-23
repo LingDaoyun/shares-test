@@ -11,6 +11,9 @@ public record OvernightBacktestRuleSet(
         BigDecimal commissionPercent,
         BigDecimal stampDutyPercent,
         BigDecimal slippagePercent,
-        BigDecimal limitMovePercent
+        BigDecimal limitMovePercent,
+        BigDecimal minVolumeRatio,
+        BigDecimal maxDistanceToMa20Percent,
+        BigDecimal trailingDrawdownPercent
 ) {
 }

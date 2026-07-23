@@ -76,16 +76,90 @@ class BacktestServiceTest {
     }
 
     @Test
+    void usesConfiguredProductionTechnicalThresholdsForSignalReplay() {
+        eastMoneyClient.klines.put("600112", overnightRows("600112",
+                bar("10.45", "10.50", "10.60", "10.30"),
+                bar("10.52", "10.55", "10.65", "10.45")));
+
+        OvernightBacktestReport accepted = overnightBacktest(
+                "600112", new BigDecimal("1.15"), new BigDecimal("8.00"), new BigDecimal("2.00")
+        );
+        OvernightBacktestReport volumeRejected = overnightBacktest(
+                "600112", new BigDecimal("2.00"), new BigDecimal("8.00"), new BigDecimal("2.00")
+        );
+        OvernightBacktestReport distanceRejected = overnightBacktest(
+                "600112", new BigDecimal("1.15"), new BigDecimal("1.00"), new BigDecimal("2.00")
+        );
+
+        assertThat(accepted.trades()).hasSize(1);
+        assertThat(volumeRejected.trades()).isEmpty();
+        assertThat(distanceRejected.trades()).isEmpty();
+        assertThat(accepted.ruleSet().minVolumeRatio()).isEqualByComparingTo("1.15");
+        assertThat(accepted.ruleSet().maxDistanceToMa20Percent()).isEqualByComparingTo("8.00");
+    }
+
+    @Test
+    void appliesExplicitProductionRiskDefaultsWhenParametersAreAbsent() {
+        OvernightBacktestReport report = service.overnightBacktest(
+                null, null, null, null, null, null,
+                null, null, null, null, null, null, null
+        );
+
+        assertThat(report.ruleSet().minVolumeRatio()).isEqualByComparingTo("1.15");
+        assertThat(report.ruleSet().maxDistanceToMa20Percent()).isEqualByComparingTo("8.00");
+        assertThat(report.ruleSet().trailingDrawdownPercent()).isEqualByComparingTo("2.00");
+    }
+
+    @Test
+    void exitsTheRemainingHalfAtTrailingStopBeforeAReachableSecondTarget() {
+        eastMoneyClient.klines.put("600113", overnightRows("600113",
+                bar("10.45", "10.55", "10.80", "10.60"),
+                bar("10.75", "10.85", "11.00", "10.50")));
+
+        OvernightBacktestTrade trade = onlyOvernightTrade("600113");
+        OvernightBacktestTrade widerTrailingTrade = overnightBacktest(
+                "600113",
+                new BigDecimal("1.15"),
+                new BigDecimal("8.00"),
+                new BigDecimal("5.00")
+        ).trades().get(0);
+
+        assertThat(trade.firstTargetHit()).isTrue();
+        assertThat(trade.secondTargetHit()).isFalse();
+        assertThat(trade.exitReason()).isEqualTo("TRAILING_STOP");
+        assertThat(trade.exitLegs())
+                .extracting(OvernightBacktestExitLeg::reason)
+                .containsExactly("FIRST_TARGET", "TRAILING_STOP");
+        assertThat(trade.exitLegs().get(1).positionRatio()).isEqualByComparingTo("0.50");
+        BigDecimal expectedTrailingBase = new BigDecimal("10.80")
+                .multiply(new BigDecimal("0.98"));
+        BigDecimal expectedExecutable = expectedTrailingBase.multiply(new BigDecimal("0.9995"));
+        assertThat(trade.exitLegs().get(1).executablePrice())
+                .isEqualByComparingTo(expectedExecutable.setScale(4, java.math.RoundingMode.HALF_UP));
+        BigDecimal weightedExecutableReturn = percent(
+                trade.weightedExitPrice().subtract(trade.proxyEntryPrice()),
+                trade.proxyEntryPrice()
+        );
+        assertThat(trade.netReturnPercent()).isEqualByComparingTo(scale(
+                weightedExecutableReturn
+                        .subtract(trade.commissionCostPercent())
+                        .subtract(trade.stampDutyCostPercent())
+        ));
+        assertThat(widerTrailingTrade.exitReason()).isEqualTo("SECOND_TARGET");
+        assertThat(widerTrailingTrade.secondTargetHit()).isTrue();
+    }
+
+    @Test
     void carriesTheRemainingHalfAfterFirstTargetToT2TargetStopOrTimeExit() {
         eastMoneyClient.klines.put("600102", overnightRows("600102",
                 bar("10.45", "10.50", "10.75", "10.30"),
-                bar("10.55", "10.80", "11.00", "10.45")));
+                bar("10.65", "10.80", "11.00", "10.60")));
         eastMoneyClient.klines.put("600110", overnightRows("600110",
                 bar("10.45", "10.50", "10.75", "10.30"),
                 bar("9.95", "10.05", "10.20", "9.90")));
         eastMoneyClient.klines.put("600111", overnightRows("600111",
-                bar("10.45", "10.50", "10.75", "10.30"),
-                bar("10.55", "10.55", "10.80", "10.40")));
+                bar("10.45", "10.50", "10.70", "10.30"),
+                bar("10.55", "10.55", "10.80", "10.50")));
 
         OvernightBacktestReport report = overnightBacktest("600102,600110,600111");
 
@@ -286,10 +360,46 @@ class BacktestServiceTest {
     }
 
     private OvernightBacktestReport overnightBacktest(String symbols) {
-        return overnightBacktest(symbols, new BigDecimal("9.80"));
+        return overnightBacktest(
+                symbols,
+                new BigDecimal("1.15"),
+                new BigDecimal("8.00"),
+                new BigDecimal("2.00")
+        );
     }
 
     private OvernightBacktestReport overnightBacktest(String symbols, BigDecimal limitMovePercent) {
+        return overnightBacktest(
+                symbols,
+                new BigDecimal("1.15"),
+                new BigDecimal("8.00"),
+                new BigDecimal("2.00"),
+                limitMovePercent
+        );
+    }
+
+    private OvernightBacktestReport overnightBacktest(
+            String symbols,
+            BigDecimal minVolumeRatio,
+            BigDecimal maxDistanceToMa20Percent,
+            BigDecimal trailingDrawdownPercent
+    ) {
+        return overnightBacktest(
+                symbols,
+                minVolumeRatio,
+                maxDistanceToMa20Percent,
+                trailingDrawdownPercent,
+                new BigDecimal("9.80")
+        );
+    }
+
+    private OvernightBacktestReport overnightBacktest(
+            String symbols,
+            BigDecimal minVolumeRatio,
+            BigDecimal maxDistanceToMa20Percent,
+            BigDecimal trailingDrawdownPercent,
+            BigDecimal limitMovePercent
+    ) {
         return service.overnightBacktest(
                 symbols,
                 900,
@@ -300,7 +410,10 @@ class BacktestServiceTest {
                 new BigDecimal("0.03"),
                 new BigDecimal("0.05"),
                 new BigDecimal("0.05"),
-                limitMovePercent
+                limitMovePercent,
+                minVolumeRatio,
+                maxDistanceToMa20Percent,
+                trailingDrawdownPercent
         );
     }
 

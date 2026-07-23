@@ -31,7 +31,10 @@ class BacktestControllerTest {
                 new BigDecimal("0.03"),
                 new BigDecimal("0.05"),
                 new BigDecimal("0.05"),
-                new BigDecimal("9.80")
+                new BigDecimal("9.80"),
+                new BigDecimal("1.35"),
+                new BigDecimal("6.50"),
+                new BigDecimal("2.00")
         );
         OvernightBacktestSummary summary = new OvernightBacktestSummary(
                 1,
@@ -54,7 +57,8 @@ class BacktestControllerTest {
                 "600795", 900,
                 new BigDecimal("2.5"), new BigDecimal("4.5"), new BigDecimal("3.5"), 2,
                 new BigDecimal("0.03"), new BigDecimal("0.05"),
-                new BigDecimal("0.05"), new BigDecimal("9.80")
+                new BigDecimal("0.05"), new BigDecimal("9.80"),
+                new BigDecimal("1.35"), new BigDecimal("6.50"), new BigDecimal("2.00")
         )).thenReturn(new OvernightBacktestReport(
                 "短线 T+1/T+2 技术信号历史验证",
                 List.of("生产同源 K 线技术信号"),
@@ -82,13 +86,19 @@ class BacktestControllerTest {
                         .param("commissionPercent", "0.03")
                         .param("stampDutyPercent", "0.05")
                         .param("slippagePercent", "0.05")
-                        .param("limitMovePercent", "9.80"))
+                        .param("limitMovePercent", "9.80")
+                        .param("minVolumeRatio", "1.35")
+                        .param("maxDistanceToMa20Percent", "6.50")
+                        .param("trailingDrawdownPercent", "2.00"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.scope").value("短线 T+1/T+2 技术信号历史验证"))
                 .andExpect(jsonPath("$.validationScope[0]").value("生产同源 K 线技术信号"))
                 .andExpect(jsonPath("$.unreplayedGates").isArray())
                 .andExpect(jsonPath("$.status").value("OK"))
                 .andExpect(jsonPath("$.ruleSet.maxHoldingTradingDays").value(2))
+                .andExpect(jsonPath("$.ruleSet.minVolumeRatio").value(1.35))
+                .andExpect(jsonPath("$.ruleSet.maxDistanceToMa20Percent").value(6.5))
+                .andExpect(jsonPath("$.ruleSet.trailingDrawdownPercent").value(2.0))
                 .andExpect(jsonPath("$.summary.sampleCount").value(1))
                 .andExpect(jsonPath("$.summary.positiveRatePercent").value(100.0))
                 .andExpect(jsonPath("$.results[0].status").value("OK"))
@@ -98,7 +108,8 @@ class BacktestControllerTest {
                 "600795", 900,
                 new BigDecimal("2.5"), new BigDecimal("4.5"), new BigDecimal("3.5"), 2,
                 new BigDecimal("0.03"), new BigDecimal("0.05"),
-                new BigDecimal("0.05"), new BigDecimal("9.80")
+                new BigDecimal("0.05"), new BigDecimal("9.80"),
+                new BigDecimal("1.35"), new BigDecimal("6.50"), new BigDecimal("2.00")
         );
     }
 }
