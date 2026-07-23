@@ -746,6 +746,10 @@ export interface OvernightBacktestTrade {
   t2Date: string | null
   exitDate: string
   exitPrice: number | null
+  firstTargetHit: boolean
+  secondTargetHit: boolean
+  exitLegs: OvernightBacktestExitLeg[]
+  weightedExitPrice: number | null
   netReturnPercent: number
   maxRunupPercent: number
   maxDrawdownPercent: number
@@ -756,6 +760,27 @@ export interface OvernightBacktestTrade {
   slippageCostPercent: number
   totalCostPercent: number
   exitReason: string
+}
+
+export interface OvernightBacktestExitLeg {
+  exitDate: string
+  positionRatio: number
+  executablePrice: number
+  reason: string
+}
+
+export type OvernightBacktestSymbolStatus =
+  | 'SOURCE_FAILED'
+  | 'INSUFFICIENT_HISTORY'
+  | 'NO_SIGNAL'
+  | 'OK'
+
+export interface OvernightBacktestSymbolResult {
+  symbol: string
+  status: OvernightBacktestSymbolStatus
+  klineCount: number
+  sampleCount: number
+  dataGaps: string[]
 }
 
 export interface OvernightBacktestSummary {
@@ -778,10 +803,15 @@ export interface OvernightBacktestSummary {
 
 export interface OvernightBacktestReport {
   scope: string
+  validationScope: string[]
+  unreplayedGates: string[]
   methodology: string[]
   ruleSet: OvernightBacktestRuleSet
   symbols: string[]
+  status: 'OK' | 'PARTIAL' | 'DATA_BLOCKED'
+  message: string
   summary: OvernightBacktestSummary
+  results: OvernightBacktestSymbolResult[]
   trades: OvernightBacktestTrade[]
   generatedAt: string
 }

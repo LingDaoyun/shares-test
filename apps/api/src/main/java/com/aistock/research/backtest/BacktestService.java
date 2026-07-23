@@ -2,8 +2,12 @@ package com.aistock.research.backtest;
 
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
+import com.aistock.research.shortterm.ShortTermRuleSet;
+import com.aistock.research.shortterm.ShortTermTechnicalSignalEvaluation;
+import com.aistock.research.shortterm.ShortTermTechnicalSignalEvaluator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -37,11 +41,29 @@ public class BacktestService {
     private static final BigDecimal DEFAULT_SECOND_TARGET = new BigDecimal("4.50");
     private static final BigDecimal DEFAULT_HARD_STOP = new BigDecimal("3.50");
     private static final int DEFAULT_OVERNIGHT_HOLDING_DAYS = 2;
+    private static final BigDecimal FIRST_REDUCTION_RATIO = new BigDecimal("0.50");
+    private static final int MIN_OVERNIGHT_HISTORY = 72;
+    private static final List<String> OVERNIGHT_UNREPLAYED_GATES = List.of(
+            "财报质量门禁",
+            "市场情绪门禁",
+            "尾盘分钟确认门禁",
+            "实时行情新鲜度门禁"
+    );
 
     private final EastMoneyClient eastMoneyClient;
+    private final ShortTermTechnicalSignalEvaluator technicalSignalEvaluator;
 
     public BacktestService(EastMoneyClient eastMoneyClient) {
+        this(eastMoneyClient, new ShortTermTechnicalSignalEvaluator());
+    }
+
+    @Autowired
+    public BacktestService(
+            EastMoneyClient eastMoneyClient,
+            ShortTermTechnicalSignalEvaluator technicalSignalEvaluator
+    ) {
         this.eastMoneyClient = eastMoneyClient;
+        this.technicalSignalEvaluator = technicalSignalEvaluator;
     }
 
     public BacktestReport rightSideBacktest(
@@ -124,26 +146,63 @@ public class BacktestService {
                 positiveOrDefault(slippagePercent, DEFAULT_SLIPPAGE),
                 positiveOrDefault(limitMovePercent, DEFAULT_LIMIT_MOVE)
         );
-        List<OvernightBacktestTrade> trades = parsedSymbols.stream()
-                .flatMap(symbol -> overnightTrades(symbol, ruleSet).stream())
+        List<OvernightSymbolOutcome> outcomes = parsedSymbols.stream()
+                .map(symbol -> overnightOutcome(symbol, ruleSet))
                 .toList();
+        List<OvernightBacktestTrade> trades = outcomes.stream()
+                .flatMap(outcome -> outcome.trades().stream())
+                .toList();
+        List<OvernightBacktestSymbolResult> results = outcomes.stream()
+                .map(OvernightSymbolOutcome::result)
+                .toList();
+        long sourceFailures = results.stream()
+                .filter(result -> "SOURCE_FAILED".equals(result.status()))
+                .count();
+        long insufficientHistory = results.stream()
+                .filter(result -> "INSUFFICIENT_HISTORY".equals(result.status()))
+                .count();
+        String status;
+        String message;
+        if (!results.isEmpty() && sourceFailures == results.size()) {
+            status = "DATA_BLOCKED";
+            message = "全部标的数据源失败，技术信号历史验证被阻断。";
+        } else if (sourceFailures > 0 || insufficientHistory > 0) {
+            status = "PARTIAL";
+            message = "部分标的数据不完整：数据源失败 " + sourceFailures
+                    + " 个，历史不足 " + insufficientHistory + " 个。";
+        } else {
+            status = "OK";
+            message = trades.isEmpty()
+                    ? "数据读取正常，但样本期内没有符合生产同源技术信号的交易。"
+                    : "技术信号历史验证完成。";
+        }
         return new OvernightBacktestReport(
-                "短线隔夜 T+1/T+2 验证",
+                "短线 T+1/T+2 技术信号历史验证",
+                List.of(
+                        "技术信号逐交易日仅使用 rows[0..signalDay] 的日 K 线进行点时重放。",
+                        "复用生产 ShortTermGoldenCrossAnalyzer，只接受最近已完成交易日内 CONFIRMED 金叉。",
+                        "复用生产右侧技术 evaluator，只接受右侧早期确认。"
+                ),
+                OVERNIGHT_UNREPLAYED_GATES,
                 List.of(
                         "信号仅使用信号日及以前 K 线，14:55 成交以信号日收盘价加买入滑点代理。",
                         "T+1 日线先处理不利跳空和硬止损，再处理止盈；只有收盘盈利、强于前收且站上 MA5 才延长至 T+2。",
+                        "第一目标成交 50%，剩余仓位继续到第二目标、硬止损或时间退出；同日到达第二目标时按先第一目标、再第二目标处理。",
                         "正常退出不晚于 T+2；一字跌停无法成交时延后到首个可成交日，并单独标记 LIMIT_DOWN_DELAYED。",
-                        "净收益计入双边佣金、卖出印花税和双边滑点。"
+                        "代理入场和每腿退出价已含双边滑点，净收益只再扣双边佣金和卖出印花税。"
                 ),
                 ruleSet,
                 parsedSymbols,
+                status,
+                message,
                 summarizeOvernight(parsedSymbols.size(), trades),
+                results,
                 trades,
                 Instant.now()
         );
     }
 
-    private List<OvernightBacktestTrade> overnightTrades(String symbol, OvernightBacktestRuleSet ruleSet) {
+    private OvernightSymbolOutcome overnightOutcome(String symbol, OvernightBacktestRuleSet ruleSet) {
         List<EastMoneyKLine> rows;
         try {
             LocalDate end = LocalDate.now();
@@ -153,35 +212,84 @@ public class BacktestService {
                     .toList();
         } catch (RuntimeException exception) {
             logger.warn("隔夜回测 K 线获取失败：{}", symbol, exception);
-            return List.of();
+            String gap = "数据源失败：" + rootMessage(exception);
+            return new OvernightSymbolOutcome(
+                    new OvernightBacktestSymbolResult(symbol, "SOURCE_FAILED", 0, 0, List.of(gap)),
+                    List.of()
+            );
         }
-        if (rows.size() < 72) {
-            return List.of();
+        if (rows.size() < MIN_OVERNIGHT_HISTORY) {
+            String gap = "历史 K 线不足：需要至少 " + MIN_OVERNIGHT_HISTORY + " 条，实际 " + rows.size() + " 条";
+            return new OvernightSymbolOutcome(
+                    new OvernightBacktestSymbolResult(
+                            symbol,
+                            "INSUFFICIENT_HISTORY",
+                            rows.size(),
+                            0,
+                            List.of(gap)
+                    ),
+                    List.of()
+            );
         }
 
-        BacktestRuleSet signalRules = overnightSignalRules(ruleSet);
+        List<OvernightBacktestTrade> trades = overnightTrades(symbol, rows, ruleSet);
+        String status = trades.isEmpty() ? "NO_SIGNAL" : "OK";
+        List<String> dataGaps = trades.isEmpty()
+                ? List.of("样本期内没有同时满足 CONFIRMED 金叉与右侧早期确认的技术信号")
+                : List.of();
+        return new OvernightSymbolOutcome(
+                new OvernightBacktestSymbolResult(symbol, status, rows.size(), trades.size(), dataGaps),
+                trades
+        );
+    }
+
+    private List<OvernightBacktestTrade> overnightTrades(
+            String symbol,
+            List<EastMoneyKLine> rows,
+            OvernightBacktestRuleSet ruleSet
+    ) {
         List<OvernightBacktestTrade> trades = new ArrayList<>();
         int index = 70;
         while (index < rows.size() - 1) {
-            SignalSnapshot signal = signalAt(rows, index, signalRules);
             EastMoneyKLine signalRow = rows.get(index);
             EastMoneyKLine previous = rows.get(index - 1);
-            if (!signal.confirmed() || isLimitUpLock(signalRow, previous, signalRules)) {
+            ShortTermTechnicalSignalEvaluation signal = technicalSignalEvaluator.evaluate(
+                    rows.subList(0, index + 1),
+                    signalRow.close(),
+                    false,
+                    overnightTechnicalRules(ruleSet)
+            );
+            if (!signal.eligibleForOvernightValidation()
+                    || isLimitUpLock(signalRow, previous, overnightPriceLimitRules(ruleSet))) {
                 index++;
                 continue;
             }
-            OvernightExit exit = resolveOvernightExit(rows, index, ruleSet);
+            OvernightExitPlan exit = resolveOvernightExit(rows, index, ruleSet);
             if (exit == null) {
                 index++;
                 continue;
             }
             trades.add(toOvernightTrade(symbol, rows, index, exit, ruleSet));
-            index = Math.max(exit.exitIndex() + 1, index + 1);
+            index = Math.max(exit.finalExitIndex() + 1, index + 1);
         }
         return trades;
     }
 
-    private BacktestRuleSet overnightSignalRules(OvernightBacktestRuleSet ruleSet) {
+    private ShortTermRuleSet overnightTechnicalRules(OvernightBacktestRuleSet ruleSet) {
+        return new ShortTermRuleSet(
+                1,
+                ruleSet.lookbackDays(),
+                BigDecimal.ZERO,
+                new BigDecimal("9999"),
+                new BigDecimal("9999"),
+                DEFAULT_MIN_VOLUME_RATIO,
+                new BigDecimal("4.00"),
+                DEFAULT_MAX_DISTANCE_TO_MA20,
+                BigDecimal.ZERO
+        );
+    }
+
+    private BacktestRuleSet overnightPriceLimitRules(OvernightBacktestRuleSet ruleSet) {
         return new BacktestRuleSet(
                 ruleSet.lookbackDays(),
                 DEFAULT_HOLDING_DAYS,
@@ -200,7 +308,7 @@ public class BacktestService {
         );
     }
 
-    private OvernightExit resolveOvernightExit(
+    private OvernightExitPlan resolveOvernightExit(
             List<EastMoneyKLine> rows,
             int signalIndex,
             OvernightBacktestRuleSet ruleSet
@@ -210,12 +318,17 @@ public class BacktestService {
         BigDecimal stopPrice = proxyEntry.multiply(BigDecimal.ONE.subtract(rate(ruleSet.hardStopPercent())));
         BigDecimal firstTargetPrice = proxyEntry.multiply(BigDecimal.ONE.add(rate(ruleSet.firstTargetPercent())));
         BigDecimal secondTargetPrice = proxyEntry.multiply(BigDecimal.ONE.add(rate(ruleSet.secondTargetPercent())));
+        List<OvernightBaseExitLeg> legs = new ArrayList<>();
         int t1Index = signalIndex + 1;
-        OvernightExit t1Exit = resolveOvernightDay(
-                rows, t1Index, stopPrice, firstTargetPrice, secondTargetPrice, ruleSet
+        BigDecimal remaining = resolveOvernightDay(
+                rows, t1Index, stopPrice, firstTargetPrice, secondTargetPrice,
+                BigDecimal.ONE, legs, ruleSet
         );
-        if (t1Exit != null) {
-            return t1Exit;
+        if (remaining == null) {
+            return delayedOvernightExit(rows, t1Index, BigDecimal.ONE, legs, ruleSet);
+        }
+        if (remaining.compareTo(BigDecimal.ZERO) == 0) {
+            return exitPlan(legs);
         }
 
         EastMoneyKLine t1 = rows.get(t1Index);
@@ -228,120 +341,186 @@ public class BacktestService {
                 && t1Ma5 != null
                 && t1.close().compareTo(t1Ma5) > 0;
         if (!extendToT2) {
-            if (isLimitDownLock(t1, signal, overnightSignalRules(ruleSet))) {
-                return delayedOvernightExit(rows, t1Index, ruleSet);
+            if (isLimitDownLock(t1, signal, overnightPriceLimitRules(ruleSet))) {
+                return delayedOvernightExit(rows, t1Index, remaining, legs, ruleSet);
             }
-            return new OvernightExit(t1Index, t1.close(), "T1_TIME_EXIT");
+            legs.add(new OvernightBaseExitLeg(t1Index, remaining, t1.close(), "T1_TIME_EXIT"));
+            return exitPlan(legs);
         }
 
         int t2Index = t1Index + 1;
-        OvernightExit t2Exit = resolveOvernightDay(
-                rows, t2Index, stopPrice, firstTargetPrice, secondTargetPrice, ruleSet
+        remaining = resolveOvernightDay(
+                rows, t2Index, stopPrice, firstTargetPrice, secondTargetPrice,
+                remaining, legs, ruleSet
         );
-        if (t2Exit != null) {
-            return t2Exit;
+        if (remaining == null) {
+            BigDecimal delayedRatio = BigDecimal.ONE.subtract(
+                    legs.stream().map(OvernightBaseExitLeg::positionRatio).reduce(BigDecimal.ZERO, BigDecimal::add)
+            );
+            return delayedOvernightExit(rows, t2Index, delayedRatio, legs, ruleSet);
+        }
+        if (remaining.compareTo(BigDecimal.ZERO) == 0) {
+            return exitPlan(legs);
         }
         EastMoneyKLine t2 = rows.get(t2Index);
-        if (isLimitDownLock(t2, t1, overnightSignalRules(ruleSet))) {
-            return delayedOvernightExit(rows, t2Index, ruleSet);
+        if (isLimitDownLock(t2, t1, overnightPriceLimitRules(ruleSet))) {
+            return delayedOvernightExit(rows, t2Index, remaining, legs, ruleSet);
         }
-        return new OvernightExit(t2Index, t2.close(), "T2_TIME_EXIT");
+        legs.add(new OvernightBaseExitLeg(t2Index, remaining, t2.close(), "T2_TIME_EXIT"));
+        return exitPlan(legs);
     }
 
-    private OvernightExit resolveOvernightDay(
+    private BigDecimal resolveOvernightDay(
             List<EastMoneyKLine> rows,
             int index,
             BigDecimal stopPrice,
             BigDecimal firstTargetPrice,
             BigDecimal secondTargetPrice,
+            BigDecimal remaining,
+            List<OvernightBaseExitLeg> legs,
             OvernightBacktestRuleSet ruleSet
     ) {
         EastMoneyKLine row = rows.get(index);
         EastMoneyKLine previous = rows.get(index - 1);
-        BacktestRuleSet signalRules = overnightSignalRules(ruleSet);
-        if (isLimitDownLock(row, previous, signalRules)) {
+        BacktestRuleSet priceLimitRules = overnightPriceLimitRules(ruleSet);
+        if (isLimitDownLock(row, previous, priceLimitRules)) {
             if ((row.open() != null && row.open().compareTo(stopPrice) <= 0)
                     || (row.low() != null && row.low().compareTo(stopPrice) <= 0)) {
-                return delayedOvernightExit(rows, index, ruleSet);
+                return null;
             }
-            return null;
+            return remaining;
         }
         if (row.open() != null && row.open().compareTo(stopPrice) <= 0) {
-            return new OvernightExit(index, row.open(), "HARD_STOP");
+            legs.add(new OvernightBaseExitLeg(index, remaining, row.open(), "HARD_STOP"));
+            return BigDecimal.ZERO;
         }
         if (row.low() != null && row.low().compareTo(stopPrice) <= 0) {
-            return new OvernightExit(index, stopPrice, "HARD_STOP");
+            legs.add(new OvernightBaseExitLeg(index, remaining, stopPrice, "HARD_STOP"));
+            return BigDecimal.ZERO;
         }
-        if (row.high() != null && row.high().compareTo(secondTargetPrice) >= 0) {
-            return new OvernightExit(index, secondTargetPrice, "SECOND_TARGET");
+        boolean firstAlreadyHit = legs.stream()
+                .anyMatch(leg -> "FIRST_TARGET".equals(leg.reason()));
+        if (!firstAlreadyHit
+                && remaining.compareTo(FIRST_REDUCTION_RATIO) > 0
+                && row.high() != null
+                && row.high().compareTo(firstTargetPrice) >= 0) {
+            legs.add(new OvernightBaseExitLeg(
+                    index,
+                    FIRST_REDUCTION_RATIO,
+                    firstTargetPrice,
+                    "FIRST_TARGET"
+            ));
+            remaining = remaining.subtract(FIRST_REDUCTION_RATIO);
         }
-        if (row.high() != null && row.high().compareTo(firstTargetPrice) >= 0) {
-            return new OvernightExit(index, firstTargetPrice, "FIRST_TARGET");
+        if (remaining.compareTo(BigDecimal.ZERO) > 0
+                && row.high() != null
+                && row.high().compareTo(secondTargetPrice) >= 0) {
+            legs.add(new OvernightBaseExitLeg(index, remaining, secondTargetPrice, "SECOND_TARGET"));
+            return BigDecimal.ZERO;
+        }
+        return remaining;
+    }
+
+    private OvernightExitPlan delayedOvernightExit(
+            List<EastMoneyKLine> rows,
+            int lockedIndex,
+            BigDecimal remaining,
+            List<OvernightBaseExitLeg> existingLegs,
+            OvernightBacktestRuleSet ruleSet
+    ) {
+        BacktestRuleSet priceLimitRules = overnightPriceLimitRules(ruleSet);
+        for (int index = lockedIndex + 1; index < rows.size(); index++) {
+            EastMoneyKLine row = rows.get(index);
+            EastMoneyKLine previous = rows.get(index - 1);
+            if (!isLimitDownLock(row, previous, priceLimitRules)) {
+                BigDecimal price = row.open() != null && row.open().compareTo(BigDecimal.ZERO) > 0
+                        ? row.open()
+                        : row.close();
+                if (price == null) {
+                    return null;
+                }
+                List<OvernightBaseExitLeg> legs = new ArrayList<>(existingLegs);
+                legs.add(new OvernightBaseExitLeg(index, remaining, price, "LIMIT_DOWN_DELAYED"));
+                return exitPlan(legs);
+            }
         }
         return null;
     }
 
-    private OvernightExit delayedOvernightExit(
-            List<EastMoneyKLine> rows,
-            int lockedIndex,
-            OvernightBacktestRuleSet ruleSet
-    ) {
-        BacktestRuleSet signalRules = overnightSignalRules(ruleSet);
-        for (int index = lockedIndex + 1; index < rows.size(); index++) {
-            EastMoneyKLine row = rows.get(index);
-            EastMoneyKLine previous = rows.get(index - 1);
-            if (!isLimitDownLock(row, previous, signalRules)) {
-                BigDecimal price = row.open() != null && row.open().compareTo(BigDecimal.ZERO) > 0
-                        ? row.open()
-                        : row.close();
-                return price == null ? null : new OvernightExit(index, price, "LIMIT_DOWN_DELAYED");
-            }
+    private OvernightExitPlan exitPlan(List<OvernightBaseExitLeg> legs) {
+        if (legs.isEmpty()) {
+            return null;
         }
-        return null;
+        OvernightBaseExitLeg finalLeg = legs.get(legs.size() - 1);
+        boolean firstTargetHit = legs.stream().anyMatch(leg -> "FIRST_TARGET".equals(leg.reason()));
+        boolean secondTargetHit = legs.stream().anyMatch(leg -> "SECOND_TARGET".equals(leg.reason()));
+        return new OvernightExitPlan(
+                finalLeg.exitIndex(),
+                finalLeg.reason(),
+                firstTargetHit,
+                secondTargetHit,
+                List.copyOf(legs)
+        );
     }
 
     private OvernightBacktestTrade toOvernightTrade(
             String symbol,
             List<EastMoneyKLine> rows,
             int signalIndex,
-            OvernightExit exit,
+            OvernightExitPlan exit,
             OvernightBacktestRuleSet ruleSet
     ) {
         EastMoneyKLine signal = rows.get(signalIndex);
         BigDecimal proxyEntry = signal.close().multiply(BigDecimal.ONE.add(rate(ruleSet.slippagePercent())));
-        BigDecimal executableExit = exit.baseExitPrice().multiply(BigDecimal.ONE.subtract(rate(ruleSet.slippagePercent())));
-        List<EastMoneyKLine> holdingRows = rows.subList(signalIndex + 1, exit.exitIndex() + 1);
+        List<OvernightBacktestExitLeg> exitLegs = exit.legs().stream()
+                .map(leg -> new OvernightBacktestExitLeg(
+                        rows.get(leg.exitIndex()).tradeDate(),
+                        leg.positionRatio().setScale(2, RoundingMode.HALF_UP),
+                        executionMoney(leg.baseExitPrice().multiply(BigDecimal.ONE.subtract(rate(ruleSet.slippagePercent())))),
+                        leg.reason()
+                ))
+                .toList();
+        BigDecimal weightedExitPrice = exitLegs.stream()
+                .map(leg -> leg.executablePrice().multiply(leg.positionRatio()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<EastMoneyKLine> holdingRows = rows.subList(signalIndex + 1, exit.finalExitIndex() + 1);
         BigDecimal maxHigh = holdingRows.stream()
                 .map(EastMoneyKLine::high)
                 .filter(value -> value != null)
                 .max(BigDecimal::compareTo)
-                .orElse(exit.baseExitPrice());
+                .orElse(weightedExitPrice);
         BigDecimal minLow = holdingRows.stream()
                 .map(EastMoneyKLine::low)
                 .filter(value -> value != null)
                 .min(BigDecimal::compareTo)
-                .orElse(exit.baseExitPrice());
+                .orElse(weightedExitPrice);
         BigDecimal commissionCost = ruleSet.commissionPercent().multiply(new BigDecimal("2"));
         BigDecimal slippageCost = ruleSet.slippagePercent().multiply(new BigDecimal("2"));
         BigDecimal totalCost = commissionCost.add(ruleSet.stampDutyPercent()).add(slippageCost);
-        BigDecimal rawReturn = percent(exit.baseExitPrice().subtract(signal.close()), signal.close());
-        BigDecimal netReturn = rawReturn == null ? null : rawReturn.subtract(totalCost);
+        BigDecimal executableReturn = percent(weightedExitPrice.subtract(proxyEntry), proxyEntry);
+        BigDecimal netReturn = executableReturn == null
+                ? null
+                : executableReturn.subtract(commissionCost).subtract(ruleSet.stampDutyPercent());
         EastMoneyKLine t1 = rows.get(signalIndex + 1);
         LocalDate t2Date = signalIndex + 2 < rows.size() ? rows.get(signalIndex + 2).tradeDate() : null;
-        BigDecimal gap = t1.open() == null ? null : percent(t1.open().subtract(signal.close()), signal.close());
+        BigDecimal gap = t1.open() == null ? null : percent(t1.open().subtract(proxyEntry), proxyEntry);
         return new OvernightBacktestTrade(
                 symbol,
                 signal.tradeDate(),
-                money(proxyEntry),
+                executionMoney(proxyEntry),
                 t1.tradeDate(),
                 t2Date,
-                rows.get(exit.exitIndex()).tradeDate(),
-                money(executableExit),
+                rows.get(exit.finalExitIndex()).tradeDate(),
+                executionMoney(weightedExitPrice),
+                exit.firstTargetHit(),
+                exit.secondTargetHit(),
+                exitLegs,
+                executionMoney(weightedExitPrice),
                 scale(netReturn),
                 scale(percent(maxHigh.subtract(proxyEntry), proxyEntry)),
                 scale(percent(minLow.subtract(proxyEntry), proxyEntry)),
                 scale(gap),
-                exit.exitIndex() - signalIndex,
+                exit.finalExitIndex() - signalIndex,
                 scale(commissionCost),
                 scale(ruleSet.stampDutyPercent()),
                 scale(slippageCost),
@@ -362,8 +541,8 @@ public class BacktestService {
             );
         }
         int positive = countOvernight(trades, trade -> trade.netReturnPercent().compareTo(BigDecimal.ZERO) > 0);
-        int firstTarget = countOvernight(trades, trade -> "FIRST_TARGET".equals(trade.exitReason()));
-        int secondTarget = countOvernight(trades, trade -> "SECOND_TARGET".equals(trade.exitReason()));
+        int firstTarget = countOvernight(trades, OvernightBacktestTrade::firstTargetHit);
+        int secondTarget = countOvernight(trades, OvernightBacktestTrade::secondTargetHit);
         int hardStop = countOvernight(trades, trade -> "HARD_STOP".equals(trade.exitReason()));
         int timeStop = countOvernight(trades, trade ->
                 "T1_TIME_EXIT".equals(trade.exitReason()) || "T2_TIME_EXIT".equals(trade.exitReason()));
@@ -878,6 +1057,10 @@ public class BacktestService {
         return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
     }
 
+    private BigDecimal executionMoney(BigDecimal value) {
+        return value == null ? null : value.setScale(4, RoundingMode.HALF_UP);
+    }
+
     private String valueText(BigDecimal value) {
         return value == null ? "待复核" : value.setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
     }
@@ -897,6 +1080,26 @@ public class BacktestService {
     private record TradeExit(int exitIndex, BigDecimal exitPrice, BigDecimal maxDrawdownPercent, String exitReason) {
     }
 
-    private record OvernightExit(int exitIndex, BigDecimal baseExitPrice, String exitReason) {
+    private record OvernightSymbolOutcome(
+            OvernightBacktestSymbolResult result,
+            List<OvernightBacktestTrade> trades
+    ) {
+    }
+
+    private record OvernightBaseExitLeg(
+            int exitIndex,
+            BigDecimal positionRatio,
+            BigDecimal baseExitPrice,
+            String reason
+    ) {
+    }
+
+    private record OvernightExitPlan(
+            int finalExitIndex,
+            String exitReason,
+            boolean firstTargetHit,
+            boolean secondTargetHit,
+            List<OvernightBaseExitLeg> legs
+    ) {
     }
 }

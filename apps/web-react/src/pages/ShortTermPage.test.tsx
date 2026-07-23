@@ -11,7 +11,7 @@ import {
   startShortTermScanJob
 } from '../api/client'
 import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
-import type { ShortTermScheduledSnapshot, ShortTermSnapshotStatus } from '../types'
+import type { OvernightBacktestReport, ShortTermScheduledSnapshot, ShortTermSnapshotStatus } from '../types'
 import { ShortTermPage } from './ShortTermPage'
 
 vi.mock('../api/client', () => ({
@@ -106,6 +106,105 @@ const finalReadySnapshot: ShortTermScheduledSnapshot = {
   report: emptyReport
 }
 
+const candidate = (symbol: string, name = `候选${symbol}`) => ({
+  rank: 1,
+  symbol,
+  name,
+  market: '沪市',
+  industry: '电力',
+  latestPrice: 5.21,
+  changePercent: 1.2,
+  amount: 900_000_000,
+  phaseLabel: '右侧早期',
+  action: 'WATCH_RIGHT_SIDE',
+  actionLabel: '观察',
+  reason: '量价结构确认',
+  todayAdvice: { action: 'NEXT_WATCH', actionLabel: '次日关注' },
+  tailSignal: { status: 'CONFIRMED', statusLabel: '尾盘确认', score: 75 },
+  score: {
+    technicalScore: 80,
+    volumeScore: 75,
+    marketHeatScore: 70,
+    valuationScore: 60,
+    financialScore: 65,
+    riskPenalty: 5,
+    finalScore: 74
+  },
+  technical: {
+    goldenCross: null,
+    rightSideSignal: 'EARLY_CONFIRMED',
+    ma20SlopePercent: 0.8,
+    distanceToMa20Percent: 2.1,
+    breakoutFromPreviousHigh20Percent: 1.3,
+    volumeRatio20: 1.5
+  },
+  financial: { qualityScore: 65 },
+  quoteFreshness: { blocksRealtimeDecision: false, statusLabel: '新鲜' }
+})
+
+function reportWithCandidates(symbols: string[], generatedAt = '2026-07-23T14:53:00+08:00') {
+  return {
+    ...emptyReport,
+    candidateCount: symbols.length,
+    candidates: symbols.map((symbol) => candidate(symbol)),
+    generatedAt
+  } as never
+}
+
+function overnightReport(
+  symbols: string[],
+  sampleCount: number,
+  status: 'OK' | 'PARTIAL' | 'DATA_BLOCKED' = 'OK',
+  message = '技术信号历史样本已生成'
+): OvernightBacktestReport {
+  return {
+    scope: '短线 T+1/T+2 技术信号历史验证',
+    validationScope: ['生产同源 K 线技术信号'],
+    unreplayedGates: ['财报质量门禁', '市场情绪门禁', '尾盘分钟确认门禁', '实时行情新鲜度门禁'],
+    methodology: [],
+    ruleSet: {
+      lookbackDays: 900,
+      firstTargetPercent: 2.5,
+      secondTargetPercent: 4.5,
+      hardStopPercent: 3.5,
+      maxHoldingTradingDays: 2,
+      commissionPercent: 0.03,
+      stampDutyPercent: 0.05,
+      slippagePercent: 0.05,
+      limitMovePercent: 9.8
+    },
+    symbols,
+    status,
+    message,
+    summary: {
+      symbolCount: symbols.length,
+      sampleCount,
+      positiveRatePercent: 58.33,
+      averageReturnPercent: 0.82,
+      medianReturnPercent: 0.55,
+      averageRunupPercent: 2.1,
+      averageDrawdownPercent: -1.4,
+      firstTargetRatePercent: 25,
+      secondTargetRatePercent: 16.67,
+      hardStopRatePercent: 8.33,
+      timeStopRatePercent: 50,
+      gapDownRatePercent: 33.33,
+      sampleStart: '2025-01-01',
+      sampleEnd: '2026-07-01',
+      conclusion: '技术样本正收益但波动需复核'
+    },
+    results: symbols.map((symbol) => ({
+      symbol,
+      status: status === 'OK' ? 'OK' : 'SOURCE_FAILED',
+      klineCount: status === 'OK' ? 900 : 0,
+      sampleCount: status === 'OK' ? sampleCount : 0,
+      dataGaps: status === 'OK' ? [] : [`${symbol} K 线数据源失败`]
+    })),
+    trades: [],
+    generatedAt: '2026-07-23T14:53:00+08:00'
+  }
+}
+
 describe('ShortTermPage prepared snapshot mount', () => {
   let host: HTMLDivElement
   let root: Root
@@ -116,15 +215,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
     document.body.append(host)
     root = createRoot(host)
     vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue(finalReadySnapshot)
-    vi.mocked(fetchOvernightBacktest).mockResolvedValue({
-      scope: 'OVERNIGHT',
-      methodology: [],
-      ruleSet: {} as never,
-      symbols: [],
-      summary: {} as never,
-      trades: [],
-      generatedAt: '2026-07-23T14:53:00+08:00'
-    })
+    vi.mocked(fetchOvernightBacktest).mockResolvedValue(overnightReport([], 0))
   })
 
   afterEach(() => {
@@ -145,83 +236,10 @@ describe('ShortTermPage prepared snapshot mount', () => {
   })
 
   it('requests the T1/T2 overnight contract without a legacy 20-day holding window', async () => {
-    vi.mocked(fetchOvernightBacktest).mockResolvedValue({
-      scope: '短线隔夜 T+1/T+2 验证',
-      methodology: [],
-      ruleSet: {
-        lookbackDays: 900,
-        firstTargetPercent: 2.5,
-        secondTargetPercent: 4.5,
-        hardStopPercent: 3.5,
-        maxHoldingTradingDays: 2,
-        commissionPercent: 0.03,
-        stampDutyPercent: 0.05,
-        slippagePercent: 0.05,
-        limitMovePercent: 9.8
-      },
-      symbols: ['600795'],
-      summary: {
-        symbolCount: 1,
-        sampleCount: 12,
-        positiveRatePercent: 58.33,
-        averageReturnPercent: 0.82,
-        medianReturnPercent: 0.55,
-        averageRunupPercent: 2.1,
-        averageDrawdownPercent: -1.4,
-        firstTargetRatePercent: 25,
-        secondTargetRatePercent: 16.67,
-        hardStopRatePercent: 8.33,
-        timeStopRatePercent: 50,
-        gapDownRatePercent: 33.33,
-        sampleStart: '2025-01-01',
-        sampleEnd: '2026-07-01',
-        conclusion: '隔夜正收益但波动需复核'
-      },
-      trades: [],
-      generatedAt: '2026-07-23T14:53:00+08:00'
-    })
-    const candidate = {
-      rank: 1,
-      symbol: '600795',
-      name: '国电电力',
-      market: '沪市',
-      industry: '电力',
-      latestPrice: 5.21,
-      changePercent: 1.2,
-      amount: 900_000_000,
-      phaseLabel: '右侧早期',
-      action: 'WATCH_RIGHT_SIDE',
-      actionLabel: '观察',
-      reason: '量价结构确认',
-      todayAdvice: { action: 'NEXT_WATCH', actionLabel: '次日关注' },
-      tailSignal: { status: 'CONFIRMED', statusLabel: '尾盘确认', score: 75 },
-      score: {
-        technicalScore: 80,
-        volumeScore: 75,
-        marketHeatScore: 70,
-        valuationScore: 60,
-        financialScore: 65,
-        riskPenalty: 5,
-        finalScore: 74
-      },
-      technical: {
-        goldenCross: null,
-        rightSideSignal: 'EARLY_CONFIRMED',
-        ma20SlopePercent: 0.8,
-        distanceToMa20Percent: 2.1,
-        breakoutFromPreviousHigh20Percent: 1.3,
-        volumeRatio20: 1.5
-      },
-      financial: { qualityScore: 65 },
-      quoteFreshness: { blocksRealtimeDecision: false, statusLabel: '新鲜' }
-    }
+    vi.mocked(fetchOvernightBacktest).mockResolvedValue(overnightReport(['600795'], 12))
     vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
       ...finalReadySnapshot,
-      report: {
-        ...emptyReport,
-        candidateCount: 1,
-        candidates: [candidate]
-      } as never
+      report: reportWithCandidates(['600795'])
     })
 
     await renderPage(root)
@@ -244,6 +262,120 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(document.body.textContent).toContain('第二目标')
     expect(document.body.textContent).toContain('硬止损')
     expect(document.body.textContent).toContain('次日低开')
+    expect(document.body.textContent).toContain('技术信号历史验证')
+    expect(document.body.textContent).toContain('未回放')
+    expect(document.body.textContent).not.toContain('完整生产策略胜率')
+    expect(document.body.textContent).not.toContain('历史验证：可参考')
+  })
+
+  it('renders all-source failure as data blocked instead of a normal zero-sample result', async () => {
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600701'])
+    })
+    vi.mocked(fetchOvernightBacktest).mockResolvedValue(overnightReport(
+      ['600701'],
+      0,
+      'DATA_BLOCKED',
+      '全部候选的 K 线数据源失败'
+    ))
+
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('技术验证数据阻断')
+    expect(document.body.textContent).toContain('全部候选的 K 线数据源失败')
+    expect(document.body.textContent).not.toContain('0 笔隔夜样本')
+  })
+
+  it('shows partial symbol gaps at batch level', async () => {
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600702', '600703'])
+    })
+    vi.mocked(fetchOvernightBacktest).mockResolvedValue({
+      ...overnightReport(['600702', '600703'], 8, 'PARTIAL', '1 只候选数据缺失'),
+      results: [
+        { symbol: '600702', status: 'OK', klineCount: 900, sampleCount: 8, dataGaps: [] },
+        { symbol: '600703', status: 'SOURCE_FAILED', klineCount: 0, sampleCount: 0, dataGaps: ['K 线数据源失败'] }
+      ]
+    })
+
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('1 只候选数据缺失')
+    expect(document.body.textContent).toContain('600703')
+    expect(document.body.textContent).toContain('K 线数据源失败')
+  })
+
+  it('ignores a late old result when the same-size candidate batch changes symbols', async () => {
+    const oldBacktest = deferred<OvernightBacktestReport>()
+    const newBacktest = deferred<OvernightBacktestReport>()
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600801', '600800'])
+    })
+    vi.mocked(fetchOvernightBacktest)
+      .mockReturnValueOnce(oldBacktest.promise)
+      .mockReturnValueOnce(newBacktest.promise)
+    mockManualReport(reportWithCandidates(['600802', '600799']), 'switch-symbol')
+
+    await renderPagePlain(root)
+    await clickButton('重新扫描')
+    await act(async () => {
+      newBacktest.resolve(overnightReport(['600799', '600802'], 22))
+      await flushPromises()
+      oldBacktest.resolve(overnightReport(['600800', '600801'], 11))
+      await flushPromises()
+    })
+
+    expect(fetchOvernightBacktest).toHaveBeenNthCalledWith(1, expect.objectContaining({ symbols: '600800,600801' }))
+    expect(fetchOvernightBacktest).toHaveBeenNthCalledWith(2, expect.objectContaining({ symbols: '600799,600802' }))
+    expect(document.body.textContent).toContain('22 笔隔夜样本')
+    expect(document.body.textContent).not.toContain('11 笔隔夜样本')
+  })
+
+  it('clears loading and old results when the candidate batch becomes empty', async () => {
+    const oldBacktest = deferred<OvernightBacktestReport>()
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600803'])
+    })
+    vi.mocked(fetchOvernightBacktest).mockReturnValue(oldBacktest.promise)
+    mockManualReport(reportWithCandidates([], '2026-07-23T14:54:00+08:00'), 'switch-empty')
+
+    await renderPagePlain(root)
+    await clickButton('重新扫描')
+    await act(async () => {
+      oldBacktest.resolve(overnightReport(['600803'], 33))
+      await flushPromises()
+    })
+
+    expect(fetchOvernightBacktest).toHaveBeenCalledTimes(1)
+    expect(document.body.textContent).not.toContain('验证中')
+    expect(document.body.textContent).not.toContain('33 笔隔夜样本')
+  })
+
+  it('ignores late old rejection and finally after a newer candidate batch succeeds', async () => {
+    const oldBacktest = deferred<OvernightBacktestReport>()
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600804'])
+    })
+    vi.mocked(fetchOvernightBacktest)
+      .mockReturnValueOnce(oldBacktest.promise)
+      .mockResolvedValueOnce(overnightReport(['600805'], 44))
+    mockManualReport(reportWithCandidates(['600805']), 'switch-reject')
+
+    await renderPagePlain(root)
+    await clickButton('重新扫描')
+    await act(async () => {
+      oldBacktest.reject(new Error('旧批次失败'))
+      await flushPromises()
+    })
+
+    expect(document.body.textContent).toContain('44 笔隔夜样本')
+    expect(document.body.textContent).not.toContain('旧批次失败')
+    expect(document.body.textContent).not.toContain('验证中')
   })
 
   it.each(['重新扫描', '应用阈值'])(
@@ -427,6 +559,42 @@ async function renderPage(root: Root) {
       </StrictMode>
     )
     await flushPromises()
+  })
+}
+
+async function renderPagePlain(root: Root) {
+  await act(async () => {
+    root.render(<ShortTermPage />)
+    await flushPromises()
+  })
+}
+
+function mockManualReport(report: typeof emptyReport, jobId: string) {
+  vi.mocked(startShortTermScanJob).mockResolvedValue({
+    jobId,
+    status: 'RUNNING',
+    tradeDate: '2026-07-23',
+    resultStatus: 'RUNNING',
+    strategyVersion: 'short-term-right-side-v2',
+    blockedReasons: [],
+    createdAt: '2026-07-23T14:54:00+08:00',
+    startedAt: null,
+    finishedAt: null,
+    message: '手动扫描中',
+    report: null
+  })
+  vi.mocked(fetchShortTermScanJob).mockResolvedValue({
+    jobId,
+    status: 'SUCCEEDED',
+    tradeDate: '2026-07-23',
+    resultStatus: report.candidateCount ? 'FINAL_READY' : 'NO_TRADE',
+    strategyVersion: 'short-term-right-side-v2',
+    blockedReasons: [],
+    createdAt: '2026-07-23T14:54:00+08:00',
+    startedAt: '2026-07-23T14:54:00+08:00',
+    finishedAt: '2026-07-23T14:55:00+08:00',
+    message: '手动扫描完成',
+    report: report as never
   })
 }
 

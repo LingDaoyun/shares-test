@@ -46,6 +46,22 @@ const DEFAULT_DRAFT: DraftParams = {
   minFinancialScore: 58
 }
 
+const OVERNIGHT_RULES = {
+  lookbackDays: 900,
+  firstTargetPercent: 2.5,
+  secondTargetPercent: 4.5,
+  hardStopPercent: 3.5,
+  maxHoldingTradingDays: 2,
+  commissionPercent: 0.03,
+  stampDutyPercent: 0.05,
+  slippagePercent: 0.05,
+  limitMovePercent: 9.8
+} as const
+
+const OVERNIGHT_RULE_KEY = Object.entries(OVERNIGHT_RULES)
+  .map(([key, value]) => `${key}:${value}`)
+  .join('|')
+
 const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'neutral' | 'sky'> = {
   RIGHT_EARLY_ADD: 'success',
   WATCH_RIGHT_SIDE: 'brand',
@@ -70,9 +86,15 @@ export function ShortTermPage() {
   const [scanMessage, setScanMessage] = useState('')
   const [activeJobId, setActiveJobId] = useState('')
   const manualRunGeneration = useRef(0)
+  const backtestRequestGeneration = useRef(0)
   const pollTimer = useRef<number | undefined>(undefined)
   const preparedSnapshotRequest = useRef<ReturnType<typeof fetchLatestShortTermScheduledSnapshot> | null>(null)
   const manualScanRequested = useRef(false)
+  const overnightSymbols = useMemo(
+    () => [...new Set((report?.candidates ?? []).map((candidate) => candidate.symbol))].sort().join(','),
+    [report?.candidates]
+  )
+  const overnightRequestKey = `${overnightSymbols}|${OVERNIGHT_RULE_KEY}`
 
   useEffect(() => {
     let alive = true
@@ -228,39 +250,38 @@ export function ShortTermPage() {
   }, [report, selectedSymbol])
 
   useEffect(() => {
-    if (!report?.candidates.length) {
+    const generation = backtestRequestGeneration.current + 1
+    backtestRequestGeneration.current = generation
+    const ownsRequest = () => backtestRequestGeneration.current === generation
+    if (!overnightSymbols) {
       setBacktestReport(null)
       setBacktestError('')
+      setBacktestLoading(false)
       return
     }
-    let alive = true
     setBacktestLoading(true)
     setBacktestError('')
-    const symbols = report.candidates.map((candidate) => candidate.symbol).join(',')
+    setBacktestReport(null)
     fetchOvernightBacktest({
-      symbols,
-      lookbackDays: 900,
-      firstTargetPercent: 2.5,
-      secondTargetPercent: 4.5,
-      hardStopPercent: 3.5,
-      maxHoldingTradingDays: 2
+      symbols: overnightSymbols,
+      ...OVERNIGHT_RULES
     })
       .then((data) => {
-        if (alive) setBacktestReport(data)
+        if (ownsRequest()) setBacktestReport(data)
       })
       .catch((e) => {
-        if (alive) {
+        if (ownsRequest()) {
           setBacktestReport(null)
           setBacktestError(extractErrorMessage(e))
         }
       })
       .finally(() => {
-        if (alive) setBacktestLoading(false)
+        if (ownsRequest()) setBacktestLoading(false)
       })
     return () => {
-      alive = false
+      if (ownsRequest()) backtestRequestGeneration.current += 1
     }
-  }, [report?.generatedAt, report?.candidateCount])
+  }, [overnightRequestKey])
 
   const selected = useMemo(() => {
     return resolveDetailSelection(report?.candidates ?? [], selectedSymbol, (candidate) => candidate.symbol)
@@ -375,11 +396,13 @@ export function ShortTermPage() {
             <HotDirectionsCard directions={report.hotDirections} />
           </div>
 
-          <BacktestSummaryPanel
-            summary={backtestReport?.summary}
-            loading={backtestLoading}
-            error={backtestError}
-          />
+          {report.candidates.length ? (
+            <BacktestSummaryPanel
+              report={backtestReport}
+              loading={backtestLoading}
+              error={backtestError}
+            />
+          ) : null}
 
           <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧候选</span>} flush>
             {report.candidates.length ? (
@@ -389,8 +412,6 @@ export function ShortTermPage() {
                     key={candidate.symbol}
                     candidate={candidate}
                     selected={selected?.symbol === candidate.symbol}
-                    backtestSummary={backtestReport?.summary}
-                    backtestLoading={backtestLoading}
                     onSelect={() => setSelectedSymbol(candidate.symbol)}
                   />
                 ))}
@@ -409,9 +430,6 @@ export function ShortTermPage() {
             {selected ? (
               <CandidateDetail
                 candidate={selected}
-                backtestSummary={backtestReport?.summary}
-                backtestLoading={backtestLoading}
-                backtestError={backtestError}
                 weightProfile={report.weightProfile}
                 generatedAt={report.generatedAt}
                 tradeCaptureToken={report.tradeCaptureTokens?.[selected.symbol] ?? null}
@@ -507,14 +525,10 @@ function shortTermDiagnostics(report: ShortTermReport | null) {
 function CandidateRow({
   candidate,
   selected,
-  backtestSummary,
-  backtestLoading,
   onSelect
 }: {
   candidate: ShortTermCandidate
   selected: boolean
-  backtestSummary?: OvernightBacktestSummary
-  backtestLoading: boolean
   onSelect: () => void
 }) {
   const goldenCross = candidate.technical.goldenCross
@@ -541,11 +555,6 @@ function CandidateRow({
               : ''}
           </Tag>
           <Tag tone="neutral">20日斜率 {formatNumber(candidate.technical.ma20SlopePercent)}%</Tag>
-          {backtestSummary ? (
-            <Tag tone={backtestTone(backtestSummary)}>历史验证：{backtestSupportLabel(backtestSummary)}</Tag>
-          ) : backtestLoading ? (
-            <Tag tone="neutral">历史验证中</Tag>
-          ) : null}
           {candidate.score.marketHeatScore >= 68 ? <Tag tone="brand">热度 {formatNumber(candidate.score.marketHeatScore)}</Tag> : null}
           <Tag tone="neutral">财报 {formatNumber(candidate.financial.qualityScore)}</Tag>
           <Tag tone={tailTone(candidate.tailSignal.status)}>尾盘：{candidate.tailSignal.statusLabel}</Tag>
@@ -575,17 +584,11 @@ function CandidateRow({
 
 function CandidateDetail({
   candidate,
-  backtestSummary,
-  backtestLoading,
-  backtestError,
   weightProfile,
   generatedAt,
   tradeCaptureToken
 }: {
   candidate: ShortTermCandidate
-  backtestSummary?: OvernightBacktestSummary
-  backtestLoading: boolean
-  backtestError: string
   weightProfile: ShortTermWeightProfile
   generatedAt: string
   tradeCaptureToken: string | null
@@ -676,8 +679,6 @@ function CandidateDetail({
           factorContext={shortTermFactorContext(candidate, tradeCaptureToken)}
         />
         <EvidenceCompletenessPanel completeness={candidate.evidenceCompleteness} />
-
-        <BacktestSummaryPanel summary={backtestSummary} loading={backtestLoading} error={backtestError} />
 
         <div className="grid grid-cols-1 gap-3">
           <ListBlock title="支撑逻辑" items={candidate.strengths} tone="success" />
@@ -808,45 +809,68 @@ function EvidenceCompletenessPanel({ completeness }: { completeness: ShortTermCa
 }
 
 function BacktestSummaryPanel({
-  summary,
+  report,
   loading,
   error
 }: {
-  summary?: OvernightBacktestSummary
+  report: OvernightBacktestReport | null
   loading: boolean
   error: string
 }) {
-  if (loading && !summary) {
+  if (loading && !report) {
     return (
       <div className="rounded-lg border border-line-soft bg-line-soft/30 p-3">
-        <Loader text="历史验证中" />
+        <Loader text="技术信号历史验证中" />
       </div>
     )
   }
-  if (error && !summary) {
+  if (error && !report) {
     return (
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-700">
-        历史验证暂不可用：{error}
+        技术信号历史验证暂不可用：{error}
       </div>
     )
   }
-  if (!summary) {
+  if (!report) {
     return (
       <div className="rounded-lg border border-line-soft bg-line-soft/30 p-3">
-        <Tag tone="neutral">历史验证</Tag>
-        <p className="mt-2 text-xs leading-relaxed text-ink-500">暂无可用历史样本，当前只看实时形态和风控条件。</p>
+        <Tag tone="neutral">技术信号历史验证</Tag>
+        <p className="mt-2 text-xs leading-relaxed text-ink-500">暂无可用技术信号历史样本。</p>
       </div>
     )
   }
+  if (report.status === 'DATA_BLOCKED') {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+        <Tag tone="danger">技术验证数据阻断</Tag>
+        <p className="mt-2 text-xs leading-relaxed text-red-700">{report.message}</p>
+      </div>
+    )
+  }
+  const { summary } = report
+  const gaps = report.results.filter((result) =>
+    result.status === 'SOURCE_FAILED' || result.status === 'INSUFFICIENT_HISTORY')
   return (
     <div className="rounded-lg border border-line-soft bg-line-soft/30 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <Tag tone="neutral">历史验证</Tag>
+          <Tag tone="neutral">技术信号历史验证</Tag>
           <Tag tone={backtestTone(summary)}>{backtestSupportLabel(summary)}</Tag>
         </div>
         <span className="tabular text-xs font-semibold text-ink-500">{summary.sampleCount} 笔隔夜样本</span>
       </div>
+      {report.status === 'PARTIAL' ? (
+        <div className="mt-3 border-l-2 border-amber-300 pl-3 text-xs leading-relaxed text-amber-700">
+          <p>{report.message}</p>
+          {gaps.map((result) => (
+            <p key={result.symbol} className="mt-1">
+              <span className="font-mono font-semibold">{result.symbol}</span>
+              {' · '}
+              {result.dataGaps[0] ?? result.status}
+            </p>
+          ))}
+        </div>
+      ) : null}
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3">
         <Metric label="正收益率" value={formatPercent(summary.positiveRatePercent)} compact />
         <Metric label="均值收益" value={<span className={changeClass(summary.averageReturnPercent)}>{formatPercent(summary.averageReturnPercent)}</span>} compact />
@@ -859,7 +883,10 @@ function BacktestSummaryPanel({
         <Metric label="次日低开" value={formatPercent(summary.gapDownRatePercent)} compact />
       </div>
       <p className="mt-2 text-xs leading-relaxed text-ink-500">
-        仅验证同批右侧信号的 T+1/T+2 隔夜表现，已计入双边滑点、双边佣金与卖出印花税；样本少时只做降权参考。
+        已回放：{report.validationScope.join('；')}。仅表示技术信号历史验证，不代表完整生产策略表现。
+      </p>
+      <p className="mt-1 text-xs leading-relaxed text-ink-500">
+        未回放：{report.unreplayedGates.join('、')}。
       </p>
     </div>
   )

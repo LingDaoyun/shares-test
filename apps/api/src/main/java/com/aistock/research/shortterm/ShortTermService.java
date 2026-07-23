@@ -138,7 +138,7 @@ public class ShortTermService {
     private final EvidenceCompletenessService evidenceCompletenessService;
     private final TradingClockService tradingClockService;
     private final QuoteFreshnessService quoteFreshnessService;
-    private final ShortTermGoldenCrossAnalyzer goldenCrossAnalyzer;
+    private final ShortTermTechnicalSignalEvaluator technicalSignalEvaluator;
     private final ShortTermTradePlanService tradePlanService;
     private final ShortTermAutomationSettings automationSettings;
     private final ValuationContextCalculator valuationContextCalculator = new ValuationContextCalculator();
@@ -187,7 +187,7 @@ public class ShortTermService {
                 evidenceCompletenessService,
                 tradingClockService,
                 quoteFreshnessService,
-                goldenCrossAnalyzer,
+                new ShortTermTechnicalSignalEvaluator(goldenCrossAnalyzer),
                 new ShortTermTradePlanService(tradingClockService),
                 new ShortTermAutomationSettings(new StandardEnvironment())
         );
@@ -199,7 +199,7 @@ public class ShortTermService {
             EvidenceCompletenessService evidenceCompletenessService,
             TradingClockService tradingClockService,
             QuoteFreshnessService quoteFreshnessService,
-            ShortTermGoldenCrossAnalyzer goldenCrossAnalyzer,
+            ShortTermTechnicalSignalEvaluator technicalSignalEvaluator,
             ShortTermTradePlanService tradePlanService,
             ShortTermAutomationSettings automationSettings
     ) {
@@ -207,7 +207,7 @@ public class ShortTermService {
         this.evidenceCompletenessService = evidenceCompletenessService;
         this.tradingClockService = tradingClockService;
         this.quoteFreshnessService = quoteFreshnessService;
-        this.goldenCrossAnalyzer = goldenCrossAnalyzer;
+        this.technicalSignalEvaluator = technicalSignalEvaluator;
         this.tradePlanService = tradePlanService;
         this.automationSettings = automationSettings;
     }
@@ -500,153 +500,23 @@ public class ShortTermService {
                 .filter(kline -> kline.close() != null && kline.tradeDate() != null)
                 .sorted(Comparator.comparing(EastMoneyKLine::tradeDate))
                 .toList();
-        if (sorted.size() < 20) {
-            return new TechnicalContext(
-                    quote,
-                    sorted,
-                    new ShortTermTechnicalSnapshot(null, null, null, null, null, null, null, null, null, null, null, null, null,
-                            null, null, null, null, null, null, null, 0, "K线不足", ShortTermGoldenCrossSnapshot.unavailable(),
-                            null, null),
-                    null,
-                    null,
-                    List.of("近一年 K 线不足，不能确认右侧启动")
-            );
-        }
-
-        EastMoneyKLine last = sorted.get(sorted.size() - 1);
-        EastMoneyKLine previous = sorted.size() >= 2 ? sorted.get(sorted.size() - 2) : null;
-        List<EastMoneyKLine> previousRows = sorted.subList(0, sorted.size() - 1);
-        BigDecimal ma5 = movingAverage(sorted, 5);
-        BigDecimal ma10 = movingAverage(sorted, 10);
-        BigDecimal ma20 = movingAverage(sorted, 20);
-        BigDecimal ma60 = movingAverage(sorted, 60);
-        BigDecimal ma20Slope = movingAverageSlope(sorted, 20, 5);
-        BigDecimal ma60Slope = movingAverageSlope(sorted, 60, 10);
-        BigDecimal previousHigh20 = high(previousRows, 20);
-        BigDecimal previousHigh60 = high(previousRows, 60);
-        BigDecimal previousLow20 = low(previousRows, 20);
-        BigDecimal high120 = high(sorted, 120);
-        BigDecimal low120 = low(sorted, 120);
-        BigDecimal low60 = low(sorted, 60);
-        BigDecimal high60 = high(sorted, 60);
+        EastMoneyKLine last = sorted.isEmpty() ? null : sorted.get(sorted.size() - 1);
         BigDecimal close = latestClose(quote, last);
-        BigDecimal volumeRatio5 = volumeRatio(sorted, 5);
-        BigDecimal volumeRatio20 = volumeRatio(sorted, 20);
-        BigDecimal range60 = rangePosition(close, low60, high60);
-        BigDecimal range120 = rangePosition(close, low120, high120);
-        BigDecimal distanceToMa20 = percent(close.subtract(nullToZero(ma20)), ma20);
-        BigDecimal breakoutFromPreviousHigh20 = percent(close.subtract(nullToZero(previousHigh20)), previousHigh20);
-        BigDecimal previousRange20 = percent(nullToZero(previousHigh20).subtract(nullToZero(previousLow20)), previousLow20);
-        BigDecimal drawdownFromHigh120 = percent(nullToZero(high120).subtract(close), high120);
-        BigDecimal amplitude = last.high() == null || last.low() == null ? null : percent(last.high().subtract(last.low()), close);
-        List<EastMoneyKLine> completedRows = sorted.stream()
-                .filter(row -> tradingClockService.isCompletedDailyBar(row.tradeDate()))
-                .toList();
-        BigDecimal atr14Percent = atr14Percent(completedRows);
-        BigDecimal recentSupportPrice = low(completedRows, 20);
-        int consecutiveAboveMa20 = consecutiveAboveMa(sorted, 20);
-        boolean latestBarCompleted = tradingClockService.isCompletedDailyBar(last.tradeDate());
-        ShortTermGoldenCrossSnapshot goldenCross = goldenCrossAnalyzer.analyze(sorted, latestBarCompleted);
-        String rightSideSignal = rightSideSignal(
+        boolean latestBarCompleted = last != null && tradingClockService.isCompletedDailyBar(last.tradeDate());
+        ShortTermTechnicalSignalEvaluation evaluation = technicalSignalEvaluator.evaluate(
+                sorted,
                 close,
-                previous,
-                ma5,
-                ma10,
-                ma20,
-                ma60,
-                ma20Slope,
-                previousHigh20,
-                range60,
-                distanceToMa20,
-                breakoutFromPreviousHigh20,
-                volumeRatio20,
-                ruleSet,
-                goldenCross
+                latestBarCompleted,
+                ruleSet
         );
-
         return new TechnicalContext(
                 quote,
-                sorted,
-                new ShortTermTechnicalSnapshot(
-                        last.tradeDate(),
-                        scale(ma5),
-                        scale(ma10),
-                        scale(ma20),
-                        scale(ma60),
-                        scale(ma20Slope),
-                        scale(ma60Slope),
-                        scale(previousHigh20),
-                        scale(previousHigh60),
-                        scale(breakoutFromPreviousHigh20),
-                        scale(previousRange20),
-                        scale(high120),
-                        scale(low120),
-                        scale(volumeRatio5),
-                        scale(volumeRatio20),
-                        scale(range60),
-                        scale(range120),
-                        scale(distanceToMa20),
-                        scale(drawdownFromHigh120),
-                        scale(amplitude),
-                        consecutiveAboveMa20,
-                        rightSideSignal,
-                        goldenCross,
-                        scale(atr14Percent),
-                        scale(recentSupportPrice)
-                ),
-                last,
-                previous,
-                List.of()
+                evaluation.rows(),
+                evaluation.snapshot(),
+                evaluation.last(),
+                evaluation.previous(),
+                evaluation.dataGaps()
         );
-    }
-
-    private String rightSideSignal(
-            BigDecimal close,
-            EastMoneyKLine previous,
-            BigDecimal ma5,
-            BigDecimal ma10,
-            BigDecimal ma20,
-            BigDecimal ma60,
-            BigDecimal ma20SlopePercent,
-            BigDecimal previousHigh20,
-            BigDecimal range60,
-            BigDecimal distanceToMa20,
-            BigDecimal breakoutFromPreviousHigh20Percent,
-            BigDecimal volumeRatio20,
-            ShortTermRuleSet ruleSet,
-            ShortTermGoldenCrossSnapshot goldenCross
-    ) {
-        if (close == null || ma20 == null) {
-            return "K线不足";
-        }
-        boolean aboveMa20 = close.compareTo(ma20) > 0;
-        boolean ma5AboveMa10 = ma5 != null && ma10 != null && ma5.compareTo(ma10) >= 0;
-        boolean ma20Turning = ma20SlopePercent != null && ma20SlopePercent.compareTo(new BigDecimal("-0.20")) >= 0;
-        boolean nearMa20 = distanceToMa20 != null && distanceToMa20.compareTo(BigDecimal.ZERO) >= 0 && distanceToMa20.compareTo(ruleSet.maxDistanceToMa20Percent()) <= 0;
-        boolean middleRange = range60 != null && range60.compareTo(new BigDecimal("35")) >= 0 && range60.compareTo(new BigDecimal("92")) <= 0;
-        boolean volumeConfirmed = hasVolumeConfirmation(volumeRatio20, ruleSet);
-        boolean crossedMa20 = previous != null && previous.close() != null && previous.close().compareTo(ma20) <= 0 && aboveMa20;
-        boolean breakout20 = previousHigh20 != null && close.compareTo(previousHigh20) >= 0
-                || breakoutFromPreviousHigh20Percent != null && breakoutFromPreviousHigh20Percent.compareTo(BigDecimal.ZERO) >= 0;
-        boolean aboveMa60 = ma60 != null && close.compareTo(ma60) > 0;
-        boolean approachingGoldenCross = goldenCross != null && "APPROACHING".equals(goldenCross.state());
-
-        if (aboveMa20 && ma5AboveMa10 && ma20Turning && nearMa20 && middleRange && volumeConfirmed && (crossedMa20 || breakout20)) {
-            return "右侧早期确认";
-        }
-        if (approachingGoldenCross && aboveMa20 && ma20Turning && nearMa20 && middleRange) {
-            return "右侧早期观察";
-        }
-        if (aboveMa20 && ma5AboveMa10 && ma20Turning && nearMa20 && middleRange) {
-            return "右侧早期观察";
-        }
-        if (aboveMa20 && aboveMa60 && !nearMa20) {
-            return "右侧已拉开";
-        }
-        if (aboveMa20) {
-            return "右侧雏形";
-        }
-        return "尚未右侧";
     }
 
     private ShortTermFinancialSnapshot financialSnapshot(String symbol) {
@@ -2505,7 +2375,7 @@ public class ShortTermService {
         if (quote.latestPrice() != null && quote.latestPrice().compareTo(BigDecimal.ZERO) > 0) {
             return quote.latestPrice();
         }
-        return last.close();
+        return last == null ? null : last.close();
     }
 
     private BigDecimal buyZoneLow(BigDecimal price, ShortTermTechnicalSnapshot technical) {

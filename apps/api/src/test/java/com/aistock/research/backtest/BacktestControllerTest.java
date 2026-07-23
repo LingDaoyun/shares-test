@@ -56,11 +56,18 @@ class BacktestControllerTest {
                 new BigDecimal("0.03"), new BigDecimal("0.05"),
                 new BigDecimal("0.05"), new BigDecimal("9.80")
         )).thenReturn(new OvernightBacktestReport(
-                "短线隔夜 T+1/T+2 验证",
+                "短线 T+1/T+2 技术信号历史验证",
+                List.of("生产同源 K 线技术信号"),
+                List.of("财报质量门禁", "市场情绪门禁", "尾盘分钟确认门禁", "实时行情新鲜度门禁"),
                 List.of("不使用未来数据"),
                 ruleSet,
                 List.of("600795"),
+                "OK",
+                "技术信号历史样本已生成",
                 summary,
+                List.of(new OvernightBacktestSymbolResult(
+                        "600795", "OK", 900, 1, List.of()
+                )),
                 List.of(),
                 Instant.parse("2026-07-23T07:00:00Z")
         ));
@@ -77,10 +84,14 @@ class BacktestControllerTest {
                         .param("slippagePercent", "0.05")
                         .param("limitMovePercent", "9.80"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.scope").value("短线隔夜 T+1/T+2 验证"))
+                .andExpect(jsonPath("$.scope").value("短线 T+1/T+2 技术信号历史验证"))
+                .andExpect(jsonPath("$.validationScope[0]").value("生产同源 K 线技术信号"))
+                .andExpect(jsonPath("$.unreplayedGates").isArray())
+                .andExpect(jsonPath("$.status").value("OK"))
                 .andExpect(jsonPath("$.ruleSet.maxHoldingTradingDays").value(2))
                 .andExpect(jsonPath("$.summary.sampleCount").value(1))
                 .andExpect(jsonPath("$.summary.positiveRatePercent").value(100.0))
+                .andExpect(jsonPath("$.results[0].status").value("OK"))
                 .andExpect(jsonPath("$.trades").isArray());
 
         verify(service).overnightBacktest(

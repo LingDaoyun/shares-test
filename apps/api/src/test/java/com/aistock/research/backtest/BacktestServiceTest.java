@@ -52,24 +52,58 @@ class BacktestServiceTest {
     }
 
     @Test
-    void simulatesFirstAndSecondTargetsWithoutHoldingPastT2() {
+    void modelsSameDaySecondTargetAsTwoHalfPositionExitLegs() {
         eastMoneyClient.klines.put("600101", overnightRows("600101",
-                bar("10.45", "10.50", "10.75", "10.30"),
+                bar("10.45", "10.80", "11.00", "10.30"),
                 bar("10.55", "10.60", "10.70", "10.45")));
-        eastMoneyClient.klines.put("600102", overnightRows("600102",
-                bar("10.45", "10.50", "10.60", "10.30"),
-                bar("10.55", "10.80", "11.00", "10.45")));
 
-        OvernightBacktestReport report = overnightBacktest("600101,600102");
+        OvernightBacktestReport report = overnightBacktest("600101");
+        OvernightBacktestTrade trade = report.trades().get(0);
+
+        assertThat(trade.firstTargetHit()).isTrue();
+        assertThat(trade.secondTargetHit()).isTrue();
+        assertThat(trade.exitReason()).isEqualTo("SECOND_TARGET");
+        assertThat(trade.holdingTradingDays()).isEqualTo(1);
+        assertThat(trade.exitLegs()).hasSize(2);
+        assertThat(trade.exitLegs())
+                .extracting(OvernightBacktestExitLeg::reason)
+                .containsExactly("FIRST_TARGET", "SECOND_TARGET");
+        assertThat(trade.exitLegs())
+                .extracting(OvernightBacktestExitLeg::positionRatio)
+                .allSatisfy(ratio -> assertThat(ratio).isEqualByComparingTo("0.50"));
+        assertThat(report.summary().firstTargetRatePercent()).isEqualByComparingTo("100.00");
+        assertThat(report.summary().secondTargetRatePercent()).isEqualByComparingTo("100.00");
+    }
+
+    @Test
+    void carriesTheRemainingHalfAfterFirstTargetToT2TargetStopOrTimeExit() {
+        eastMoneyClient.klines.put("600102", overnightRows("600102",
+                bar("10.45", "10.50", "10.75", "10.30"),
+                bar("10.55", "10.80", "11.00", "10.45")));
+        eastMoneyClient.klines.put("600110", overnightRows("600110",
+                bar("10.45", "10.50", "10.75", "10.30"),
+                bar("9.95", "10.05", "10.20", "9.90")));
+        eastMoneyClient.klines.put("600111", overnightRows("600111",
+                bar("10.45", "10.50", "10.75", "10.30"),
+                bar("10.55", "10.55", "10.80", "10.40")));
+
+        OvernightBacktestReport report = overnightBacktest("600102,600110,600111");
 
         assertThat(report.trades())
                 .extracting(OvernightBacktestTrade::exitReason)
-                .containsExactlyInAnyOrder("FIRST_TARGET", "SECOND_TARGET");
+                .containsExactlyInAnyOrder("SECOND_TARGET", "HARD_STOP", "T2_TIME_EXIT");
+        assertThat(report.trades()).allSatisfy(trade -> {
+            assertThat(trade.firstTargetHit()).isTrue();
+            assertThat(trade.exitLegs()).hasSize(2);
+            assertThat(trade.exitLegs().get(0).reason()).isEqualTo("FIRST_TARGET");
+            assertThat(trade.exitLegs().get(0).positionRatio()).isEqualByComparingTo("0.50");
+            assertThat(trade.exitLegs().get(1).positionRatio()).isEqualByComparingTo("0.50");
+        });
         assertThat(report.trades())
                 .filteredOn(trade -> !"LIMIT_DOWN_DELAYED".equals(trade.exitReason()))
                 .allSatisfy(trade -> assertThat(trade.holdingTradingDays()).isBetween(1, 2));
-        assertThat(report.summary().firstTargetRatePercent()).isEqualByComparingTo("50.00");
-        assertThat(report.summary().secondTargetRatePercent()).isEqualByComparingTo("50.00");
+        assertThat(report.summary().firstTargetRatePercent()).isEqualByComparingTo("100.00");
+        assertThat(report.summary().secondTargetRatePercent()).isEqualByComparingTo("33.33");
     }
 
     @Test
@@ -123,8 +157,27 @@ class BacktestServiceTest {
         assertThat(trade.stampDutyCostPercent()).isEqualByComparingTo("0.05");
         assertThat(trade.slippageCostPercent()).isEqualByComparingTo("0.10");
         assertThat(trade.totalCostPercent()).isEqualByComparingTo("0.21");
-        assertThat(trade.netReturnPercent()).isLessThan(
-                percent(new BigDecimal("10.30").subtract(new BigDecimal("10.42")), new BigDecimal("10.42")));
+        assertThat(trade.gapPercent()).isEqualByComparingTo(scale(percent(
+                new BigDecimal("10.10").subtract(trade.proxyEntryPrice()),
+                trade.proxyEntryPrice()
+        )));
+        assertThat(trade.maxRunupPercent()).isEqualByComparingTo(scale(percent(
+                new BigDecimal("10.50").subtract(trade.proxyEntryPrice()),
+                trade.proxyEntryPrice()
+        )));
+        assertThat(trade.maxDrawdownPercent()).isEqualByComparingTo(scale(percent(
+                new BigDecimal("10.08").subtract(trade.proxyEntryPrice()),
+                trade.proxyEntryPrice()
+        )));
+        BigDecimal weightedExecutableReturn = percent(
+                trade.weightedExitPrice().subtract(trade.proxyEntryPrice()),
+                trade.proxyEntryPrice()
+        );
+        assertThat(trade.netReturnPercent()).isEqualByComparingTo(scale(
+                weightedExecutableReturn
+                        .subtract(trade.commissionCostPercent())
+                        .subtract(trade.stampDutyCostPercent())
+        ));
     }
 
     @Test
@@ -139,7 +192,7 @@ class BacktestServiceTest {
                 "11.20", "11.20", "11.20", "11.20", "190000"));
         eastMoneyClient.klines.put("600107", rows);
 
-        OvernightBacktestReport report = overnightBacktest("600107");
+        OvernightBacktestReport report = overnightBacktest("600107", new BigDecimal("1.00"));
 
         assertThat(report.trades()).isEmpty();
         assertThat(report.summary().sampleCount()).isZero();
@@ -177,12 +230,66 @@ class BacktestServiceTest {
         assertThat(report.summary().hardStopRatePercent()).isNotNull();
         assertThat(report.summary().sampleStart()).isEqualTo(report.trades().get(0).signalDate());
         assertThat(report.summary().sampleEnd()).isEqualTo(report.trades().get(0).signalDate());
+        assertThat(report.validationScope()).anySatisfy(item ->
+                assertThat(item).contains("技术信号", "K 线"));
+        assertThat(report.unreplayedGates()).contains(
+                "财报质量门禁",
+                "市场情绪门禁",
+                "尾盘分钟确认门禁",
+                "实时行情新鲜度门禁"
+        );
+        assertThat(report.scope()).contains("技术信号历史验证");
 
         BacktestReport legacy = service.rightSideBacktest("600109", 400, 20, null, null, null, null, null);
         assertThat(legacy.ruleSet().holdingDays()).isEqualTo(20);
     }
 
+    @Test
+    void reportsSourceFailureInsufficientHistoryAndNoSignalPerSymbol() {
+        eastMoneyClient.failedSymbols.add("600301");
+        eastMoneyClient.klines.put("600302", overnightRows("600302",
+                bar("10.45", "10.50", "10.75", "10.30"),
+                bar("10.55", "10.60", "10.70", "10.45")).subList(0, 20));
+        eastMoneyClient.klines.put("600303", flatRows("600303", 80));
+        eastMoneyClient.klines.put("600304", overnightRows("600304",
+                bar("10.45", "10.50", "10.75", "10.30"),
+                bar("10.55", "10.60", "10.70", "10.45")));
+
+        OvernightBacktestReport report = overnightBacktest("600301,600302,600303,600304");
+
+        assertThat(report.status()).isEqualTo("PARTIAL");
+        assertThat(report.results())
+                .extracting(OvernightBacktestSymbolResult::symbol, OvernightBacktestSymbolResult::status)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple("600301", "SOURCE_FAILED"),
+                        org.assertj.core.groups.Tuple.tuple("600302", "INSUFFICIENT_HISTORY"),
+                        org.assertj.core.groups.Tuple.tuple("600303", "NO_SIGNAL"),
+                        org.assertj.core.groups.Tuple.tuple("600304", "OK")
+                );
+        assertThat(report.results())
+                .filteredOn(result -> !"OK".equals(result.status()))
+                .allSatisfy(result -> assertThat(result.dataGaps()).isNotEmpty());
+        assertThat(report.message()).contains("1", "数据源失败");
+    }
+
+    @Test
+    void marksTheReportDataBlockedWhenEverySymbolSourceFails() {
+        eastMoneyClient.failedSymbols.addAll(List.of("600305", "600306"));
+
+        OvernightBacktestReport report = overnightBacktest("600305,600306");
+
+        assertThat(report.status()).isEqualTo("DATA_BLOCKED");
+        assertThat(report.message()).contains("全部", "数据源");
+        assertThat(report.summary().sampleCount()).isZero();
+        assertThat(report.results())
+                .allSatisfy(result -> assertThat(result.status()).isEqualTo("SOURCE_FAILED"));
+    }
+
     private OvernightBacktestReport overnightBacktest(String symbols) {
+        return overnightBacktest(symbols, new BigDecimal("9.80"));
+    }
+
+    private OvernightBacktestReport overnightBacktest(String symbols, BigDecimal limitMovePercent) {
         return service.overnightBacktest(
                 symbols,
                 900,
@@ -193,7 +300,7 @@ class BacktestServiceTest {
                 new BigDecimal("0.03"),
                 new BigDecimal("0.05"),
                 new BigDecimal("0.05"),
-                new BigDecimal("9.80")
+                limitMovePercent
         );
     }
 
@@ -210,14 +317,17 @@ class BacktestServiceTest {
     ) {
         List<EastMoneyKLine> rows = new ArrayList<>();
         LocalDate start = LocalDate.parse("2025-01-01");
-        for (int index = 0; index < 70; index++) {
+        for (int index = 0; index < 65; index++) {
             BigDecimal close = new BigDecimal("10.00").add(new BigDecimal(index % 2 == 0 ? "0.02" : "-0.02"));
             rows.add(kline(symbol, start.plusDays(index), close, "100000"));
         }
-        for (int index = 70; index < 75; index++) {
-            BigDecimal close = new BigDecimal("9.92").add(new BigDecimal("0.02").multiply(BigDecimal.valueOf(index - 70)));
-            rows.add(kline(symbol, start.plusDays(index), close, "100000"));
+        for (int index = 65; index < 70; index++) {
+            rows.add(kline(symbol, start.plusDays(index), new BigDecimal("9.80"), "100000"));
         }
+        for (int index = 70; index < 74; index++) {
+            rows.add(kline(symbol, start.plusDays(index), new BigDecimal("9.70"), "100000"));
+        }
+        rows.add(kline(symbol, start.plusDays(74), new BigDecimal("10.30"), "100000"));
         rows.add(customKline(symbol, start.plusDays(75), "10.35", "10.42", "10.49", "10.30", "190000"));
         rows.add(customKline(symbol, start.plusDays(76), t1.open(), t1.close(), t1.high(), t1.low(), "130000"));
         rows.add(customKline(symbol, start.plusDays(77), t2.open(), t2.close(), t2.high(), t2.low(), "130000"));
@@ -231,6 +341,19 @@ class BacktestServiceTest {
     private BigDecimal percent(BigDecimal numerator, BigDecimal denominator) {
         return numerator.divide(denominator, 6, java.math.RoundingMode.HALF_UP)
                 .multiply(new BigDecimal("100"));
+    }
+
+    private BigDecimal scale(BigDecimal value) {
+        return value.setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+
+    private List<EastMoneyKLine> flatRows(String symbol, int count) {
+        List<EastMoneyKLine> rows = new ArrayList<>();
+        LocalDate start = LocalDate.parse("2025-01-01");
+        for (int index = 0; index < count; index++) {
+            rows.add(kline(symbol, start.plusDays(index), new BigDecimal("10.00"), "100000"));
+        }
+        return rows;
     }
 
     private List<EastMoneyKLine> rightSideRows(String symbol, boolean stopLossAfterEntry) {
@@ -284,6 +407,7 @@ class BacktestServiceTest {
     private static final class StubEastMoneyClient extends EastMoneyClient {
 
         private final Map<String, List<EastMoneyKLine>> klines = new HashMap<>();
+        private final java.util.Set<String> failedSymbols = new java.util.HashSet<>();
 
         private StubEastMoneyClient() {
             super(null, null, null);
@@ -291,6 +415,9 @@ class BacktestServiceTest {
 
         @Override
         public List<EastMoneyKLine> fetchDailyKLines(String symbol, LocalDate begin, LocalDate end) {
+            if (failedSymbols.contains(symbol)) {
+                throw new IllegalStateException("simulated source failure for " + symbol);
+            }
             return klines.getOrDefault(symbol, List.of());
         }
     }
