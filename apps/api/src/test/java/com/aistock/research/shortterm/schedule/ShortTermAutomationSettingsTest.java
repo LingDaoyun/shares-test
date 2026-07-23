@@ -68,6 +68,24 @@ class ShortTermAutomationSettingsTest {
     }
 
     @Test
+    void invalidCronRefreshRetainsTheLastValidValueForThatTrigger() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("research.short-term.schedule.preselect-cron", "0 31 14 * * MON-FRI")
+                .withProperty("research.short-term.schedule.final-cron", "0 49 14 * * MON-FRI");
+        ShortTermAutomationSettings settings = new ShortTermAutomationSettings(environment);
+
+        assertThat(settings.preselectCron()).isEqualTo("0 31 14 * * MON-FRI");
+        assertThat(settings.finalCron()).isEqualTo("0 49 14 * * MON-FRI");
+
+        environment.setProperty("research.short-term.schedule.preselect-cron", "invalid-preselect");
+        environment.setProperty("research.short-term.schedule.final-cron", "invalid-final");
+
+        assertThat(settings.preselectCron()).isEqualTo("0 31 14 * * MON-FRI");
+        assertThat(settings.finalCron()).isEqualTo("0 49 14 * * MON-FRI");
+        assertThat(settings.readinessCron()).isEqualTo("0 54 14 * * MON-FRI");
+    }
+
+    @Test
     void invalidOrOutOfRangeRefreshedValuesFallBackWithoutThrowing() {
         MockEnvironment environment = new MockEnvironment()
                 .withProperty("research.short-term.schedule.enabled", "not-a-boolean")

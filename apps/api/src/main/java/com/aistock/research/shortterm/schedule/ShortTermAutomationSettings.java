@@ -14,6 +14,8 @@ import java.time.Duration;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class ShortTermAutomationSettings {
@@ -24,6 +26,7 @@ public class ShortTermAutomationSettings {
     private static final BigDecimal HUNDRED = new BigDecimal("100");
 
     private final Environment environment;
+    private final Map<String, String> lastValidCrons = new ConcurrentHashMap<>();
 
     public ShortTermAutomationSettings(Environment environment) {
         this.environment = environment;
@@ -211,10 +214,12 @@ public class ShortTermAutomationSettings {
         String value = text(key, fallback);
         try {
             CronExpression.parse(value);
+            lastValidCrons.put(key, value);
             return value;
         } catch (IllegalArgumentException exception) {
-            warnFallback(key, value, fallback);
-            return fallback;
+            String retained = lastValidCrons.getOrDefault(key, fallback);
+            warnFallback(key, value, retained);
+            return retained;
         }
     }
 
