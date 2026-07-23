@@ -36,4 +36,29 @@ public interface ShortTermScheduledSnapshotRepository
             @Param("runningStatus") ShortTermSnapshotStatus runningStatus,
             @Param("failedStatus") ShortTermSnapshotStatus failedStatus
     );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            update ShortTermScheduledSnapshotEntity snapshot
+            set snapshot.status = :terminalStatus,
+                snapshot.reportJson = :reportJson,
+                snapshot.dataCutoffAt = :dataCutoffAt,
+                snapshot.completedAt = :completedAt,
+                snapshot.message = :message,
+                snapshot.blockedReasonsJson = :blockedReasonsJson,
+                snapshot.updatedAt = :completedAt
+            where snapshot.snapshotKey = :snapshotKey
+              and snapshot.status = :runningStatus
+            """)
+    int publishTerminal(
+            @Param("snapshotKey") String snapshotKey,
+            @Param("runningStatus") ShortTermSnapshotStatus runningStatus,
+            @Param("terminalStatus") ShortTermSnapshotStatus terminalStatus,
+            @Param("reportJson") String reportJson,
+            @Param("dataCutoffAt") java.time.Instant dataCutoffAt,
+            @Param("completedAt") java.time.Instant completedAt,
+            @Param("message") String message,
+            @Param("blockedReasonsJson") String blockedReasonsJson
+    );
 }

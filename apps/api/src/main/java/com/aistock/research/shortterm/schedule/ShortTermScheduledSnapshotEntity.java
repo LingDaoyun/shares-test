@@ -5,7 +5,10 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import org.springframework.data.domain.Persistable;
 
 import java.time.Instant;
@@ -60,6 +63,9 @@ public class ShortTermScheduledSnapshotEntity implements Persistable<String> {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @Transient
+    private boolean newEntity = true;
+
     protected ShortTermScheduledSnapshotEntity() {
     }
 
@@ -83,27 +89,16 @@ public class ShortTermScheduledSnapshotEntity implements Persistable<String> {
         this.updatedAt = startedAt;
     }
 
-    public void finish(
-            ShortTermSnapshotStatus status,
-            String reportJson,
-            Instant dataCutoffAt,
-            Instant completedAt,
-            String message,
-            String blockedReasonsJson
-    ) {
-        this.status = status;
-        this.reportJson = reportJson;
-        this.dataCutoffAt = dataCutoffAt;
-        this.completedAt = completedAt;
-        this.message = message;
-        this.blockedReasonsJson = blockedReasonsJson;
-        this.updatedAt = completedAt;
+    @PostLoad
+    @PostPersist
+    void markPersisted() {
+        newEntity = false;
     }
 
     @Override
     public String getId() { return snapshotKey; }
     @Override
-    public boolean isNew() { return true; }
+    public boolean isNew() { return newEntity; }
     public String getSnapshotKey() { return snapshotKey; }
     public LocalDate getTradeDate() { return tradeDate; }
     public ShortTermSnapshotStage getStage() { return stage; }

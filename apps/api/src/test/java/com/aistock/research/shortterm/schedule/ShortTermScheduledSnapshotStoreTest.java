@@ -11,6 +11,8 @@ import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStage.FINAL;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStage.PRESELECT;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.FINAL_READY;
@@ -88,6 +90,43 @@ class ShortTermScheduledSnapshotStoreTest {
         assertThat(store.latest(date)).get().extracting(ShortTermScheduledSnapshot::stage)
                 .isEqualTo(FINAL);
         assertThat(store.latest(date.minusDays(1))).isEmpty();
+    }
+
+    @Test
+    void publishesOnlyOnceFromRunningAndPreservesTheFirstTerminalResult() {
+        LocalDate date = LocalDate.of(2026, 7, 28);
+        Instant started = Instant.parse("2026-07-28T06:48:00Z");
+        assertThat(store.claim(date, FINAL, "rules-v1", "{}", started)).isTrue();
+
+        store.finish(date, FINAL, "rules-v1", FINAL_READY, sampleReport(),
+                started.plusSeconds(10), started.plusSeconds(10), "最终结果已就绪", List.of());
+
+        assertThatIllegalStateException().isThrownBy(() -> store.finish(
+                date, FINAL, "rules-v1", PRESELECT_READY, sampleReport(),
+                started.plusSeconds(20), started.plusSeconds(20), "旧任务覆盖", List.of("不应写入")));
+        assertThatIllegalStateException().isThrownBy(() -> store.fail(
+                date, FINAL, "rules-v1", started.plusSeconds(30), "旧任务失败", List.of("不应写入")));
+
+        ShortTermScheduledSnapshot persisted = store.find(date, FINAL, "rules-v1").orElseThrow();
+        assertThat(persisted.status()).isEqualTo(FINAL_READY);
+        assertThat(persisted.message()).isEqualTo("最终结果已就绪");
+        assertThat(persisted.blockedReasons()).isEmpty();
+    }
+
+    @Test
+    void rejectsNonTerminalFinishStatusesWithoutPublishing() {
+        LocalDate date = LocalDate.of(2026, 7, 29);
+        Instant started = Instant.parse("2026-07-29T06:48:00Z");
+        assertThat(store.claim(date, FINAL, "rules-v1", "{}", started)).isTrue();
+
+        assertThatIllegalArgumentException().isThrownBy(() -> store.finish(
+                date, FINAL, "rules-v1", RUNNING, sampleReport(),
+                started.plusSeconds(10), started.plusSeconds(10), "无效状态", List.of()));
+        assertThatIllegalArgumentException().isThrownBy(() -> store.finish(
+                date, FINAL, "rules-v1", FAILED, null,
+                null, started.plusSeconds(10), "无效状态", List.of()));
+
+        assertThat(store.find(date, FINAL, "rules-v1").orElseThrow().status()).isEqualTo(RUNNING);
     }
 
     private ShortTermReport sampleReport() {

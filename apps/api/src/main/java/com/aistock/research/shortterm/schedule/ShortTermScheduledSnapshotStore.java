@@ -12,11 +12,18 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class ShortTermScheduledSnapshotStore {
 
     private static final TypeReference<List<String>> BLOCKED_REASONS_TYPE = new TypeReference<>() { };
+    private static final Set<ShortTermSnapshotStatus> FINISH_STATUSES = Set.of(
+            ShortTermSnapshotStatus.PRESELECT_READY,
+            ShortTermSnapshotStatus.FINAL_READY,
+            ShortTermSnapshotStatus.NO_TRADE,
+            ShortTermSnapshotStatus.DATA_BLOCKED
+    );
 
     private final ShortTermScheduledSnapshotRepository repository;
     private final ObjectMapper objectMapper;
@@ -58,9 +65,12 @@ public class ShortTermScheduledSnapshotStore {
             String message,
             List<String> blockedReasons
     ) {
-        ShortTermScheduledSnapshotEntity entity = requiredSnapshot(tradeDate, stage, parameterFingerprint);
-        entity.finish(status, writeReport(report), dataCutoffAt, completedAt, message, writeBlockedReasons(blockedReasons));
-        return toSnapshot(entity);
+        if (!FINISH_STATUSES.contains(status)) {
+            throw new IllegalArgumentException("Finish status must be a publishable terminal status");
+        }
+        return publishTerminal(
+                tradeDate, stage, parameterFingerprint, status, writeReport(report), dataCutoffAt,
+                completedAt, message, writeBlockedReasons(blockedReasons));
     }
 
     @Transactional
@@ -72,9 +82,9 @@ public class ShortTermScheduledSnapshotStore {
             String message,
             List<String> blockedReasons
     ) {
-        ShortTermScheduledSnapshotEntity entity = requiredSnapshot(tradeDate, stage, parameterFingerprint);
-        entity.finish(ShortTermSnapshotStatus.FAILED, null, null, completedAt, message, writeBlockedReasons(blockedReasons));
-        return toSnapshot(entity);
+        return publishTerminal(
+                tradeDate, stage, parameterFingerprint, ShortTermSnapshotStatus.FAILED, null, null,
+                completedAt, message, writeBlockedReasons(blockedReasons));
     }
 
     @Transactional(readOnly = true)
@@ -93,13 +103,26 @@ public class ShortTermScheduledSnapshotStore {
                 .map(this::toSnapshot);
     }
 
-    private ShortTermScheduledSnapshotEntity requiredSnapshot(
+    private ShortTermScheduledSnapshot publishTerminal(
             LocalDate tradeDate,
             ShortTermSnapshotStage stage,
-            String parameterFingerprint
+            String parameterFingerprint,
+            ShortTermSnapshotStatus status,
+            String reportJson,
+            Instant dataCutoffAt,
+            Instant completedAt,
+            String message,
+            String blockedReasonsJson
     ) {
-        return repository.findById(snapshotKey(tradeDate, stage, parameterFingerprint))
-                .orElseThrow(() -> new IllegalStateException("Scheduled snapshot was not claimed"));
+        String snapshotKey = snapshotKey(tradeDate, stage, parameterFingerprint);
+        int updated = repository.publishTerminal(
+                snapshotKey, ShortTermSnapshotStatus.RUNNING, status, reportJson, dataCutoffAt,
+                completedAt, message, blockedReasonsJson);
+        if (updated != 1) {
+            throw new IllegalStateException("Scheduled snapshot is no longer running");
+        }
+        return toSnapshot(repository.findById(snapshotKey)
+                .orElseThrow(() -> new IllegalStateException("Scheduled snapshot was not claimed")));
     }
 
     private ShortTermScheduledSnapshot toSnapshot(ShortTermScheduledSnapshotEntity entity) {
