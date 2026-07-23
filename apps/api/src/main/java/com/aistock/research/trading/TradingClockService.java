@@ -24,6 +24,8 @@ public class TradingClockService {
     public static final LocalTime REGULAR_CLOSE = LocalTime.of(15, 0);
     public static final LocalTime POST_CLOSE_FIXED_PRICE_START = LocalTime.of(15, 5);
     public static final LocalTime POST_CLOSE_FIXED_PRICE_END = LocalTime.of(15, 30);
+    public static final LocalTime SHORT_TERM_ENTRY_START = LocalTime.of(14, 45);
+    public static final LocalTime SHORT_TERM_ENTRY_END = LocalTime.of(14, 56, 59);
     private static final Set<LocalDate> OFFICIAL_2026_HOLIDAYS = Set.of(
             LocalDate.parse("2026-01-01"), LocalDate.parse("2026-01-02"),
             LocalDate.parse("2026-02-16"), LocalDate.parse("2026-02-17"), LocalDate.parse("2026-02-18"),
@@ -61,6 +63,36 @@ public class TradingClockService {
         return tradeDate.equals(now.toLocalDate()) && !now.toLocalTime().isBefore(REGULAR_CLOSE);
     }
 
+    public String shortTermDecisionCheckpoint() {
+        LocalDateTime now = LocalDateTime.now(clock.withZone(CHINA_MARKET_ZONE));
+        if (!isMarketClosedDay(now.toLocalDate())
+                && !now.toLocalTime().isBefore(SHORT_TERM_ENTRY_START)
+                && !now.toLocalTime().isAfter(SHORT_TERM_ENTRY_END)) {
+            return "TAIL_ENTRY_1445_1456";
+        }
+        return "NOT_CONFIRMED:" + classify(now).phase();
+    }
+
+    public LocalDate nextTradingDay(LocalDate date) {
+        LocalDate cursor = date.plusDays(1);
+        while (isMarketClosedDay(cursor)) {
+            cursor = cursor.plusDays(1);
+        }
+        return cursor;
+    }
+
+    public LocalDate tradingDayAfter(LocalDate date, int offset) {
+        LocalDate cursor = date;
+        for (int i = 0; i < Math.max(0, offset); i++) {
+            cursor = nextTradingDay(cursor);
+        }
+        return cursor;
+    }
+
+    public LocalDate currentMarketDate() {
+        return LocalDate.now(clock.withZone(CHINA_MARKET_ZONE));
+    }
+
     public TradingSessionSnapshot classify(LocalDateTime dateTime) {
         if (isMarketClosedDay(dateTime.toLocalDate())) {
             boolean weekend = dateTime.getDayOfWeek() == DayOfWeek.SATURDAY || dateTime.getDayOfWeek() == DayOfWeek.SUNDAY;
@@ -87,14 +119,14 @@ public class TradingClockService {
                     List.of("上午拉升不能替代尾盘承接。"));
         }
         if (!time.isBefore(AFTERNOON_START) && time.isBefore(CLOSING_CALL_START)) {
-            return snapshot("AFTERNOON_CONTINUOUS", "下午连续竞价", true, time.isAfter(LocalTime.of(14, 30)), false, "14:30-14:56",
-                    List.of("14:30 后可进入尾盘观察，但最终确认仍看 14:57-15:00。"),
-                    List.of("14:57 前信号仍可能被撤单和回落扰动。"));
+            return snapshot("AFTERNOON_CONTINUOUS", "下午连续竞价", true, time.isAfter(LocalTime.of(14, 30)), false, "14:45-14:56",
+                    List.of("14:30 后进入候选观察，普通股票只在 14:45-14:56 形成可执行尾盘结论。"),
+                    List.of("14:45 前只做预选；14:57 起已无法按普通连续竞价的新建议成交。"));
         }
         if (!time.isBefore(CLOSING_CALL_START) && !time.isAfter(REGULAR_CLOSE)) {
             return snapshot("CLOSING_CALL_AUCTION", "收盘集合竞价", true, true, false, "14:57-15:00",
-                    List.of("普通竞价交易的收盘确认窗口是 14:57-15:00。"),
-                    List.of("14:57-15:00 不接受撤单，适合确认尾盘承接，但不应追高。"));
+                    List.of("14:57-15:00 数据只用于历史验证和次日研究。"),
+                    List.of("14:57-15:00 收盘集合竞价不能新建 14:55 尾盘建议，也不能替代 14:45-14:56 入场窗口。"));
         }
         if (!time.isBefore(POST_CLOSE_FIXED_PRICE_START) && !time.isAfter(POST_CLOSE_FIXED_PRICE_END)) {
             return snapshot("POST_CLOSE_FIXED_PRICE", "盘后固定价格", false, false, true, "15:05-15:30",

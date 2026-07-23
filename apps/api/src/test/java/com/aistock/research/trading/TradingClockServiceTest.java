@@ -62,6 +62,37 @@ class TradingClockServiceTest {
     }
 
     @Test
+    void exposesExecutableCheckpointOnlyBeforeClosingAuction() {
+        assertThat(serviceAt("2026-07-23T06:44:59Z").shortTermDecisionCheckpoint())
+                .startsWith("NOT_CONFIRMED:");
+        assertThat(serviceAt("2026-07-23T06:45:00Z").shortTermDecisionCheckpoint())
+                .isEqualTo("TAIL_ENTRY_1445_1456");
+        assertThat(serviceAt("2026-07-23T06:56:59Z").shortTermDecisionCheckpoint())
+                .isEqualTo("TAIL_ENTRY_1445_1456");
+        assertThat(serviceAt("2026-07-23T06:57:00Z").shortTermDecisionCheckpoint())
+                .startsWith("NOT_CONFIRMED:");
+        assertThat(serviceAt("2026-07-23T07:20:00Z").shortTermDecisionCheckpoint())
+                .startsWith("NOT_CONFIRMED:");
+        assertThat(serviceAt("2026-07-25T06:50:00Z").shortTermDecisionCheckpoint())
+                .startsWith("NOT_CONFIRMED:");
+    }
+
+    @Test
+    void advancesAcrossWeekendsAndOfficialExchangeHolidays() {
+        TradingClockService service = serviceAt("2026-06-18T06:50:00Z");
+
+        assertThat(service.currentMarketDate()).isEqualTo(LocalDate.parse("2026-06-18"));
+        assertThat(service.nextTradingDay(LocalDate.parse("2026-06-18")))
+                .isEqualTo(LocalDate.parse("2026-06-22"));
+        assertThat(service.tradingDayAfter(LocalDate.parse("2026-06-18"), 2))
+                .isEqualTo(LocalDate.parse("2026-06-23"));
+        assertThat(service.tradingDayAfter(LocalDate.parse("2026-06-18"), 0))
+                .isEqualTo(LocalDate.parse("2026-06-18"));
+        assertThat(service.tradingDayAfter(LocalDate.parse("2026-06-18"), -1))
+                .isEqualTo(LocalDate.parse("2026-06-18"));
+    }
+
+    @Test
     void completesCurrentDailyBarOnlyAtOrAfterRegularClose() {
         LocalDate tradeDate = LocalDate.parse("2026-07-07");
         TradingClockService beforeClose = serviceAt("2026-07-07T06:59:00Z");

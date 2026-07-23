@@ -1,0 +1,97 @@
+package com.aistock.research.shortterm.schedule;
+
+import com.aistock.research.shortterm.OvernightRuleSet;
+import com.aistock.research.shortterm.ShortTermScanRequest;
+import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
+
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.LocalTime;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class ShortTermAutomationSettingsTest {
+
+    @Test
+    void readsApprovedDefaults() {
+        ShortTermAutomationSettings settings = new ShortTermAutomationSettings(new MockEnvironment());
+
+        assertThat(settings.enabled()).isFalse();
+        assertThat(settings.zone()).isEqualTo("Asia/Shanghai");
+        assertThat(settings.preselectCron()).isEqualTo("0 30 14 * * MON-FRI");
+        assertThat(settings.finalCron()).isEqualTo("0 48 14 * * MON-FRI");
+        assertThat(settings.readinessCron()).isEqualTo("0 54 14 * * MON-FRI");
+        assertThat(settings.finalDeadline()).isEqualTo(LocalTime.of(14, 53, 59));
+        assertThat(settings.freshness()).isEqualTo(Duration.ofSeconds(180));
+
+        ShortTermScanRequest scan = settings.scanRequest();
+        assertThat(scan.limit()).isEqualTo(3);
+        assertThat(scan.scanLimit()).isEqualTo(6000);
+        assertThat(scan.klineLimit()).isEqualTo(60);
+        assertThat(scan.minAmount()).isEqualByComparingTo("80000000");
+        assertThat(scan.maxPe()).isEqualByComparingTo("100");
+        assertThat(scan.maxPb()).isEqualByComparingTo("15");
+        assertThat(scan.minVolumeRatio()).isEqualByComparingTo("1.15");
+        assertThat(scan.maxEntryRise()).isEqualByComparingTo("4");
+        assertThat(scan.maxDistanceToMa20()).isEqualByComparingTo("8");
+        assertThat(scan.minFinancialScore()).isEqualByComparingTo("58");
+
+        OvernightRuleSet rules = settings.overnightRules();
+        assertThat(rules.entryStart()).isEqualTo(LocalTime.of(14, 45));
+        assertThat(rules.entryEnd()).isEqualTo(LocalTime.of(14, 56));
+        assertThat(rules.normalExitTime()).isEqualTo(LocalTime.of(14, 50));
+        assertThat(rules.maxHoldingTradingDays()).isEqualTo(2);
+        assertThat(rules.maxPositionRatio()).isEqualByComparingTo("0.3333");
+        assertThat(rules.maxT2PositionRatio()).isEqualByComparingTo("0.50");
+        assertThat(rules.firstTargetFloor()).isEqualByComparingTo("2.5");
+        assertThat(rules.firstTargetCap()).isEqualByComparingTo("4.0");
+        assertThat(rules.secondTargetFloor()).isEqualByComparingTo("4.5");
+        assertThat(rules.secondTargetCap()).isEqualByComparingTo("7.0");
+        assertThat(rules.stopFloor()).isEqualByComparingTo("2.5");
+        assertThat(rules.stopCap()).isEqualByComparingTo("4.5");
+        assertThat(rules.trailingDrawdownPercent()).isEqualByComparingTo("2.0");
+    }
+
+    @Test
+    void refreshesEachReadFromEnvironment() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("research.short-term.schedule.limit", "3");
+        ShortTermAutomationSettings settings = new ShortTermAutomationSettings(environment);
+
+        assertThat(settings.scanRequest().limit()).isEqualTo(3);
+
+        environment.setProperty("research.short-term.schedule.limit", "7");
+
+        assertThat(settings.scanRequest().limit()).isEqualTo(7);
+    }
+
+    @Test
+    void invalidOrOutOfRangeRefreshedValuesFallBackWithoutThrowing() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("research.short-term.schedule.enabled", "not-a-boolean")
+                .withProperty("research.short-term.schedule.zone", "Mars/Phobos")
+                .withProperty("research.short-term.schedule.final-cron", "not a cron")
+                .withProperty("research.short-term.schedule.final-deadline", "25:99")
+                .withProperty("research.short-term.schedule.freshness-seconds", "-1")
+                .withProperty("research.short-term.schedule.limit", "0")
+                .withProperty("research.short-term.schedule.max-pe", "NaN")
+                .withProperty("research.short-term.overnight.entry-start", "bad-time")
+                .withProperty("research.short-term.overnight.max-holding-trading-days", "0")
+                .withProperty("research.short-term.overnight.max-position-ratio", "1.5");
+
+        ShortTermAutomationSettings settings = new ShortTermAutomationSettings(environment);
+
+        assertThat(settings.enabled()).isFalse();
+        assertThat(settings.zone()).isEqualTo("Asia/Shanghai");
+        assertThat(settings.finalCron()).isEqualTo("0 48 14 * * MON-FRI");
+        assertThat(settings.finalDeadline()).isEqualTo(LocalTime.of(14, 53, 59));
+        assertThat(settings.freshness()).isEqualTo(Duration.ofSeconds(180));
+        assertThat(settings.scanRequest().limit()).isEqualTo(3);
+        assertThat(settings.scanRequest().maxPe()).isEqualByComparingTo("100");
+        assertThat(settings.overnightRules().entryStart()).isEqualTo(LocalTime.of(14, 45));
+        assertThat(settings.overnightRules().maxHoldingTradingDays()).isEqualTo(2);
+        assertThat(settings.overnightRules().maxPositionRatio())
+                .isEqualByComparingTo(new BigDecimal("0.3333"));
+    }
+}
