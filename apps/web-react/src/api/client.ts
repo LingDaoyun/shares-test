@@ -1,6 +1,7 @@
 import axios from 'axios'
 import type {
   BacktestReport,
+  OvernightBacktestReport,
   CycleTrialReport,
   DailySignalReport,
   DecisionHistoryEntry,
@@ -123,6 +124,23 @@ export interface BacktestParams {
 
 export function fetchRightSideBacktest(params: BacktestParams = {}) {
   return http.get<BacktestReport>('/backtests/right-side', { params }).then((res) => res.data)
+}
+
+export interface OvernightBacktestParams {
+  symbols?: string
+  lookbackDays?: number
+  firstTargetPercent?: number
+  secondTargetPercent?: number
+  hardStopPercent?: number
+  maxHoldingTradingDays?: number
+  commissionPercent?: number
+  stampDutyPercent?: number
+  slippagePercent?: number
+  limitMovePercent?: number
+}
+
+export function fetchOvernightBacktest(params: OvernightBacktestParams = {}) {
+  return http.get<OvernightBacktestReport>('/backtests/overnight', { params }).then((res) => res.data)
 }
 
 export interface MispricingParams {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CandlestickChart, RefreshCw, SlidersHorizontal } from 'lucide-react'
-import { fetchLatestShortTermScheduledSnapshot, fetchRightSideBacktest, fetchShortTermScanJob, startShortTermScanJob } from '../api/client'
+import { fetchLatestShortTermScheduledSnapshot, fetchOvernightBacktest, fetchShortTermScanJob, startShortTermScanJob } from '../api/client'
 import type { ShortTermParams } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -18,7 +18,7 @@ import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
 import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCounterEvidenceTone, goldenCrossDisplayLabel, goldenCrossSpreadLabel, goldenCrossSpreadTrendLabel, goldenCrossTone, goldenCrossV2Context } from '../lib/shortTermGoldenCross'
-import type { BacktestReport, BacktestSummary, ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermReport, ShortTermScanJobStatus, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { OvernightBacktestReport, OvernightBacktestSummary, ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermReport, ShortTermScanJobStatus, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -58,12 +58,11 @@ const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'n
 
 export function ShortTermPage() {
   const [draft, setDraft] = useState<DraftParams>(DEFAULT_DRAFT)
-  const [params, setParams] = useState<DraftParams>(DEFAULT_DRAFT)
   const [snapshot, setSnapshot] = useState<ShortTermScheduledSnapshot | null>(null)
   const [origin, setOrigin] = useState<ReportOrigin>('SCHEDULED')
   const [report, setReport] = useState<ShortTermReport | null>(null)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
-  const [backtestReport, setBacktestReport] = useState<BacktestReport | null>(null)
+  const [backtestReport, setBacktestReport] = useState<OvernightBacktestReport | null>(null)
   const [backtestLoading, setBacktestLoading] = useState(false)
   const [backtestError, setBacktestError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -112,7 +111,6 @@ export function ShortTermPage() {
     manualRunGeneration.current = generation
     if (pollTimer.current !== undefined) window.clearTimeout(pollTimer.current)
 
-    setParams(nextParams)
     setOrigin('MANUAL')
     setLoading(true)
     setError('')
@@ -239,14 +237,13 @@ export function ShortTermPage() {
     setBacktestLoading(true)
     setBacktestError('')
     const symbols = report.candidates.map((candidate) => candidate.symbol).join(',')
-    fetchRightSideBacktest({
+    fetchOvernightBacktest({
       symbols,
       lookbackDays: 900,
-      holdingDays: 20,
-      minVolumeRatio: params.minVolumeRatio,
-      maxDistanceToMa20: params.maxDistanceToMa20,
-      stopLossPercent: 6,
-      takeProfitPercent: 18
+      firstTargetPercent: 2.5,
+      secondTargetPercent: 4.5,
+      hardStopPercent: 3.5,
+      maxHoldingTradingDays: 2
     })
       .then((data) => {
         if (alive) setBacktestReport(data)
@@ -263,15 +260,12 @@ export function ShortTermPage() {
     return () => {
       alive = false
     }
-  }, [report?.generatedAt, report?.candidateCount, params.minVolumeRatio, params.maxDistanceToMa20])
+  }, [report?.generatedAt, report?.candidateCount])
 
   const selected = useMemo(() => {
     return resolveDetailSelection(report?.candidates ?? [], selectedSymbol, (candidate) => candidate.symbol)
   }, [report, selectedSymbol])
 
-  const backtestBySymbol = useMemo(() => {
-    return new Map((backtestReport?.results ?? []).map((result) => [result.symbol, result.summary]))
-  }, [backtestReport])
   const diagnostics = useMemo(() => shortTermDiagnostics(report), [report])
 
   return (
@@ -381,6 +375,12 @@ export function ShortTermPage() {
             <HotDirectionsCard directions={report.hotDirections} />
           </div>
 
+          <BacktestSummaryPanel
+            summary={backtestReport?.summary}
+            loading={backtestLoading}
+            error={backtestError}
+          />
+
           <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧候选</span>} flush>
             {report.candidates.length ? (
               <div className="divide-y divide-line-soft">
@@ -389,7 +389,7 @@ export function ShortTermPage() {
                     key={candidate.symbol}
                     candidate={candidate}
                     selected={selected?.symbol === candidate.symbol}
-                    backtestSummary={backtestBySymbol.get(candidate.symbol)}
+                    backtestSummary={backtestReport?.summary}
                     backtestLoading={backtestLoading}
                     onSelect={() => setSelectedSymbol(candidate.symbol)}
                   />
@@ -409,7 +409,7 @@ export function ShortTermPage() {
             {selected ? (
               <CandidateDetail
                 candidate={selected}
-                backtestSummary={backtestBySymbol.get(selected.symbol)}
+                backtestSummary={backtestReport?.summary}
                 backtestLoading={backtestLoading}
                 backtestError={backtestError}
                 weightProfile={report.weightProfile}
@@ -513,7 +513,7 @@ function CandidateRow({
 }: {
   candidate: ShortTermCandidate
   selected: boolean
-  backtestSummary?: BacktestSummary
+  backtestSummary?: OvernightBacktestSummary
   backtestLoading: boolean
   onSelect: () => void
 }) {
@@ -583,7 +583,7 @@ function CandidateDetail({
   tradeCaptureToken
 }: {
   candidate: ShortTermCandidate
-  backtestSummary?: BacktestSummary
+  backtestSummary?: OvernightBacktestSummary
   backtestLoading: boolean
   backtestError: string
   weightProfile: ShortTermWeightProfile
@@ -812,7 +812,7 @@ function BacktestSummaryPanel({
   loading,
   error
 }: {
-  summary?: BacktestSummary
+  summary?: OvernightBacktestSummary
   loading: boolean
   error: string
 }) {
@@ -845,16 +845,21 @@ function BacktestSummaryPanel({
           <Tag tone="neutral">历史验证</Tag>
           <Tag tone={backtestTone(summary)}>{backtestSupportLabel(summary)}</Tag>
         </div>
-        <span className="tabular text-xs font-semibold text-ink-500">{summary.tradeCount} 笔信号</span>
+        <span className="tabular text-xs font-semibold text-ink-500">{summary.sampleCount} 笔隔夜样本</span>
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <Metric label="胜率" value={formatPercent(summary.winRatePercent)} compact />
+      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3">
+        <Metric label="正收益率" value={formatPercent(summary.positiveRatePercent)} compact />
         <Metric label="均值收益" value={<span className={changeClass(summary.averageReturnPercent)}>{formatPercent(summary.averageReturnPercent)}</span>} compact />
-        <Metric label="均值回撤" value={formatPercent(summary.averageMaxDrawdownPercent)} compact />
-        <Metric label="盈亏比" value={formatNumber(summary.profitFactor)} compact />
+        <Metric label="中位收益" value={<span className={changeClass(summary.medianReturnPercent)}>{formatPercent(summary.medianReturnPercent)}</span>} compact />
+        <Metric label="均值回撤" value={formatPercent(summary.averageDrawdownPercent)} compact />
+        <Metric label="第一目标" value={formatPercent(summary.firstTargetRatePercent)} compact />
+        <Metric label="第二目标" value={formatPercent(summary.secondTargetRatePercent)} compact />
+        <Metric label="硬止损" value={formatPercent(summary.hardStopRatePercent)} compact />
+        <Metric label="时间退出" value={formatPercent(summary.timeStopRatePercent)} compact />
+        <Metric label="次日低开" value={formatPercent(summary.gapDownRatePercent)} compact />
       </div>
       <p className="mt-2 text-xs leading-relaxed text-ink-500">
-        这不是给你单独看的回测表，而是系统把过去相似信号做成的可信度支撑；样本少时只做降权参考。
+        仅验证同批右侧信号的 T+1/T+2 隔夜表现，已计入双边滑点、双边佣金与卖出印花税；样本少时只做降权参考。
       </p>
     </div>
   )
@@ -919,15 +924,15 @@ function tailTone(status: string): 'success' | 'brand' | 'warning' | 'danger' | 
   return 'neutral'
 }
 
-function backtestTone(summary: BacktestSummary): 'success' | 'brand' | 'warning' | 'neutral' {
+function backtestTone(summary: OvernightBacktestSummary): 'success' | 'brand' | 'warning' | 'neutral' {
   if (summary.conclusion.includes('支持')) return 'success'
   if (summary.conclusion.includes('正收益')) return 'brand'
   if (summary.conclusion.includes('偏弱')) return 'warning'
   return 'neutral'
 }
 
-function backtestSupportLabel(summary: BacktestSummary) {
-  if (summary.tradeCount < 5) return '样本少'
+function backtestSupportLabel(summary: OvernightBacktestSummary) {
+  if (summary.sampleCount < 5) return '样本少'
   if (summary.conclusion.includes('支持')) return '支持'
   if (summary.conclusion.includes('正收益')) return '可参考'
   if (summary.conclusion.includes('偏弱')) return '偏弱'

@@ -47,4 +47,31 @@ public class BacktestController {
                 limitMovePercent
         );
     }
+
+    @GetMapping("/overnight")
+    public OvernightBacktestReport overnight(
+            @RequestParam(required = false) String symbols,
+            @RequestParam(required = false) Integer lookbackDays,
+            @RequestParam(required = false) BigDecimal firstTargetPercent,
+            @RequestParam(required = false) BigDecimal secondTargetPercent,
+            @RequestParam(required = false) BigDecimal hardStopPercent,
+            @RequestParam(required = false) Integer maxHoldingTradingDays,
+            @RequestParam(required = false) BigDecimal commissionPercent,
+            @RequestParam(required = false) BigDecimal stampDutyPercent,
+            @RequestParam(required = false) BigDecimal slippagePercent,
+            @RequestParam(required = false) BigDecimal limitMovePercent
+    ) {
+        return backtestService.overnightBacktest(
+                symbols,
+                lookbackDays,
+                firstTargetPercent,
+                secondTargetPercent,
+                hardStopPercent,
+                maxHoldingTradingDays,
+                commissionPercent,
+                stampDutyPercent,
+                slippagePercent,
+                limitMovePercent
+        );
+    }
 }

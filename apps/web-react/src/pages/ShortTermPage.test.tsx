@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchLatestShortTermScheduledSnapshot,
-  fetchRightSideBacktest,
+  fetchOvernightBacktest,
   fetchShortTermScanJob,
   startShortTermScanJob
 } from '../api/client'
@@ -16,7 +16,7 @@ import { ShortTermPage } from './ShortTermPage'
 
 vi.mock('../api/client', () => ({
   fetchLatestShortTermScheduledSnapshot: vi.fn(),
-  fetchRightSideBacktest: vi.fn(),
+  fetchOvernightBacktest: vi.fn(),
   fetchShortTermScanJob: vi.fn(),
   startShortTermScanJob: vi.fn()
 }))
@@ -116,13 +116,13 @@ describe('ShortTermPage prepared snapshot mount', () => {
     document.body.append(host)
     root = createRoot(host)
     vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue(finalReadySnapshot)
-    vi.mocked(fetchRightSideBacktest).mockResolvedValue({
-      scope: 'RIGHT_SIDE',
+    vi.mocked(fetchOvernightBacktest).mockResolvedValue({
+      scope: 'OVERNIGHT',
       methodology: [],
       ruleSet: {} as never,
       symbols: [],
       summary: {} as never,
-      results: [],
+      trades: [],
       generatedAt: '2026-07-23T14:53:00+08:00'
     })
   })
@@ -139,9 +139,111 @@ describe('ShortTermPage prepared snapshot mount', () => {
 
     expect(fetchLatestShortTermScheduledSnapshot).toHaveBeenCalledTimes(1)
     expect(startShortTermScanJob).not.toHaveBeenCalled()
-    expect(fetchRightSideBacktest).not.toHaveBeenCalled()
+    expect(fetchOvernightBacktest).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('尾盘最终结果已就绪')
     expect(document.body.textContent).toContain('计划任务')
+  })
+
+  it('requests the T1/T2 overnight contract without a legacy 20-day holding window', async () => {
+    vi.mocked(fetchOvernightBacktest).mockResolvedValue({
+      scope: '短线隔夜 T+1/T+2 验证',
+      methodology: [],
+      ruleSet: {
+        lookbackDays: 900,
+        firstTargetPercent: 2.5,
+        secondTargetPercent: 4.5,
+        hardStopPercent: 3.5,
+        maxHoldingTradingDays: 2,
+        commissionPercent: 0.03,
+        stampDutyPercent: 0.05,
+        slippagePercent: 0.05,
+        limitMovePercent: 9.8
+      },
+      symbols: ['600795'],
+      summary: {
+        symbolCount: 1,
+        sampleCount: 12,
+        positiveRatePercent: 58.33,
+        averageReturnPercent: 0.82,
+        medianReturnPercent: 0.55,
+        averageRunupPercent: 2.1,
+        averageDrawdownPercent: -1.4,
+        firstTargetRatePercent: 25,
+        secondTargetRatePercent: 16.67,
+        hardStopRatePercent: 8.33,
+        timeStopRatePercent: 50,
+        gapDownRatePercent: 33.33,
+        sampleStart: '2025-01-01',
+        sampleEnd: '2026-07-01',
+        conclusion: '隔夜正收益但波动需复核'
+      },
+      trades: [],
+      generatedAt: '2026-07-23T14:53:00+08:00'
+    })
+    const candidate = {
+      rank: 1,
+      symbol: '600795',
+      name: '国电电力',
+      market: '沪市',
+      industry: '电力',
+      latestPrice: 5.21,
+      changePercent: 1.2,
+      amount: 900_000_000,
+      phaseLabel: '右侧早期',
+      action: 'WATCH_RIGHT_SIDE',
+      actionLabel: '观察',
+      reason: '量价结构确认',
+      todayAdvice: { action: 'NEXT_WATCH', actionLabel: '次日关注' },
+      tailSignal: { status: 'CONFIRMED', statusLabel: '尾盘确认', score: 75 },
+      score: {
+        technicalScore: 80,
+        volumeScore: 75,
+        marketHeatScore: 70,
+        valuationScore: 60,
+        financialScore: 65,
+        riskPenalty: 5,
+        finalScore: 74
+      },
+      technical: {
+        goldenCross: null,
+        rightSideSignal: 'EARLY_CONFIRMED',
+        ma20SlopePercent: 0.8,
+        distanceToMa20Percent: 2.1,
+        breakoutFromPreviousHigh20Percent: 1.3,
+        volumeRatio20: 1.5
+      },
+      financial: { qualityScore: 65 },
+      quoteFreshness: { blocksRealtimeDecision: false, statusLabel: '新鲜' }
+    }
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: {
+        ...emptyReport,
+        candidateCount: 1,
+        candidates: [candidate]
+      } as never
+    })
+
+    await renderPage(root)
+
+    expect(fetchOvernightBacktest).toHaveBeenCalledWith(expect.objectContaining({
+      symbols: '600795',
+      lookbackDays: 900,
+      firstTargetPercent: 2.5,
+      secondTargetPercent: 4.5,
+      hardStopPercent: 3.5,
+      maxHoldingTradingDays: 2
+    }))
+    expect(fetchOvernightBacktest).not.toHaveBeenCalledWith(expect.objectContaining({
+      holdingDays: 20
+    }))
+    expect(document.body.textContent).toContain('12 笔隔夜样本')
+    expect(document.body.textContent).toContain('正收益率')
+    expect(document.body.textContent).toContain('中位收益')
+    expect(document.body.textContent).toContain('第一目标')
+    expect(document.body.textContent).toContain('第二目标')
+    expect(document.body.textContent).toContain('硬止损')
+    expect(document.body.textContent).toContain('次日低开')
   })
 
   it.each(['重新扫描', '应用阈值'])(

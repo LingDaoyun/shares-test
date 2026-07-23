@@ -726,6 +726,66 @@ export interface BacktestReport {
   generatedAt: string
 }
 
+export interface OvernightBacktestRuleSet {
+  lookbackDays: number
+  firstTargetPercent: number
+  secondTargetPercent: number
+  hardStopPercent: number
+  maxHoldingTradingDays: number
+  commissionPercent: number
+  stampDutyPercent: number
+  slippagePercent: number
+  limitMovePercent: number
+}
+
+export interface OvernightBacktestTrade {
+  symbol: string
+  signalDate: string
+  proxyEntryPrice: number | null
+  t1Date: string
+  t2Date: string | null
+  exitDate: string
+  exitPrice: number | null
+  netReturnPercent: number
+  maxRunupPercent: number
+  maxDrawdownPercent: number
+  gapPercent: number | null
+  holdingTradingDays: number
+  commissionCostPercent: number
+  stampDutyCostPercent: number
+  slippageCostPercent: number
+  totalCostPercent: number
+  exitReason: string
+}
+
+export interface OvernightBacktestSummary {
+  symbolCount: number
+  sampleCount: number
+  positiveRatePercent: number
+  averageReturnPercent: number
+  medianReturnPercent: number
+  averageRunupPercent: number
+  averageDrawdownPercent: number
+  firstTargetRatePercent: number
+  secondTargetRatePercent: number
+  hardStopRatePercent: number
+  timeStopRatePercent: number
+  gapDownRatePercent: number
+  sampleStart: string | null
+  sampleEnd: string | null
+  conclusion: string
+}
+
+export interface OvernightBacktestReport {
+  scope: string
+  methodology: string[]
+  ruleSet: OvernightBacktestRuleSet
+  symbols: string[]
+  summary: OvernightBacktestSummary
+  trades: OvernightBacktestTrade[]
+  generatedAt: string
+}
+
 export interface TechTrackedStock {
   rank: number
   symbol: string
