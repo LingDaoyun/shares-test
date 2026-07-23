@@ -131,8 +131,9 @@ public class EastMoneyClient {
         Map<String, EastMoneyQuote> merged = new LinkedHashMap<>();
         RuntimeException pageFailure = null;
         int reportedTotal = 0;
-        int expectedCount = requestedCount;
-        int maxPages = Math.min(160, (int) Math.ceil(requestedCount / (double) pageSize));
+        boolean reportedTotalConsistent = true;
+        int fetchTarget = requestedCount;
+        int maxPages = 160;
 
         for (int pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
             AshareQuotePage page;
@@ -146,22 +147,29 @@ public class EastMoneyClient {
                 break;
             }
             if (page.totalCount() > 0) {
-                reportedTotal = page.totalCount();
-                expectedCount = Math.min(requestedCount, reportedTotal);
-                maxPages = Math.min(160, Math.max(1, (int) Math.ceil(expectedCount / (double) pageSize)));
+                if (reportedTotal > 0 && reportedTotal != page.totalCount()) {
+                    reportedTotalConsistent = false;
+                }
+                if (reportedTotal == 0) {
+                    reportedTotal = page.totalCount();
+                }
+                fetchTarget = Math.min(requestedCount, reportedTotal);
             }
+            int beforeMergeCount = merged.size();
             page.quotes().stream()
                     .filter(quote -> quote.symbol() != null && !quote.symbol().isBlank())
                     .forEach(quote -> merged.putIfAbsent(quote.symbol(), quote));
-            if (merged.size() >= expectedCount) {
+            if (merged.size() >= fetchTarget) {
+                break;
+            }
+            if (merged.size() == beforeMergeCount) {
                 break;
             }
         }
 
-        if (reportedTotal > 0) {
-            expectedCount = Math.min(requestedCount, reportedTotal);
-        }
-        List<EastMoneyQuote> quotes = merged.values().stream().limit(expectedCount).toList();
+        int expectedCount = reportedTotal > 0 && reportedTotalConsistent ? reportedTotal : 0;
+        fetchTarget = expectedCount > 0 ? Math.min(requestedCount, expectedCount) : requestedCount;
+        List<EastMoneyQuote> quotes = merged.values().stream().limit(fetchTarget).toList();
         if (quotes.isEmpty()) {
             if (pageFailure != null) {
                 throw new IllegalStateException("A股全市场实时行情获取失败：" + rootMessage(pageFailure), pageFailure);
@@ -182,7 +190,7 @@ public class EastMoneyClient {
                 expectedCount,
                 fetchedCount,
                 missingCount,
-                missingCount == 0,
+                expectedCount > 0 && fetchedCount == expectedCount,
                 source.isBlank() ? "行情源未标注" : source,
                 quotes.stream()
                         .map(EastMoneyQuote::fetchedAt)

@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -230,6 +231,43 @@ class EastMoneyClientTest {
         assertThat(snapshot.complete()).isTrue();
     }
 
+    @Test
+    void snapshotContinuesWhenRemoteCapsRowsBelowRequestedPageSize() {
+        CappedPageStubClient snapshotClient = new CappedPageStubClient();
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(250);
+
+        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.expectedCount()).isEqualTo(250);
+        assertThat(snapshot.fetchedCount()).isEqualTo(250);
+        assertThat(snapshot.quotes()).hasSize(250);
+        assertThat(snapshotClient.requestedPages).isEqualTo(3);
+    }
+
+    @Test
+    void snapshotKeepsSourceReportedUniverseWhenRequestIsOnlyASample() {
+        SampledUniverseStubClient snapshotClient = new SampledUniverseStubClient();
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(100);
+
+        assertThat(snapshot.requestedCount()).isEqualTo(100);
+        assertThat(snapshot.expectedCount()).isEqualTo(5000);
+        assertThat(snapshot.fetchedCount()).isEqualTo(100);
+        assertThat(snapshot.missingCount()).isEqualTo(4900);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void snapshotMarksChangingSourceReportedUniverseAsUnknown() {
+        InconsistentUniverseStubClient snapshotClient = new InconsistentUniverseStubClient();
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(snapshot.expectedCount()).isZero();
+        assertThat(snapshot.fetchedCount()).isEqualTo(200);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
     private LiveDataProperties properties() {
         return new LiveDataProperties(
                 LiveDataProperties.DEFAULT_EASTMONEY_FUND_FLOW_URL,
@@ -298,6 +336,84 @@ class EastMoneyClientTest {
                     ? new AshareQuotePage(1, List.of(SnapshotStubClient.quote(
                             "688999", "半导体", "东方财富实时全市场")))
                     : new AshareQuotePage(1, List.of());
+        }
+    }
+
+    private static final class CappedPageStubClient extends EastMoneyClient {
+
+        private int requestedPages;
+
+        private CappedPageStubClient() {
+            super(null, new ObjectMapper(), null);
+        }
+
+        @Override
+        AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+            requestedPages = Math.max(requestedPages, pageNumber);
+            int start = (pageNumber - 1) * 100;
+            if (start >= 250) {
+                return new AshareQuotePage(250, List.of());
+            }
+            int end = Math.min(250, start + 100);
+            return new AshareQuotePage(
+                    250,
+                    IntStream.range(start, end)
+                            .mapToObj(index -> SnapshotStubClient.quote(
+                                    String.format("600%03d", index),
+                                    "工业",
+                                    "东方财富实时全市场"
+                            ))
+                            .toList()
+            );
+        }
+    }
+
+    private static final class SampledUniverseStubClient extends EastMoneyClient {
+
+        private SampledUniverseStubClient() {
+            super(null, new ObjectMapper(), null);
+        }
+
+        @Override
+        AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+            if (pageNumber > 1) {
+                return new AshareQuotePage(5000, List.of());
+            }
+            return new AshareQuotePage(
+                    5000,
+                    java.util.stream.IntStream.range(0, 100)
+                            .mapToObj(index -> SnapshotStubClient.quote(
+                                    String.format("600%03d", index),
+                                    "工业",
+                                    "东方财富实时全市场"
+                            ))
+                            .toList()
+            );
+        }
+    }
+
+    private static final class InconsistentUniverseStubClient extends EastMoneyClient {
+
+        private InconsistentUniverseStubClient() {
+            super(null, new ObjectMapper(), null);
+        }
+
+        @Override
+        AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+            if (pageNumber > 2) {
+                return new AshareQuotePage(4999, List.of());
+            }
+            int offset = (pageNumber - 1) * 100;
+            return new AshareQuotePage(
+                    pageNumber == 1 ? 5000 : 4999,
+                    IntStream.range(offset, offset + 100)
+                            .mapToObj(index -> SnapshotStubClient.quote(
+                                    String.format("600%03d", index),
+                                    "工业",
+                                    "东方财富实时全市场"
+                            ))
+                            .toList()
+            );
         }
     }
 }

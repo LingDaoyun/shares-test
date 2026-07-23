@@ -51,6 +51,7 @@ public class ShortTermService {
     private static final int DEFAULT_LIMIT = 3;
     private static final int DEFAULT_SCAN_LIMIT = 6000;
     private static final int MAX_SCAN_LIMIT = 6000;
+    private static final int FULL_MARKET_QUOTE_REQUEST = Integer.MAX_VALUE;
     private static final int DEFAULT_KLINE_LIMIT = 60;
     private static final int MAX_KLINE_LIMIT = 160;
     private static final BigDecimal DEFAULT_MIN_AMOUNT = new BigDecimal("80000000");
@@ -238,7 +239,7 @@ public class ShortTermService {
     }
 
     public ShortTermReport report(ShortTermScanRequest request) {
-        return buildReport(request == null ? ShortTermScanRequest.empty() : request, Set.of());
+        return buildReport(request == null ? ShortTermScanRequest.empty() : request, Set.of(), false);
     }
 
     public ShortTermReport finalReport(ShortTermScanRequest request, Set<String> preselectedSymbols) {
@@ -247,13 +248,15 @@ public class ShortTermService {
         }
         return buildReport(
                 request == null ? ShortTermScanRequest.empty() : request,
-                Set.copyOf(preselectedSymbols)
+                Set.copyOf(preselectedSymbols),
+                true
         );
     }
 
     private ShortTermReport buildReport(
             ShortTermScanRequest request,
-            Set<String> preselectedSymbols
+            Set<String> preselectedSymbols,
+            boolean fullMarketExecution
     ) {
         ShortTermRuleSet ruleSet = resolveRuleSet(
                 request.scanLimit(),
@@ -267,12 +270,27 @@ public class ShortTermService {
                 request.minFinancialScore()
         );
 
-        AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(ruleSet.scanLimit());
-        List<EastMoneyQuote> marketQuotes = quoteSnapshot.quotes();
-        List<EastMoneyQuote> quoteUniverse = marketQuotes.stream()
+        LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
+        int quoteRequestLimit = fullMarketExecution ? FULL_MARKET_QUOTE_REQUEST : ruleSet.scanLimit();
+        AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(quoteRequestLimit);
+        List<EastMoneyQuote> marketQuotes = uniqueMarketQuotes(quoteSnapshot.quotes());
+        List<EastMoneyQuote> pointInTimeCoverageQuotes = marketQuotes.stream()
+                .filter(quote -> quoteAvailableAtDecision(quote, decisionAt))
+                .toList();
+        List<EastMoneyQuote> pointInTimeQuotes = fullMarketExecution
+                ? pointInTimeCoverageQuotes
+                : marketQuotes;
+        List<EastMoneyQuote> quoteUniverse = pointInTimeQuotes.stream()
                 .filter(this::isTradableCommonShare)
                 .filter(this::hasUsablePrice)
                 .toList();
+        ShortTermCoverageSnapshot coverage = coverageSnapshot(
+                quoteSnapshot,
+                marketQuotes,
+                pointInTimeCoverageQuotes,
+                decisionAt,
+                fullMarketExecution
+        );
         Set<String> unstableIndustrySymbols = fetchUnstableIndustrySymbols();
         List<ShortTermRiskExclusion> exclusions = quoteUniverse.stream()
                 .map(quote -> preFilterExclusion(quote, ruleSet, unstableIndustrySymbols))
@@ -282,7 +300,7 @@ public class ShortTermService {
         List<EastMoneyQuote> preFilteredQuotes = quoteUniverse.stream()
                 .filter(quote -> passesQuotePreFilter(quote, ruleSet, unstableIndustrySymbols))
                 .toList();
-        ShortTermMarketSentiment marketSentiment = marketSentiment(quoteUniverse, quoteSnapshot);
+        ShortTermMarketSentiment marketSentiment = marketSentiment(quoteUniverse, coverage);
         List<ShortTermHotDirection> hotDirections = resolveHotDirections(preFilteredQuotes);
         Map<String, ShortTermHotDirection> hotDirectionMap = hotDirections.stream()
                 .collect(Collectors.toMap(
@@ -353,11 +371,11 @@ public class ShortTermService {
 
         return new ShortTermReport(
                 "A 股短线右侧启动池",
-                marketQuotes.size(),
+                quoteUniverse.size(),
                 tradableQuotes.size(),
                 (int) validKlineCount,
                 candidates.size(),
-                quoteNote(quoteSnapshot, (int) validKlineCount, tradableQuotes.size()),
+                quoteNote(coverage, (int) validKlineCount, tradableQuotes.size()),
                 tradingClockService.currentSession(),
                 List.of(
                         "第一层用全 A 股行情做流动性、非 ST、热门方向和追涨风险排序，PE/PB 只占预选分的 10%。",
@@ -377,9 +395,9 @@ public class ShortTermService {
                 marketSentiment,
                 exclusions,
                 Map.of(),
-                coverageSnapshot(quoteSnapshot),
+                coverage,
                 reviewedSymbols,
-                dataCutoffAt(quoteUniverse, candidates),
+                dataCutoffAt(pointInTimeCoverageQuotes, candidates),
                 Instant.now()
         );
     }
@@ -393,15 +411,16 @@ public class ShortTermService {
         }
     }
 
-    private String quoteNote(AshareQuoteSnapshot snapshot, int klineReviewedCount, int reviewedCount) {
-        String coverage = snapshot.fetchedCount() + "/" + snapshot.expectedCount();
+    private String quoteNote(ShortTermCoverageSnapshot coverage, int klineReviewedCount, int reviewedCount) {
+        String coverageText = coverage.fetchedCount() + "/" + coverage.expectedCount();
         String goldenCrossNote = " 金叉K线复核 " + klineReviewedCount + "/" + reviewedCount
                 + "；金叉排序只代表已复核样本，不代表全市场每只股票均已计算。";
-        if (hasReliableMarketCoverage(snapshot)) {
-            return QUOTE_NOTE + " 本轮行情覆盖 " + coverage + "，来源：" + snapshot.source() + "。" + goldenCrossNote;
+        if (coverage.executionReliable()) {
+            return QUOTE_NOTE + " 本轮行情覆盖 " + coverageText + "，来源：" + coverage.source() + "。" + goldenCrossNote;
         }
-        return QUOTE_NOTE + " 本轮行情覆盖不足 " + coverage + "，缺失 " + snapshot.missingCount()
-                + " 只；页面保留研究结果，但覆盖率低于 90% 时关闭短线执行动作。来源：" + snapshot.source() + "。" + goldenCrossNote;
+        return QUOTE_NOTE + " 本轮行情覆盖不足 " + coverageText + "，缺失 " + coverage.missingCount()
+                + " 只；页面保留研究结果，但覆盖率或点时语义未通过时关闭短线执行动作。来源："
+                + coverage.source() + "。" + goldenCrossNote;
     }
 
     private TechnicalCandidate technicalCandidate(EastMoneyQuote quote, List<EastMoneyKLine> klines, ShortTermRuleSet ruleSet) {
@@ -966,8 +985,11 @@ public class ShortTermService {
         return new ActionDecision("WAIT_CONFIRM", "等待确认");
     }
 
-    private ShortTermMarketSentiment marketSentiment(List<EastMoneyQuote> quotes, AshareQuoteSnapshot snapshot) {
-        if (!hasReliableMarketCoverage(snapshot)) {
+    private ShortTermMarketSentiment marketSentiment(
+            List<EastMoneyQuote> quotes,
+            ShortTermCoverageSnapshot coverage
+    ) {
+        if (!coverage.executionReliable()) {
             return new ShortTermMarketSentiment(
                     "行情覆盖不足",
                     BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
@@ -976,8 +998,8 @@ public class ShortTermService {
                     0,
                     0,
                     BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
-                    "行情仅覆盖 " + snapshot.fetchedCount() + "/" + snapshot.expectedCount()
-                            + "，不足以代表全市场广度，本轮关闭短线执行动作。"
+                    "行情仅覆盖 " + coverage.fetchedCount() + "/" + coverage.expectedCount()
+                            + "，或报价点时语义未通过，不能代表全市场实时广度，本轮关闭短线执行动作。"
             );
         }
         int advancing = 0;
@@ -1044,28 +1066,53 @@ public class ShortTermService {
                 .orElse(StructuralHotCluster.unavailable());
     }
 
-    private boolean hasReliableMarketCoverage(AshareQuoteSnapshot snapshot) {
-        return coverageSnapshot(snapshot).executionReliable();
-    }
-
-    private ShortTermCoverageSnapshot coverageSnapshot(AshareQuoteSnapshot snapshot) {
+    private ShortTermCoverageSnapshot coverageSnapshot(
+            AshareQuoteSnapshot snapshot,
+            List<EastMoneyQuote> uniqueMarketQuotes,
+            List<EastMoneyQuote> eligibleQuotes,
+            LocalDateTime decisionAt,
+            boolean requireCompleteUniverse
+    ) {
         if (snapshot == null || snapshot.expectedCount() <= 0) {
-            return ShortTermCoverageSnapshot.unreliable();
+            return new ShortTermCoverageSnapshot(
+                    0,
+                    eligibleQuotes == null ? 0 : eligibleQuotes.size(),
+                    0,
+                    BigDecimal.ZERO,
+                    false,
+                    snapshot == null || snapshot.source() == null || snapshot.source().isBlank()
+                            ? "未知"
+                            : snapshot.source(),
+                    snapshot == null ? null : snapshot.fetchedAt()
+            );
         }
-        BigDecimal ratio = BigDecimal.valueOf(snapshot.fetchedCount())
+        int fetchedCount = eligibleQuotes == null ? 0 : eligibleQuotes.size();
+        int missingCount = Math.max(0, snapshot.expectedCount() - fetchedCount);
+        BigDecimal ratio = BigDecimal.valueOf(fetchedCount)
                 .divide(BigDecimal.valueOf(snapshot.expectedCount()), 4, RoundingMode.HALF_UP);
-        Instant now = tradingClockService.currentMarketDateTime().atZone(SHANGHAI).toInstant();
+        Instant decisionInstant = decisionAt.atZone(SHANGHAI).toInstant();
         boolean validSource = snapshot.source() != null && !snapshot.source().isBlank();
         boolean freshSnapshot = snapshot.fetchedAt() != null
-                && !snapshot.fetchedAt().isBefore(now.minus(automationSettings.freshness()))
-                && !snapshot.fetchedAt().isAfter(now.plusSeconds(5));
+                && !snapshot.fetchedAt().isBefore(decisionInstant.minus(automationSettings.freshness()))
+                && !snapshot.fetchedAt().isAfter(decisionInstant.plusSeconds(5));
+        List<EastMoneyQuote> safeUniqueQuotes = uniqueMarketQuotes == null ? List.of() : uniqueMarketQuotes;
+        boolean requestedFullReportedUniverse = snapshot.requestedCount() >= snapshot.expectedCount();
+        boolean countsConsistent = snapshot.fetchedCount() == safeUniqueQuotes.size()
+                && safeUniqueQuotes.size() <= snapshot.expectedCount()
+                && fetchedCount <= safeUniqueQuotes.size();
+        boolean allQuotesRespectDecisionAt = safeUniqueQuotes.stream()
+                .allMatch(quote -> quoteAvailableAtDecision(quote, decisionAt));
         boolean reliable = ratio.compareTo(MIN_RELIABLE_MARKET_COVERAGE) >= 0
                 && validSource
-                && freshSnapshot;
+                && freshSnapshot
+                && requestedFullReportedUniverse
+                && countsConsistent
+                && allQuotesRespectDecisionAt
+                && (!requireCompleteUniverse || snapshot.complete());
         return new ShortTermCoverageSnapshot(
                 snapshot.expectedCount(),
-                snapshot.fetchedCount(),
-                snapshot.missingCount(),
+                fetchedCount,
+                missingCount,
                 ratio,
                 reliable,
                 validSource ? snapshot.source() : "未知",
@@ -1078,7 +1125,7 @@ public class ShortTermService {
             List<ShortTermCandidate> candidates
     ) {
         Instant quoteCutoff = quoteUniverse.stream()
-                .map(quote -> quote.marketTimestamp() == null ? quote.fetchedAt() : quote.marketTimestamp())
+                .map(EastMoneyQuote::marketTimestamp)
                 .filter(value -> value != null)
                 .max(Comparator.naturalOrder())
                 .orElse(null);
@@ -2395,6 +2442,34 @@ public class ShortTermService {
 
     private boolean isEarlyRightSideSignal(String signal) {
         return Set.of("右侧早期确认", "右侧早期观察").contains(signal);
+    }
+
+    private List<EastMoneyQuote> uniqueMarketQuotes(List<EastMoneyQuote> quotes) {
+        if (quotes == null || quotes.isEmpty()) {
+            return List.of();
+        }
+        Map<String, EastMoneyQuote> unique = new LinkedHashMap<>();
+        for (EastMoneyQuote quote : quotes) {
+            if (quote != null && quote.symbol() != null && !quote.symbol().isBlank()) {
+                unique.putIfAbsent(quote.symbol(), quote);
+            }
+        }
+        return List.copyOf(unique.values());
+    }
+
+    private boolean quoteAvailableAtDecision(EastMoneyQuote quote, LocalDateTime decisionAt) {
+        if (quote == null || quote.marketTimestamp() == null || decisionAt == null) {
+            return false;
+        }
+        LocalDate marketDate = quote.marketTimestamp().atZone(SHANGHAI).toLocalDate();
+        if (!marketDate.equals(decisionAt.toLocalDate())) {
+            return false;
+        }
+        if (quote.tradeDate() != null && !quote.tradeDate().equals(marketDate)) {
+            return false;
+        }
+        Instant decisionInstant = decisionAt.atZone(SHANGHAI).toInstant();
+        return !quote.marketTimestamp().isAfter(decisionInstant);
     }
 
     private boolean isTradableCommonShare(EastMoneyQuote quote) {
