@@ -49,17 +49,33 @@ public class ShortTermScheduledSnapshotStore {
             ShortTermScheduledSnapshotEntity entity = repository.saveAndFlush(new ShortTermScheduledSnapshotEntity(
                     snapshotKey, tradeDate, stage, parameterFingerprint, parametersJson, startedAt));
             return Optional.of(new ShortTermSnapshotClaim(snapshotKey, entity.getAttemptCount()));
-        } catch (DataIntegrityViolationException ignored) {
+        } catch (DataIntegrityViolationException exception) {
+            if (!repository.existsById(snapshotKey)) {
+                throw exception;
+            }
             int reclaimed = repository.reclaimFailed(
                     snapshotKey, ShortTermSnapshotStatus.RUNNING, ShortTermSnapshotStatus.FAILED,
                     startedAt, RUNNING_MESSAGE);
             if (reclaimed != 1) {
                 return Optional.empty();
             }
-            ShortTermScheduledSnapshotEntity entity = repository.findById(snapshotKey)
-                    .orElseThrow(() -> new IllegalStateException("Reclaimed scheduled snapshot is missing"));
-            return Optional.of(new ShortTermSnapshotClaim(snapshotKey, entity.getAttemptCount()));
+            return Optional.of(currentClaim(snapshotKey));
         }
+    }
+
+    @Transactional
+    public Optional<ShortTermSnapshotClaim> recoverStaleRunning(
+            ShortTermSnapshotClaim staleClaim,
+            Instant staleCutoff,
+            Instant restartedAt
+    ) {
+        int reclaimed = repository.reclaimStaleRunning(
+                staleClaim.snapshotKey(), staleClaim.attemptCount(), ShortTermSnapshotStatus.RUNNING,
+                staleCutoff, restartedAt, RUNNING_MESSAGE);
+        if (reclaimed != 1) {
+            return Optional.empty();
+        }
+        return Optional.of(currentClaim(staleClaim.snapshotKey()));
     }
 
     @Transactional
@@ -134,6 +150,12 @@ public class ShortTermScheduledSnapshotStore {
                 entity.getParameterFingerprint(), entity.getDataCutoffAt(), entity.getStartedAt(),
                 entity.getCompletedAt(), entity.getMessage(), readBlockedReasons(entity.getBlockedReasonsJson()),
                 readReport(entity.getReportJson()));
+    }
+
+    private ShortTermSnapshotClaim currentClaim(String snapshotKey) {
+        ShortTermScheduledSnapshotEntity entity = repository.findById(snapshotKey)
+                .orElseThrow(() -> new IllegalStateException("Reclaimed scheduled snapshot is missing"));
+        return new ShortTermSnapshotClaim(snapshotKey, entity.getAttemptCount());
     }
 
     private String snapshotKey(LocalDate tradeDate, ShortTermSnapshotStage stage, String parameterFingerprint) {

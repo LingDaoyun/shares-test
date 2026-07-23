@@ -3,16 +3,20 @@ package com.aistock.research.shortterm.schedule;
 import com.aistock.research.shortterm.ShortTermReport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.sql.Timestamp;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStage.FINAL;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStage.PRESELECT;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.FINAL_READY;
@@ -28,6 +32,9 @@ class ShortTermScheduledSnapshotStoreTest {
 
     @Autowired
     private ShortTermScheduledSnapshotRepository repository;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @AfterEach
     void clean() {
@@ -165,6 +172,72 @@ class ShortTermScheduledSnapshotStoreTest {
                 started.plusSeconds(40), "重试结果已就绪", List.of());
         assertThat(published.status()).isEqualTo(FINAL_READY);
         assertThat(published.message()).isEqualTo("重试结果已就绪");
+    }
+
+    @Test
+    void propagatesNonDuplicatePersistenceViolation() {
+        LocalDate date = LocalDate.of(2026, 7, 31);
+        String snapshotKey = date + ":FINAL:rules-v1";
+
+        assertThatThrownBy(() -> store.claim(
+                date, FINAL, "rules-v1", null, Instant.parse("2026-07-31T06:48:00Z")))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(repository.existsById(snapshotKey)).isFalse();
+    }
+
+    @Test
+    void recoversOnlyTheExpectedStaleRunningGeneration() {
+        LocalDate date = LocalDate.of(2026, 8, 3);
+        Instant started = Instant.parse("2026-08-03T06:48:00Z");
+        Instant lastHeartbeat = started.plusSeconds(30);
+        Instant restarted = started.plusSeconds(120);
+        ShortTermSnapshotClaim attemptA = store.claim(
+                date, FINAL, "rules-v1", "{}", started).orElseThrow();
+        jdbcTemplate.update("""
+                update short_term_scheduled_snapshot
+                set completed_at = ?,
+                    report_json = ?,
+                    data_cutoff_at = ?,
+                    message = ?,
+                    blocked_reason = ?,
+                    updated_at = ?
+                where snapshot_key = ?
+                """,
+                Timestamp.from(started.plusSeconds(30)), "{\"stale\":true}",
+                Timestamp.from(started.plusSeconds(20)), "旧任务残留",
+                "[\"旧阻断原因\"]", Timestamp.from(lastHeartbeat), attemptA.snapshotKey());
+
+        assertThat(store.recoverStaleRunning(
+                attemptA, lastHeartbeat.minusNanos(1), restarted)).isEmpty();
+        assertThat(store.recoverStaleRunning(
+                new ShortTermSnapshotClaim(attemptA.snapshotKey(), 2), lastHeartbeat, restarted)).isEmpty();
+
+        ShortTermSnapshotClaim attemptB = store.recoverStaleRunning(
+                attemptA, lastHeartbeat, restarted).orElseThrow();
+        assertThat(attemptB.attemptCount()).isEqualTo(2);
+
+        ShortTermScheduledSnapshotEntity entity = repository.findById(attemptA.snapshotKey()).orElseThrow();
+        assertThat(entity.getStatus()).isEqualTo(RUNNING);
+        assertThat(entity.getAttemptCount()).isEqualTo(2);
+        assertThat(entity.getStartedAt()).isEqualTo(restarted);
+        assertThat(entity.getUpdatedAt()).isEqualTo(restarted);
+        assertThat(entity.getCompletedAt()).isNull();
+        assertThat(entity.getReportJson()).isNull();
+        assertThat(entity.getDataCutoffAt()).isNull();
+        assertThat(entity.getBlockedReasonsJson()).isNull();
+        assertThat(entity.getMessage()).isEqualTo("正在执行");
+
+        assertThatIllegalStateException().isThrownBy(() -> store.finish(
+                attemptA, FINAL_READY, sampleReport(), restarted.plusSeconds(10),
+                restarted.plusSeconds(10), "旧代次迟到结果", List.of()));
+        assertThatIllegalStateException().isThrownBy(() -> store.fail(
+                attemptA, restarted.plusSeconds(11), "旧代次迟到失败", List.of()));
+
+        ShortTermScheduledSnapshot published = store.finish(
+                attemptB, FINAL_READY, sampleReport(), restarted.plusSeconds(20),
+                restarted.plusSeconds(20), "恢复后结果已就绪", List.of());
+        assertThat(published.status()).isEqualTo(FINAL_READY);
+        assertThat(published.message()).isEqualTo("恢复后结果已就绪");
     }
 
     private ShortTermReport sampleReport() {

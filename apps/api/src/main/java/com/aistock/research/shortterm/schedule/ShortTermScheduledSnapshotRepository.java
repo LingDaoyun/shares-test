@@ -50,6 +50,33 @@ public interface ShortTermScheduledSnapshotRepository
     @Transactional
     @Query("""
             update ShortTermScheduledSnapshotEntity snapshot
+            set snapshot.attemptCount = snapshot.attemptCount + 1,
+                snapshot.startedAt = :restartedAt,
+                snapshot.completedAt = null,
+                snapshot.reportJson = null,
+                snapshot.dataCutoffAt = null,
+                snapshot.message = :runningMessage,
+                snapshot.blockedReasonsJson = null,
+                snapshot.updatedAt = :restartedAt
+            where snapshot.snapshotKey = :snapshotKey
+              and snapshot.status = :runningStatus
+              and snapshot.attemptCount = :expectedAttemptCount
+              and snapshot.startedAt <= :staleCutoff
+              and snapshot.updatedAt <= :staleCutoff
+            """)
+    int reclaimStaleRunning(
+            @Param("snapshotKey") String snapshotKey,
+            @Param("expectedAttemptCount") int expectedAttemptCount,
+            @Param("runningStatus") ShortTermSnapshotStatus runningStatus,
+            @Param("staleCutoff") java.time.Instant staleCutoff,
+            @Param("restartedAt") java.time.Instant restartedAt,
+            @Param("runningMessage") String runningMessage
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            update ShortTermScheduledSnapshotEntity snapshot
             set snapshot.status = :terminalStatus,
                 snapshot.reportJson = :reportJson,
                 snapshot.dataCutoffAt = :dataCutoffAt,
