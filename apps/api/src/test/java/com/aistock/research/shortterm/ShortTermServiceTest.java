@@ -240,6 +240,30 @@ class ShortTermServiceTest {
     }
 
     @Test
+    void manualReportExcludesFutureQuoteFromResearchAndScoring() {
+        assertManualReportIgnoresInvalidQuote(quoteAt(
+                "600002",
+                "未来热点报价",
+                "机器人",
+                Instant.parse("2026-07-07T06:52:00Z"),
+                "8.50",
+                "2000000000"
+        ));
+    }
+
+    @Test
+    void manualReportExcludesMissingTimestampQuoteFromResearchAndScoring() {
+        assertManualReportIgnoresInvalidQuote(quoteAt(
+                "600002",
+                "无时间热点报价",
+                "机器人",
+                null,
+                "8.50",
+                "2000000000"
+        ));
+    }
+
+    @Test
     void finalReportRejectsEmptyPreselection() {
         assertThatThrownBy(() -> service.finalReport(ShortTermScanRequest.empty(), Set.of()))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -341,7 +365,12 @@ class ShortTermServiceTest {
     @Test
     void actionableTailNeverUsesMinuteAfterDecisionTime() {
         eastMoneyClient.quotes = List.of(
-                quote("600001", "点时边界", "10.62", "1.60", "18.00", "1.60", "180000000")
+                quoteAt(
+                        "600001",
+                        "点时边界",
+                        "通用设备",
+                        Instant.parse("2026-07-07T06:49:00Z")
+                )
         );
         eastMoneyClient.klines.put("600001", rightEarlyKLines("600001", "10.62", "180000"));
         eastMoneyClient.financials.put("600001", goodFinancial("600001"));
@@ -369,6 +398,54 @@ class ShortTermServiceTest {
                 tradingClock,
                 new QuoteFreshnessService(tradingClock, clock)
         );
+    }
+
+    private void assertManualReportIgnoresInvalidQuote(EastMoneyQuote invalidQuote) {
+        EastMoneyQuote validQuote = quoteAt(
+                "600001",
+                "有效热点报价",
+                "机器人",
+                Instant.parse("2026-07-07T06:49:00Z"),
+                "1.20",
+                "600000000"
+        );
+        for (EastMoneyQuote quote : List.of(validQuote, invalidQuote)) {
+            eastMoneyClient.klines.put(
+                    quote.symbol(),
+                    rightEarlyKLines(quote.symbol(), quote.latestPrice().toPlainString(), "180000")
+            );
+            eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
+        }
+        Clock decisionClock = Clock.fixed(Instant.parse("2026-07-07T06:50:00Z"), SHANGHAI);
+        ShortTermService pointInTimeService = serviceAt(decisionClock);
+        ShortTermScanRequest request = new ShortTermScanRequest(
+                3, 100, 10, null, null, null, null, null, null, null
+        );
+
+        eastMoneyClient.quotes = List.of(validQuote);
+        ShortTermReport baseline = pointInTimeService.report(request);
+        ShortTermCandidate baselineCandidate = find(baseline, validQuote.symbol());
+
+        eastMoneyClient.requestedKlineSymbols.clear();
+        eastMoneyClient.requestedFinancialSymbols.clear();
+        eastMoneyClient.quotes = List.of(validQuote, invalidQuote);
+        ShortTermReport report = pointInTimeService.report(request);
+        ShortTermCandidate candidate = find(report, validQuote.symbol());
+
+        assertThat(report.coverage().fetchedCount()).isEqualTo(1);
+        assertThat(report.coverage().executionReliable()).isFalse();
+        assertThat(report.hotDirections()).isEqualTo(baseline.hotDirections());
+        assertThat(report.reviewedSymbols()).containsExactly(validQuote.symbol());
+        assertThat(eastMoneyClient.requestedKlineSymbols).containsExactly(validQuote.symbol());
+        assertThat(eastMoneyClient.requestedFinancialSymbols).containsExactly(validQuote.symbol());
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly(validQuote.symbol());
+        assertThat(candidate.score().marketHeatScore())
+                .isEqualByComparingTo(baselineCandidate.score().marketHeatScore());
+        assertThat(candidate.score().finalScore())
+                .isEqualByComparingTo(baselineCandidate.score().finalScore());
+        assertThat(candidate.action()).isEqualTo("MARKET_RISK_WAIT");
+        assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
     }
 
     @Test
@@ -774,7 +851,12 @@ class ShortTermServiceTest {
                 new QuoteFreshnessService(closedTradingClock, closedClock)
         );
         eastMoneyClient.quotes = List.of(
-                quote("600302", "休市样本", "10.62", "1.60", "18", "1.6", "600000000")
+                quoteAt(
+                        "600302",
+                        "休市样本",
+                        "通用设备",
+                        Instant.parse("2026-07-11T02:59:00Z")
+                )
         );
         eastMoneyClient.klines.put("600302", rightEarlyKLines("600302", "10.62", "180000"));
         eastMoneyClient.financials.put("600302", goodFinancial("600302"));
@@ -1425,16 +1507,27 @@ class ShortTermServiceTest {
             String industry,
             Instant marketTimestamp
     ) {
+        return quoteAt(symbol, name, industry, marketTimestamp, "1.20", "600000000");
+    }
+
+    private EastMoneyQuote quoteAt(
+            String symbol,
+            String name,
+            String industry,
+            Instant marketTimestamp,
+            String changePercent,
+            String amount
+    ) {
         return new EastMoneyQuote(
                 symbol,
                 name,
                 "上交所",
                 industry,
                 new BigDecimal("10.62"),
-                new BigDecimal("1.20"),
+                new BigDecimal(changePercent),
                 BigDecimal.ONE,
                 new BigDecimal("100000"),
-                new BigDecimal("600000000"),
+                new BigDecimal(amount),
                 new BigDecimal("18"),
                 new BigDecimal("1.60"),
                 new BigDecimal("18"),

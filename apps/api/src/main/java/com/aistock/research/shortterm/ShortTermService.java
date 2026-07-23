@@ -277,10 +277,7 @@ public class ShortTermService {
         List<EastMoneyQuote> pointInTimeCoverageQuotes = marketQuotes.stream()
                 .filter(quote -> quoteAvailableAtDecision(quote, decisionAt))
                 .toList();
-        List<EastMoneyQuote> pointInTimeQuotes = fullMarketExecution
-                ? pointInTimeCoverageQuotes
-                : marketQuotes;
-        List<EastMoneyQuote> quoteUniverse = pointInTimeQuotes.stream()
+        List<EastMoneyQuote> quoteUniverse = pointInTimeCoverageQuotes.stream()
                 .filter(this::isTradableCommonShare)
                 .filter(this::hasUsablePrice)
                 .toList();
