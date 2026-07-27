@@ -78,6 +78,46 @@ public class RuntimeConfigService {
         );
     }
 
+    public LlmRuntimeConfig currentLlmConfig() {
+        return currentConfig().llm();
+    }
+
+    public List<PolicySourceConfig> currentPolicySources() {
+        return currentConfig().policySources();
+    }
+
+    public LlmRuntimeConfig updateLlmConfig(LlmRuntimeConfig request) {
+        Map<String, Object> root = readRemoteConfigForUpdate();
+        Map<String, Object> llm = map(map(map(root, "research"), "ai"), "llm");
+        LlmRuntimeConfig before = currentLlmConfig();
+        boolean replacedKey = request.apiKey() != null && !request.apiKey().isBlank();
+        applyLlmConfig(llm, request);
+        publishRemoteConfig(yaml.dump(root));
+        return new LlmRuntimeConfig(
+                request.provider().trim(),
+                null,
+                nullToBlank(request.apiKeyEnv()).trim(),
+                request.model().trim(),
+                request.baseUrl().trim(),
+                request.responseFormat().trim(),
+                request.strictJsonSchema(),
+                trimmedOrNull(request.thinking()),
+                request.maxCompletionTokens(),
+                request.temperature(),
+                replacedKey || before.apiKeyConfigured(),
+                replacedKey ? "research.ai.llm.api-key" : before.apiKeySource()
+        );
+    }
+
+    public List<PolicySourceConfig> updatePolicySources(List<PolicySourceConfig> request) {
+        Map<String, Object> root = readRemoteConfigForUpdate();
+        Map<String, Object> liveData = map(map(root, "research"), "live-data");
+        List<PolicySourceConfig> sources = List.copyOf(request);
+        liveData.put("policy-sources", sources.stream().map(this::policySourceMap).toList());
+        publishRemoteConfig(yaml.dump(root));
+        return sources;
+    }
+
     public RuntimeConfigSnapshot updateConfig(RuntimeConfigSnapshot request) {
         Map<String, Object> root = readRemoteConfig();
         Map<String, Object> research = map(root, "research");
@@ -86,7 +126,7 @@ public class RuntimeConfigService {
         Map<String, Object> liveData = map(research, "live-data");
 
         if (request.llm() != null) {
-            updateLlmConfig(llm, request.llm());
+            applyLlmConfig(llm, request.llm());
         }
         if (request.policySources() != null) {
             liveData.put("policy-sources", request.policySources().stream()
@@ -114,6 +154,35 @@ public class RuntimeConfigService {
             // Fall through to a snapshot based on the effective runtime config.
         }
         return fallbackConfigMap();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> readRemoteConfigForUpdate() {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(nacosBaseUrl() + "/nacos/v1/cs/configs?" + configQuery()))
+                .timeout(Duration.ofSeconds(8))
+                .GET()
+                .build();
+        try {
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 404) {
+                return fallbackConfigMap();
+            }
+            if (response.statusCode() >= 400) {
+                throw new IllegalStateException(
+                        "Nacos 请求失败 HTTP " + response.statusCode() + ": " + response.body());
+            }
+            Object parsed = yaml.load(response.body());
+            if (parsed instanceof Map<?, ?> parsedMap) {
+                return (Map<String, Object>) parsedMap;
+            }
+            throw new IllegalStateException("Nacos 配置不是有效的 YAML 对象");
+        } catch (IOException exception) {
+            throw new IllegalStateException("Nacos 配置读取失败：" + exception.getMessage(), exception);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Nacos 配置读取被中断", exception);
+        }
     }
 
     private void publishRemoteConfig(String content) {
@@ -149,7 +218,7 @@ public class RuntimeConfigService {
         return response.body();
     }
 
-    private void updateLlmConfig(Map<String, Object> llm, LlmRuntimeConfig config) {
+    private void applyLlmConfig(Map<String, Object> llm, LlmRuntimeConfig config) {
         putIfText(llm, "provider", config.provider());
         putSecretIfText(llm, "api-key", config.apiKey());
         putIfText(llm, "api-key-env", config.apiKeyEnv());
@@ -318,6 +387,10 @@ public class RuntimeConfigService {
 
     private String nullToBlank(String value) {
         return value == null ? "" : value;
+    }
+
+    private String trimmedOrNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private String firstNonBlank(String... values) {
