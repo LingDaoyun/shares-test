@@ -1,12 +1,19 @@
+import { useState } from 'react'
 import { Plus, RefreshCw, Check, Trash2 } from 'lucide-react'
-import { useAppStore, emptyRuntimeConfig } from '../store/appStore'
+import { useAppStore } from '../store/appStore'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Tag } from '../components/ui/Badge'
 import { toast } from '../components/ui/Toast'
-import { updateRuntimeConfig } from '../api/client'
+import {
+  fetchLlmRuntimeConfig,
+  fetchPolicySources,
+  updateLlmRuntimeConfig,
+  updatePolicySources
+} from '../api/client'
 import { extractErrorMessage } from '../lib/format'
-import type { PolicySourceConfig, RuntimeConfigSnapshot } from '../types'
+import { defaultLlmRuntimeConfig, defaultPolicySources } from '../lib/runtimeConfigDefaults'
+import type { PolicySourceConfig } from '../types'
 
 const PROVIDERS = [
   { label: 'DeepSeek', value: 'deepseek' },
@@ -19,10 +26,11 @@ const FORMATS = ['json_object', 'json_schema', 'none']
 export function SettingsPage() {
   const form = useAppStore((s) => s.runtimeConfigForm)
   const setRuntimeConfigForm = useAppStore((s) => s.setRuntimeConfigForm)
-  const runtimeConfigLoading = useAppStore((s) => s.runtimeConfigLoading)
-  const loadRuntimeConfig = useAppStore((s) => s.loadRuntimeConfig)
   const refreshLlmConfig = useAppStore((s) => s.refreshLlmConfig)
-  const [saving, setSaving] = useLocal(false)
+  const [llmLoading, setLlmLoading] = useState(false)
+  const [llmSaving, setLlmSaving] = useState(false)
+  const [policyLoading, setPolicyLoading] = useState(false)
+  const [policySaving, setPolicySaving] = useState(false)
 
   const patchLlm = (patch: Partial<typeof form.llm>) => {
     setRuntimeConfigForm({ ...form, llm: { ...form.llm, ...patch } })
@@ -42,44 +50,86 @@ export function SettingsPage() {
     })
   }
 
-  const onSave = async () => {
-    setSaving(true)
-    try {
-      const payload: RuntimeConfigSnapshot = {
-        ...form,
-        llm: { ...form.llm, apiKey: '' },
-        policySources: form.policySources.map((s) => ({ ...s }))
+  const replaceLlm = (llm: typeof form.llm) => {
+    useAppStore.setState((state) => ({
+      runtimeConfigForm: { ...state.runtimeConfigForm, llm }
+    }))
+  }
+
+  const replacePolicySources = (policySources: PolicySourceConfig[]) => {
+    useAppStore.setState((state) => ({
+      runtimeConfigForm: {
+        ...state.runtimeConfigForm,
+        policySources: policySources.map((source) => ({ ...source }))
       }
-      const nextKey = form.llm.apiKey?.trim()
-      payload.llm.apiKey = nextKey ? nextKey : null
-      const updated = await updateRuntimeConfig(payload)
-      useAppStore.setState({
-        runtimeConfig: updated,
-        runtimeConfigForm: {
-          ...payload,
-          llm: {
-            ...payload.llm,
-            apiKey: '',
-            apiKeyConfigured: Boolean(nextKey) || form.llm.apiKeyConfigured,
-            apiKeySource: Boolean(nextKey) ? 'research.ai.llm.api-key' : form.llm.apiKeySource
-          },
-          updatedAt: new Date().toISOString()
-        }
-      })
-      toast.success('配置已发布到 Nacos')
-      await refreshLlmConfig()
-      setTimeout(() => {
-        void loadRuntimeConfig()
-        void refreshLlmConfig()
-      }, 1500)
+    }))
+  }
+
+  const reloadLlm = async () => {
+    setLlmLoading(true)
+    try {
+      const llm = await fetchLlmRuntimeConfig()
+      replaceLlm({ ...llm, apiKey: '' })
     } catch (e) {
       toast.error(extractErrorMessage(e))
     } finally {
-      setSaving(false)
+      setLlmLoading(false)
     }
   }
 
-  const onReset = () => setRuntimeConfigForm(emptyRuntimeConfig())
+  const saveLlm = async () => {
+    setLlmSaving(true)
+    try {
+      const apiKey = form.llm.apiKey?.trim()
+      const updated = await updateLlmRuntimeConfig({
+        ...form.llm,
+        apiKey: apiKey ? apiKey : null
+      })
+      replaceLlm({ ...updated, apiKey: '' })
+      toast.success('大模型配置已保存到 Nacos')
+      await refreshLlmConfig()
+    } catch (e) {
+      toast.error(extractErrorMessage(e))
+    } finally {
+      setLlmSaving(false)
+    }
+  }
+
+  const resetLlm = () => {
+    replaceLlm({
+      ...defaultLlmRuntimeConfig(),
+      apiKeyConfigured: form.llm.apiKeyConfigured,
+      apiKeySource: form.llm.apiKeySource
+    })
+  }
+
+  const reloadPolicySources = async () => {
+    setPolicyLoading(true)
+    try {
+      replacePolicySources(await fetchPolicySources())
+    } catch (e) {
+      toast.error(extractErrorMessage(e))
+    } finally {
+      setPolicyLoading(false)
+    }
+  }
+
+  const savePolicySources = async () => {
+    setPolicySaving(true)
+    try {
+      const updated = await updatePolicySources(
+        form.policySources.map((source) => ({ ...source }))
+      )
+      replacePolicySources(updated)
+      toast.success('政策源配置已保存到 Nacos')
+    } catch (e) {
+      toast.error(extractErrorMessage(e))
+    } finally {
+      setPolicySaving(false)
+    }
+  }
+
+  const resetPolicySources = () => replacePolicySources(defaultPolicySources())
 
   return (
     <div className="flex flex-col gap-4">
@@ -171,6 +221,14 @@ export function SettingsPage() {
             onChange={(e) => patchLlm({ thinking: e.target.value || null })}
           />
         </div>
+
+        <SectionActions
+          loading={llmLoading}
+          saving={llmSaving}
+          onReload={() => void reloadLlm()}
+          onReset={resetLlm}
+          onSave={() => void saveLlm()}
+        />
       </Card>
 
       {/* 政策源配置 */}
@@ -232,26 +290,55 @@ export function SettingsPage() {
           )}
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line-soft pt-4">
-          <Button icon={<RefreshCw className="h-4 w-4" />} loading={runtimeConfigLoading} onClick={() => void loadRuntimeConfig()}>
-            重新读取
-          </Button>
-          <Button variant="ghost" onClick={onReset}>
-            重置为默认
-          </Button>
-          <Button variant="primary" icon={<Check className="h-4 w-4" />} loading={saving} onClick={onSave}>
-            保存到 Nacos
-          </Button>
-        </div>
+        <SectionActions
+          loading={policyLoading}
+          saving={policySaving}
+          onReload={() => void reloadPolicySources()}
+          onReset={resetPolicySources}
+          onSave={() => void savePolicySources()}
+        />
       </Card>
     </div>
   )
 }
 
-import { useState as useReactState } from 'react'
-function useLocal(initial: boolean): [boolean, (v: boolean) => void] {
-  const [v, setV] = useReactState(initial)
-  return [v, setV]
+function SectionActions({
+  loading,
+  saving,
+  onReload,
+  onReset,
+  onSave
+}: {
+  loading: boolean
+  saving: boolean
+  onReload: () => void
+  onReset: () => void
+  onSave: () => void
+}) {
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line-soft pt-4">
+      <Button
+        icon={<RefreshCw className="h-4 w-4" />}
+        loading={loading}
+        disabled={saving}
+        onClick={onReload}
+      >
+        重新读取
+      </Button>
+      <Button variant="ghost" disabled={loading || saving} onClick={onReset}>
+        重置为默认
+      </Button>
+      <Button
+        variant="primary"
+        icon={<Check className="h-4 w-4" />}
+        loading={saving}
+        disabled={loading}
+        onClick={onSave}
+      >
+        保存到 Nacos
+      </Button>
+    </div>
+  )
 }
 
 function Field({ label, children, className = '' }: { label: string; children: React.ReactNode; className?: string }) {

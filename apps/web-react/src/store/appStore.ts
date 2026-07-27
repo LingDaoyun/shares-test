@@ -11,26 +11,14 @@ import {
 } from '../api/client'
 import { extractErrorMessage } from '../lib/format'
 import { toast } from '../components/ui/Toast'
+import { defaultLlmRuntimeConfig, defaultPolicySources } from '../lib/runtimeConfigDefaults'
 
 export function emptyRuntimeConfig(): RuntimeConfigSnapshot {
   return {
     dataId: 'ai-stock-api.yml',
     group: 'AI_STOCK',
-    llm: {
-      provider: 'deepseek',
-      apiKey: '',
-      apiKeyEnv: 'DEEPSEEK_API_KEY',
-      model: 'deepseek-v4-pro',
-      baseUrl: 'https://api.deepseek.com',
-      responseFormat: 'json_object',
-      strictJsonSchema: false,
-      thinking: null,
-      maxCompletionTokens: 8192,
-      temperature: null,
-      apiKeyConfigured: false,
-      apiKeySource: 'missing'
-    },
-    policySources: [],
+    llm: defaultLlmRuntimeConfig(),
+    policySources: defaultPolicySources(),
     updatedAt: new Date().toISOString()
   }
 }

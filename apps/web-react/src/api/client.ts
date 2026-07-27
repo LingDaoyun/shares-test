@@ -6,6 +6,7 @@ import type {
   DailySignalReport,
   DecisionHistoryEntry,
   LlmConfigPreview,
+  LlmRuntimeConfig,
   InvestmentDecisionReport,
   MarketScanReport,
   MispricingReport,
@@ -14,6 +15,7 @@ import type {
   ShortTermScheduledSnapshot,
   ShortTermScanJobStatus,
   RuleDefinition,
+  PolicySourceConfig,
   RuntimeConfigSnapshot,
   TechTrackingReport,
   CreateTradeCaseRequest,
@@ -48,6 +50,22 @@ export function fetchRuntimeConfig() {
 
 export function updateRuntimeConfig(request: RuntimeConfigSnapshot) {
   return http.put<RuntimeConfigSnapshot>('/runtime-config', request).then((res) => res.data)
+}
+
+export function fetchLlmRuntimeConfig() {
+  return http.get<LlmRuntimeConfig>('/runtime-config/llm').then((res) => res.data)
+}
+
+export function updateLlmRuntimeConfig(request: LlmRuntimeConfig) {
+  return http.put<LlmRuntimeConfig>('/runtime-config/llm', request).then((res) => res.data)
+}
+
+export function fetchPolicySources() {
+  return http.get<PolicySourceConfig[]>('/runtime-config/policy-sources').then((res) => res.data)
+}
+
+export function updatePolicySources(request: PolicySourceConfig[]) {
+  return http.put<PolicySourceConfig[]>('/runtime-config/policy-sources', request).then((res) => res.data)
 }
 
 export interface TechTrackingParams {
