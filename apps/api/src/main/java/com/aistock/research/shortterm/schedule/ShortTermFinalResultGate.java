@@ -34,7 +34,7 @@ public class ShortTermFinalResultGate {
     public Result evaluateManual(ShortTermReport report, Instant decisionCompletedAt) {
         LocalDate tradeDate = tradingClock.currentMarketDate();
         Optional<Failure> failure = validate(
-                tradeDate, report, decisionCompletedAt, decisionCompletedAt, false);
+                tradeDate, report, decisionCompletedAt, decisionCompletedAt, false, true);
         if (failure.isPresent()) {
             Failure blocked = failure.orElseThrow();
             return blocked(blocked.reason(), blocked.message());
@@ -63,7 +63,7 @@ public class ShortTermFinalResultGate {
             boolean enforceScheduledDeadline
     ) {
         Optional<Failure> failure = validate(
-                tradeDate, report, decisionCompletedAt, freshnessCheckedAt, enforceScheduledDeadline);
+                tradeDate, report, decisionCompletedAt, freshnessCheckedAt, enforceScheduledDeadline, false);
         if (failure.isPresent()) {
             Failure blocked = failure.orElseThrow();
             return blocked(blocked.reason(), blocked.message());
@@ -90,7 +90,8 @@ public class ShortTermFinalResultGate {
             ShortTermReport report,
             Instant decisionCompletedAt,
             Instant freshnessCheckedAt,
-            boolean enforceScheduledDeadline
+            boolean enforceScheduledDeadline,
+            boolean allowNonTradingFetchFreshness
     ) {
         if (tradeDate == null || decisionCompletedAt == null
                 || !marketDate(decisionCompletedAt).equals(tradeDate)
@@ -118,8 +119,17 @@ public class ShortTermFinalResultGate {
         if (cutoff.isAfter(decisionCompletedAt)) {
             return Optional.of(new Failure("CUTOFF_AFTER_DECISION", "尾盘行情时间晚于决策时刻"));
         }
+        Instant freshnessReference = cutoff;
+        if (allowNonTradingFetchFreshness
+                && report.tradingSession() != null
+                && !report.tradingSession().regularAuctionOpen()) {
+            freshnessReference = coverage.fetchedAt();
+        }
         if (freshnessCheckedAt == null
-                || Duration.between(cutoff, freshnessCheckedAt).compareTo(settings.freshness()) > 0) {
+                || freshnessReference == null
+                || freshnessReference.isAfter(freshnessCheckedAt)
+                || Duration.between(freshnessReference, freshnessCheckedAt)
+                .compareTo(settings.freshness()) > 0) {
             return Optional.of(new Failure("QUOTE_STALE", "尾盘行情已经过期"));
         }
         return Optional.empty();

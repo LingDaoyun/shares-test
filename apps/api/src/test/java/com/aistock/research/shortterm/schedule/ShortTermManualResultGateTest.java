@@ -162,6 +162,45 @@ class ShortTermManualResultGateTest {
         assertThat(result.blockedReasons()).containsExactly("QUOTE_STALE");
     }
 
+    @Test
+    void allowsFreshlyFetchedAfterHoursSnapshotWhenMarketTimestampHasStopped() {
+        Instant cutoff = Instant.parse("2026-07-23T08:12:02Z");
+        Instant fetchedAt = Instant.parse("2026-07-23T10:03:17Z");
+        Instant completedAt = Instant.parse("2026-07-23T10:03:44Z");
+        ShortTermReport report = report(
+                cutoff,
+                false,
+                new BigDecimal("1.00"),
+                true,
+                List.of(mock(com.aistock.research.shortterm.ShortTermCandidate.class))
+        );
+        when(report.tradingSession()).thenReturn(new TradingSessionSnapshot(
+                "CLOSED",
+                "非交易时段",
+                false,
+                false,
+                false,
+                "休市",
+                List.of("非交易时段只更新研究和复盘，不给盘中执行信号。"),
+                List.of("休市行情不能作为当日买点。")
+        ));
+        when(report.coverage()).thenReturn(new ShortTermCoverageSnapshot(
+                5884,
+                5884,
+                0,
+                new BigDecimal("1.00"),
+                true,
+                "东方财富行情",
+                fetchedAt
+        ));
+
+        ShortTermFinalResultGate.Result result = gate.evaluateManual(report, completedAt);
+
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.FINAL_READY);
+        assertThat(result.message()).isEqualTo("手动分析已完成，已生成当前时点候选");
+        assertThat(result.blockedReasons()).isEmpty();
+    }
+
     private ShortTermReport report(
             Instant cutoff,
             boolean closingDecisionWindow,
