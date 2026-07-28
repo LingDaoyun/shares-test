@@ -45,8 +45,9 @@ public class EastMoneyClient {
     private static final String FUND_FLOW_DAY_FIELDS = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65";
     private static final String EASTMONEY_FUND_FLOW_DAY_URL = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get";
     private static final String INDUSTRY_BOARD_FIELDS = "f12,f14";
-    private static final String A_SHARE_FILTER = "m:0+t:6,m:0+t:80,m:0+t:81,m:1+t:2,m:1+t:23";
+    static final String A_SHARE_FILTER = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048";
     private static final String INDUSTRY_BOARD_FILTER = "m:90 t:2 f:!50";
+    private static final int MAX_QUOTE_PAGE_SIZE = 100;
     private static final int EASTMONEY_ATTEMPTS = 1;
     private static final int EASTMONEY_REMOTE_ATTEMPTS = 3;
     private static final int GENERIC_REMOTE_ATTEMPTS = 2;
@@ -105,7 +106,7 @@ public class EastMoneyClient {
 
     public List<EastMoneyQuote> fetchLiquidAshareQuotes(int limit) {
         int safeLimit = Math.max(1, limit);
-        int pageSize = Math.min(500, Math.max(50, safeLimit));
+        int pageSize = Math.min(MAX_QUOTE_PAGE_SIZE, Math.max(50, safeLimit));
         RuntimeException[] failure = new RuntimeException[1];
         List<EastMoneyQuote> quotes = AshareQuotePaginator.collect(safeLimit, pageNumber -> {
             try {
@@ -127,7 +128,7 @@ public class EastMoneyClient {
 
     public AshareQuoteSnapshot fetchAshareQuoteSnapshot(int limit) {
         int requestedCount = Math.max(1, limit);
-        int pageSize = Math.min(500, Math.max(50, requestedCount));
+        int pageSize = Math.min(MAX_QUOTE_PAGE_SIZE, Math.max(50, requestedCount));
         Map<String, EastMoneyQuote> merged = new LinkedHashMap<>();
         RuntimeException pageFailure = null;
         int reportedTotal = 0;
@@ -228,7 +229,7 @@ public class EastMoneyClient {
 
     AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
         int safePageNumber = Math.max(1, pageNumber);
-        int safePageSize = Math.max(1, Math.min(500, pageSize));
+        int safePageSize = Math.max(1, Math.min(MAX_QUOTE_PAGE_SIZE, pageSize));
         String url = properties.eastmoneyQuoteUrl()
                 + "?pn=" + safePageNumber
                 + "&pz=" + safePageSize

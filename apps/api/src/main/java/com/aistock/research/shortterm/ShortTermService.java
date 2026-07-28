@@ -270,9 +270,9 @@ public class ShortTermService {
                 request.minFinancialScore()
         );
 
-        LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
         int quoteRequestLimit = fullMarketExecution ? FULL_MARKET_QUOTE_REQUEST : ruleSet.scanLimit();
         AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(quoteRequestLimit);
+        LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
         List<EastMoneyQuote> marketQuotes = uniqueMarketQuotes(quoteSnapshot.quotes());
         List<EastMoneyQuote> pointInTimeCoverageQuotes = marketQuotes.stream()
                 .filter(quote -> quoteAvailableAtDecision(quote, decisionAt))

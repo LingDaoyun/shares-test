@@ -22,6 +22,12 @@ class EastMoneyClientTest {
     private final EastMoneyClient client = new EastMoneyClient(mock(RestClient.class), objectMapper, properties());
 
     @Test
+    void shouldScopeNorthExchangeQuotesToListedSharesInsteadOfAllType81Securities() {
+        assertThat(EastMoneyClient.A_SHARE_FILTER)
+                .isEqualTo("m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048");
+    }
+
+    @Test
     void shouldParseExchangeTimestampInsteadOfTreatingFetchTimeAsTradeTime() {
         Instant marketTime = Instant.parse("2026-07-11T07:20:30Z");
         JsonNode item = objectMapper.createObjectNode()
@@ -242,6 +248,7 @@ class EastMoneyClientTest {
         assertThat(snapshot.fetchedCount()).isEqualTo(250);
         assertThat(snapshot.quotes()).hasSize(250);
         assertThat(snapshotClient.requestedPages).isEqualTo(3);
+        assertThat(snapshotClient.requestedPageSizes).containsOnly(100);
     }
 
     @Test
@@ -365,6 +372,7 @@ class EastMoneyClientTest {
     private static final class CappedPageStubClient extends EastMoneyClient {
 
         private int requestedPages;
+        private final java.util.Set<Integer> requestedPageSizes = new java.util.LinkedHashSet<>();
 
         private CappedPageStubClient() {
             super(null, new ObjectMapper(), null);
@@ -373,6 +381,7 @@ class EastMoneyClientTest {
         @Override
         AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
             requestedPages = Math.max(requestedPages, pageNumber);
+            requestedPageSizes.add(pageSize);
             int start = (pageNumber - 1) * 100;
             if (start >= 250) {
                 return new AshareQuotePage(250, List.of());

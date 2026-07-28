@@ -221,6 +221,34 @@ class ShortTermServiceTest {
     }
 
     @Test
+    void finalReportUsesQuoteFetchCompletionAsDecisionTime() {
+        MutableClock decisionClock = new MutableClock(
+                Instant.parse("2026-07-07T06:50:00Z"),
+                SHANGHAI
+        );
+        Instant quoteTimestamp = Instant.parse("2026-07-07T06:51:00Z");
+        eastMoneyClient.quotes = List.of(
+                quoteAt("600001", "抓取期间更新", "普通行业", quoteTimestamp)
+        );
+        eastMoneyClient.snapshotExpectedCount = 1;
+        eastMoneyClient.snapshotFetchedAt = Instant.parse("2026-07-07T06:51:30Z");
+        eastMoneyClient.afterQuoteSnapshotFetched = () ->
+                decisionClock.setInstant(Instant.parse("2026-07-07T06:52:00Z"));
+        eastMoneyClient.klines.put("600001", rightEarlyKLines("600001", "10.62", "180000"));
+        eastMoneyClient.financials.put("600001", goodFinancial("600001"));
+
+        ShortTermReport report = serviceAt(decisionClock).finalReport(
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null),
+                Set.of("600001")
+        );
+
+        assertThat(report.coverage().fetchedCount()).isEqualTo(1);
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.reviewedSymbols()).containsExactly("600001");
+        assertThat(report.dataCutoffAt()).isEqualTo(quoteTimestamp);
+    }
+
+    @Test
     void finalReportBlocksMissingMarketTimestampAndNeverUsesFetchedAtAsCutoff() {
         eastMoneyClient.quotes = List.of(quoteAt("600001", "无市场时间", "普通行业", null));
         eastMoneyClient.snapshotExpectedCount = 1;
@@ -1659,6 +1687,8 @@ class ShortTermServiceTest {
         private boolean snapshotHasReportedTotal = true;
         private String snapshotSource = "测试行情";
         private Instant snapshotFetchedAt = Instant.parse("2026-07-07T06:59:00Z");
+        private Runnable afterQuoteSnapshotFetched = () -> {
+        };
         private Set<String> unstableIndustrySymbols = Set.of();
         private final List<String> requestedKlineSymbols = Collections.synchronizedList(new ArrayList<>());
         private final List<String> requestedFinancialSymbols = Collections.synchronizedList(new ArrayList<>());
@@ -1689,7 +1719,7 @@ class ShortTermServiceTest {
             int expected = snapshotHasReportedTotal
                     ? (snapshotExpectedCount > 0 ? snapshotExpectedCount : fetched)
                     : 0;
-            return new AshareQuoteSnapshot(
+            AshareQuoteSnapshot snapshot = new AshareQuoteSnapshot(
                     quotes.stream().limit(limit).toList(),
                     limit,
                     expected,
@@ -1699,6 +1729,8 @@ class ShortTermServiceTest {
                     snapshotSource,
                     snapshotFetchedAt
             );
+            afterQuoteSnapshotFetched.run();
+            return snapshot;
         }
 
         @Override
@@ -1724,6 +1756,36 @@ class ShortTermServiceTest {
         @Override
         public List<EastMoneyIntradayPoint> fetchIntradayTrends(String symbol) {
             return intraday.getOrDefault(symbol, List.of());
+        }
+    }
+
+    private static final class MutableClock extends Clock {
+
+        private Instant instant;
+        private final ZoneId zone;
+
+        private MutableClock(Instant instant, ZoneId zone) {
+            this.instant = instant;
+            this.zone = zone;
+        }
+
+        private void setInstant(Instant instant) {
+            this.instant = instant;
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return zone;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return new MutableClock(instant, zone);
+        }
+
+        @Override
+        public Instant instant() {
+            return instant;
         }
     }
 }
