@@ -33,18 +33,17 @@ public class ShortTermFinalResultGate {
 
     public Result evaluateManual(ShortTermReport report, Instant decisionCompletedAt) {
         LocalDate tradeDate = tradingClock.currentMarketDate();
-        if (decisionCompletedAt == null
-                || tradingClock.isMarketClosedDay(tradeDate)
-                || !marketDate(decisionCompletedAt).equals(tradeDate)
-                || !insideTailWindow(marketTime(decisionCompletedAt))
-                || report == null
-                || report.tradingSession() == null
-                || !report.tradingSession().closingDecisionWindow()) {
-            return blocked(
-                    "MANUAL_OUTSIDE_DECISION_WINDOW",
-                    "手动扫描不在当日尾盘决策窗口，结果不可执行");
+        Optional<Failure> failure = validate(
+                tradeDate, report, decisionCompletedAt, decisionCompletedAt, false);
+        if (failure.isPresent()) {
+            Failure blocked = failure.orElseThrow();
+            return blocked(blocked.reason(), blocked.message());
         }
-        return evaluate(tradeDate, report, decisionCompletedAt, decisionCompletedAt, false);
+        return classify(
+                report,
+                "手动分析已完成，当前无合格候选",
+                "手动分析已完成，已生成当前时点候选"
+        );
     }
 
     public Result evaluateScheduled(
@@ -69,12 +68,20 @@ public class ShortTermFinalResultGate {
             Failure blocked = failure.orElseThrow();
             return blocked(blocked.reason(), blocked.message());
         }
+        return classify(
+                report,
+                "全部执行闸门通过，今日无合格候选",
+                "尾盘最终结果已就绪"
+        );
+    }
+
+    private Result classify(ShortTermReport report, String noTradeMessage, String readyMessage) {
         ShortTermSnapshotStatus status = report.candidates() == null || report.candidates().isEmpty()
                 ? ShortTermSnapshotStatus.NO_TRADE
                 : ShortTermSnapshotStatus.FINAL_READY;
         String message = status == ShortTermSnapshotStatus.NO_TRADE
-                ? "全部执行闸门通过，今日无合格候选"
-                : "尾盘最终结果已就绪";
+                ? noTradeMessage
+                : readyMessage;
         return new Result(status, message, List.of());
     }
 
@@ -116,11 +123,6 @@ public class ShortTermFinalResultGate {
             return Optional.of(new Failure("QUOTE_STALE", "尾盘行情已经过期"));
         }
         return Optional.empty();
-    }
-
-    private boolean insideTailWindow(LocalTime time) {
-        return !time.isBefore(TradingClockService.SHORT_TERM_ENTRY_START)
-                && time.isBefore(TradingClockService.SHORT_TERM_ENTRY_EXCLUSIVE_END);
     }
 
     private LocalDate marketDate(Instant instant) {

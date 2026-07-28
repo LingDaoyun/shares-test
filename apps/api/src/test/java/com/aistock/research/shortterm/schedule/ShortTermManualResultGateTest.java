@@ -42,22 +42,26 @@ class ShortTermManualResultGateTest {
                 Instant.parse("2026-07-23T06:51:00Z"), true, new BigDecimal("0.99"), true, List.of()),
                 DECISION_AT).status()).isEqualTo(ShortTermSnapshotStatus.NO_TRADE);
 
-        assertThat(gate.evaluateManual(report(
+        ShortTermFinalResultGate.Result finalReady = gate.evaluateManual(report(
                 Instant.parse("2026-07-23T06:51:00Z"), true, new BigDecimal("0.99"), true,
                 List.of(mock(com.aistock.research.shortterm.ShortTermCandidate.class))),
-                DECISION_AT).status()).isEqualTo(ShortTermSnapshotStatus.FINAL_READY);
+                DECISION_AT);
+
+        assertThat(finalReady.status()).isEqualTo(ShortTermSnapshotStatus.FINAL_READY);
+        assertThat(finalReady.message()).isEqualTo("手动分析已完成，已生成当前时点候选");
     }
 
     @Test
-    void blocksManualReportOutsideTailDecisionWindow() {
+    void allowsManualReportOutsideTailDecisionWindow() {
         ShortTermFinalResultGate.Result result = gate.evaluateManual(
                 report(
                         Instant.parse("2026-07-23T06:39:00Z"), false,
                         new BigDecimal("0.99"), true, List.of()),
                 Instant.parse("2026-07-23T06:40:00Z"));
 
-        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
-        assertThat(result.blockedReasons()).containsExactly("MANUAL_OUTSIDE_DECISION_WINDOW");
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.NO_TRADE);
+        assertThat(result.message()).isEqualTo("手动分析已完成，当前无合格候选");
+        assertThat(result.blockedReasons()).isEmpty();
     }
 
     @Test
@@ -74,17 +78,19 @@ class ShortTermManualResultGateTest {
     }
 
     @Test
-    void blocksManualReportAt1457Boundary() {
-        Instant decisionAt = Instant.parse("2026-07-23T06:57:00Z");
+    void allowsManualReportAfterMarketCloseAndReturnsCandidates() {
+        Instant decisionAt = Instant.parse("2026-07-23T07:51:35Z");
 
         ShortTermFinalResultGate.Result result = gate.evaluateManual(
                 report(
-                        Instant.parse("2026-07-23T06:56:00Z"), false,
-                        new BigDecimal("0.99"), true, List.of()),
+                        Instant.parse("2026-07-23T07:51:07Z"), false,
+                        new BigDecimal("1.00"), true,
+                        List.of(mock(com.aistock.research.shortterm.ShortTermCandidate.class))),
                 decisionAt);
 
-        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
-        assertThat(result.blockedReasons()).containsExactly("MANUAL_OUTSIDE_DECISION_WINDOW");
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.FINAL_READY);
+        assertThat(result.message()).isEqualTo("手动分析已完成，已生成当前时点候选");
+        assertThat(result.blockedReasons()).isEmpty();
     }
 
     @Test
