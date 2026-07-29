@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { BrainCircuit, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { fetchV2StrategyBundle } from '../../api/client'
 import { formatDateTime, formatNumber, formatPercent, formatRatioPercent } from '../../lib/format'
-import type { V2SignalResponse, V2StrategyBundleParams, V2StrategyBundleResponse } from '../../types'
+import type { TradingAdvice, V2SignalResponse, V2StrategyBundleParams, V2StrategyBundleResponse } from '../../types'
 import { ScoreBadge, Tag } from '../ui/Badge'
 import { Spinner } from '../ui/Loader'
 
@@ -14,6 +14,7 @@ interface V2StrategyBundlePanelProps {
   companyName?: string
   focus?: PanelFocus
   factorContext?: Omit<V2StrategyBundleParams, 'symbol' | 'companyName'>
+  canonicalAdvice?: Pick<TradingAdvice, 'action' | 'actionLabel' | 'summary'>
 }
 
 const STRATEGY_LABELS: Record<string, string> = {
@@ -40,7 +41,8 @@ export function V2StrategyBundlePanel({
   symbol,
   companyName,
   focus = 'daily',
-  factorContext = {}
+  factorContext = {},
+  canonicalAdvice
 }: V2StrategyBundlePanelProps) {
   const [bundle, setBundle] = useState<V2StrategyBundleResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -80,6 +82,7 @@ export function V2StrategyBundlePanel({
 
   const showLong = focus !== 'short'
   const showShort = focus !== 'long'
+  const executionBlocked = canonicalAdvice ? !isExecutableAction(canonicalAdvice.action) : false
 
   return (
     <div className="rounded-lg border border-line-soft bg-line-soft/30 p-3">
@@ -91,7 +94,7 @@ export function V2StrategyBundlePanel({
               V2 策略内核
             </span>
           </Tag>
-          <Tag tone={bundleTone(primarySignals)}>规则 + 验证 + Agent</Tag>
+          <Tag tone={canonicalAdvice ? actionTone(canonicalAdvice.action) : bundleTone(primarySignals)}>规则 + 验证 + Agent</Tag>
         </div>
         <span className="text-xs text-ink-400">
           {bundle ? formatDateTime(bundle.generatedAt) : loading ? '同步中' : '待同步'}
@@ -111,9 +114,22 @@ export function V2StrategyBundlePanel({
         </div>
       ) : null}
 
+      {canonicalAdvice ? (
+        <div className="mt-3 rounded-lg border border-line-soft bg-white px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Tag tone="neutral">最终动作闸门</Tag>
+            <Tag tone={actionTone(canonicalAdvice.action)}>{canonicalAdvice.actionLabel}</Tag>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-ink-600">{canonicalAdvice.summary}</p>
+          {executionBlocked ? (
+            <p className="mt-1 text-xs leading-relaxed text-amber-700">内部策略信号已被压制，只保留为研究依据。</p>
+          ) : null}
+        </div>
+      ) : null}
+
       {bundle ? (
         <div className="mt-3 flex flex-col gap-3">
-          {showLong ? <LongTermSignals signals={bundle.longTermSignals} /> : null}
+          {showLong ? <LongTermSignals signals={bundle.longTermSignals} executionBlocked={executionBlocked} /> : null}
           {showShort ? <ShortSignal signal={bundle.shortRightSideSignal} /> : null}
           <AgentReview bundle={bundle} />
         </div>
@@ -122,7 +138,7 @@ export function V2StrategyBundlePanel({
   )
 }
 
-function LongTermSignals({ signals }: { signals: V2SignalResponse[] }) {
+function LongTermSignals({ signals, executionBlocked }: { signals: V2SignalResponse[]; executionBlocked: boolean }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
@@ -130,7 +146,7 @@ function LongTermSignals({ signals }: { signals: V2SignalResponse[] }) {
         <Tag tone="sky">PE/PB 只作语境</Tag>
       </div>
       {signals.map((signal) => (
-        <SignalRow key={signal.ledgerId} signal={signal} />
+        <SignalRow key={signal.ledgerId} signal={signal} executionBlocked={executionBlocked} />
       ))}
     </div>
   )
@@ -161,13 +177,15 @@ function ShortSignal({ signal }: { signal: V2SignalResponse }) {
   )
 }
 
-function SignalRow({ signal }: { signal: V2SignalResponse }) {
+function SignalRow({ signal, executionBlocked }: { signal: V2SignalResponse; executionBlocked: boolean }) {
   return (
     <div className="rounded-lg border border-line-soft bg-white px-3 py-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <Tag tone="neutral">{strategyLabel(signal.strategyCode)}</Tag>
-          <Tag tone={actionTone(signal.action)}>{actionLabel(signal.action)}</Tag>
+          {executionBlocked
+            ? <Tag tone="neutral">研究信号</Tag>
+            : <Tag tone={actionTone(signal.action)}>{actionLabel(signal.action)}</Tag>}
         </div>
         <ScoreBadge value={signal.rankScore} />
       </div>
@@ -241,6 +259,10 @@ function bundleTone(signals: V2SignalResponse[]): Tone {
   if (signals.some((signal) => signal.action === 'LIGHT_TRIAL')) return 'brand'
   if (signals.some((signal) => signal.action === 'RISK_BLOCKED' || signal.action === 'DATA_BLOCKED')) return 'danger'
   return 'neutral'
+}
+
+function isExecutableAction(action: string) {
+  return action === 'ADD' || action === 'LIGHT_TRIAL'
 }
 
 function actionTone(action: string): Tone {

@@ -24,8 +24,6 @@ import java.util.stream.IntStream;
 @Service
 public class MarketScanService {
 
-    private static final String FINANCIAL_HISTORY_GAP = "近三年点时财报尚未接入本轮全市场扫描，代理财务分不能作为买入证据。";
-
     private static final BigDecimal DEFAULT_MAX_RISE_FOR_ENTRY = new BigDecimal("4.00");
     private static final BigDecimal DEFAULT_MAX_SINGLE_POSITION = new BigDecimal("10.00");
 
@@ -133,6 +131,7 @@ public class MarketScanService {
                 candidate.pbRatio(),
                 candidate.amount(),
                 candidate.valuationContext(),
+                candidate.longTermAssessment(),
                 new MarketScanScoreBreakdown(
                         candidate.score().valuationScore(),
                         candidate.score().liquidityScore(),
@@ -148,7 +147,7 @@ public class MarketScanService {
                 tags(candidate),
                 candidate.strengths(),
                 candidate.risks(),
-                mergeGaps(mergeGaps(candidate.dataGaps(), evidenceBundle.dataGaps()), List.of(FINANCIAL_HISTORY_GAP)),
+                mergeGaps(candidate.dataGaps(), evidenceBundle.dataGaps()),
                 completeness,
                 evidenceBundle,
                 candidate.trace().stream().map(this::toTrace).toList()
@@ -159,15 +158,18 @@ public class MarketScanService {
         boolean hasValuationEvidence = candidate.valuationContext().state() != ValuationContextState.MISSING
                 && candidate.valuationContext().rawPe() != null
                 && candidate.valuationContext().rawPb() != null;
+        boolean hasFinancialEvidence = candidate.longTermAssessment() != null
+                && candidate.longTermAssessment().financialQuality().sampleYears() >= 3
+                && !"INSUFFICIENT".equals(candidate.longTermAssessment().financialQuality().status());
         return evidenceCompletenessService.evaluate(EvidenceCompletenessInput.longTerm(
                 candidate.latestPrice() != null && candidate.amount() != null,
                 hasValuationEvidence,
-                candidate.trace().stream().anyMatch(step -> "RISK".equals(step.step())),
                 false,
+                hasFinancialEvidence,
                 evidenceBundle.hasExecutableConsensus(),
                 evidenceBundle.hasIndustryComparison(),
                 false,
-                mergeGaps(mergeGaps(candidate.dataGaps(), evidenceBundle.dataGaps()), List.of(FINANCIAL_HISTORY_GAP))
+                mergeGaps(candidate.dataGaps(), evidenceBundle.dataGaps())
         ));
     }
 
@@ -226,13 +228,19 @@ public class MarketScanService {
             );
         }
         if ("VALUE_RESEARCH".equals(candidate.action())) {
+            boolean financialHistoryMissing = candidate.longTermAssessment() == null
+                    || candidate.longTermAssessment().financialQuality().sampleYears() < 3
+                    || "INSUFFICIENT".equals(candidate.longTermAssessment().financialQuality().status());
+            String financialGap = financialHistoryMissing ? "近三年财务序列不足" : "公告反证或行业证据尚未通过";
             return new TradingAdvice(
                     "WAIT",
-                    "财报待补",
+                    financialHistoryMissing ? "财报待补" : "证据待补",
                     candidate.score().finalScore().intValue(),
-                    "行情和估值资格已通过，但近三年点时财报尚未进入本轮评分，当前只可研究、不可加仓。",
-                    List.of(candidate.reason(), FINANCIAL_HISTORY_GAP),
-                    List.of("补齐年度 ROE、毛利率和经营现金流序列", "完成公告反证后再重新计算")
+                    financialHistoryMissing
+                            ? "行情和估值资格已通过，但近三年点时财报仍不足，当前只可研究、不可加仓。"
+                            : "多年财务序列已进入评分，但公告反证或行业证据仍有缺口，当前只可研究、不可加仓。",
+                    List.of(candidate.reason(), financialGap),
+                    List.of("补齐长期评估列出的关键缺口", "完成公告反证后再重新计算")
             );
         }
         if ("WATCH_BUY_ZONE".equals(candidate.action())) {
@@ -320,11 +328,15 @@ public class MarketScanService {
     }
 
     private List<String> methodology(UniversalScreenMode mode) {
-        return List.of(
+        java.util.ArrayList<String> items = new java.util.ArrayList<>(List.of(
                 "统一层覆盖沪深北证券主数据、交易资格和行情质量，缺失数量通过覆盖审计直接展示。",
                 "当前模式为 " + mode.name() + "，盈利、流动性、横盘和周期行业门槛由该模式独立决定。",
                 "筛选阶段动作只说明研究资格；今日建议还必须通过证据完整度和风险门禁。",
                 "通用全市场模式不产生买入动作，长线、周期和短线结论不能互相替代。"
-        );
+        ));
+        if (mode == UniversalScreenMode.VALUE) {
+            items.add("长线价投默认只输出三支候选：优先行业地位、盈利质量、现金流、低 PB 资产安全边际和行业竞争优势；换手率/成交活跃度只做软约束和风险提示。");
+        }
+        return items;
     }
 }

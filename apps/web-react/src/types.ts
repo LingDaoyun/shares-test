@@ -279,6 +279,81 @@ export interface MarketScanTraceStep {
   sourceUrl: string | null
 }
 
+export interface LongTermFactorScores {
+  financialQualityScore: number
+  moatAndIndustryScore: number
+  valuationExpectationScore: number
+  capitalAllocationScore: number
+  evidenceRiskScore: number
+  overallScore: number
+}
+
+export interface LongTermFinancialQuality {
+  sampleYears: number
+  medianRoe: number | null
+  roeReference: number | null
+  roeReferenceMetYears: number
+  positiveCashFlowYears: number
+  cumulativeCashToProfitRatio: number | null
+  grossMarginRange: number | null
+  status: string
+  statusLabel: string
+  evidence: string[]
+  dataGaps: string[]
+}
+
+export interface LongTermValuationExpectation {
+  metricCode: 'IMPLIED_GROWTH' | 'IMPLIED_ROE'
+  metricLabel: string
+  impliedExpectationPercent: number | null
+  evidenceExpectationPercent: number | null
+  pessimisticValue: number | null
+  baseValue: number | null
+  optimisticValue: number | null
+  discountToBasePercent: number | null
+  targetMarginOfSafetyPercent: number
+  entryReferencePrice: number | null
+  normalizedEarningsUsed: boolean
+  confidence: 'MEDIUM' | 'LOW'
+  confidenceLabel: string
+  evidence: string[]
+  dataGaps: string[]
+}
+
+export interface LongTermPositionDiscipline {
+  maxSinglePositionPercent: number
+  maxTopFivePositionPercent: number
+  trancheCount: number
+  declineReviewTriggerPercent: number
+  entryConditions: string[]
+  addConditions: string[]
+  reviewTriggers: string[]
+}
+
+export interface LongTermLogicAudit {
+  quarterlyReview: string
+  annualReview: string
+  eventTriggers: string[]
+  invalidationConditions: string[]
+  reentryRule: string
+}
+
+export interface LongTermInvestmentAssessment {
+  strategyVersion: string
+  modelCode: 'STANDARD' | 'CYCLICAL' | 'FINANCIAL'
+  modelLabel: string
+  status: string
+  statusLabel: string
+  factorScores: LongTermFactorScores
+  financialQuality: LongTermFinancialQuality
+  valuation: LongTermValuationExpectation
+  positionDiscipline: LongTermPositionDiscipline
+  logicAudit: LongTermLogicAudit
+  evidence: string[]
+  risks: string[]
+  dataGaps: string[]
+}
+
 export interface MarketScanCandidate {
   rank: number
   symbol: string
@@ -292,6 +367,7 @@ export interface MarketScanCandidate {
   pbRatio: number | null
   amount: number | null
   valuationContext: ValuationContext
+  longTermAssessment: LongTermInvestmentAssessment | null
   score: MarketScanScoreBreakdown
   screeningAction: string
   screeningActionLabel: string

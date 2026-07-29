@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { DatabaseZap, RefreshCw, SlidersHorizontal } from 'lucide-react'
+import { ChartNoAxesCombined, ClipboardCheck, DatabaseZap, RefreshCw, ShieldCheck, SlidersHorizontal } from 'lucide-react'
 import { fetchMarketScanReport } from '../api/client'
 import type { MarketScanParams } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
@@ -12,8 +12,8 @@ import { RecommendationEvidenceBundlePanel } from '../components/recommendation/
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { SectionBanner } from '../components/ui/SectionBanner'
-import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPerSharePrice, formatSignedPercent, formatValuationState } from '../lib/format'
-import type { MarketScanCandidate, MarketScanReport, TradingAdvice, V2StrategyBundleParams } from '../types'
+import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
+import type { LongTermInvestmentAssessment, MarketScanCandidate, MarketScanReport, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -108,7 +108,6 @@ export function MarketScanPage() {
           <NumberField label="成交额下限(亿)" value={draft.minAmountYi} min={0.8} max={20} step={0.05} onChange={(value) => setDraft({ ...draft, minAmountYi: value })} />
           <NumberField label="PE 参考带" value={draft.maxPe} min={4} max={120} onChange={(value) => setDraft({ ...draft, maxPe: value })} />
           <NumberField label="PB 参考带" value={draft.maxPb} min={0.2} max={20} step={0.1} onChange={(value) => setDraft({ ...draft, maxPb: value })} />
-          <NumberField label="财务分下限" value={draft.minFinancialScore} min={0} max={90} step={1} onChange={(value) => setDraft({ ...draft, minFinancialScore: value })} />
           <SelectField
             label="模式"
             value={draft.mode}
@@ -132,7 +131,7 @@ export function MarketScanPage() {
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
           <p className="text-xs leading-relaxed text-ink-500">
-            长投默认输出三支全市场价投候选；参考带只影响估值语境分和风险提示，不决定股票是否入选。
+            长投默认输出三支全市场价投候选；PE、PB 只形成估值语境，不作为统一行业硬门槛。
           </p>
           <Button variant="secondary" onClick={() => setParams({ ...draft })}>应用阈值</Button>
         </div>
@@ -169,7 +168,6 @@ export function MarketScanPage() {
                 <Metric label="扫描数量" value={report.ruleSet.scanLimit} />
                 <Metric label="PE 参考带" value={formatNumber(report.ruleSet.maxPe)} />
                 <Metric label="PB 参考带" value={formatNumber(report.ruleSet.maxPb)} />
-                <Metric label="财务分" value={formatNumber(report.ruleSet.minFinancialScore)} />
                 <Metric label="模式" value={modeLabel(report.ruleSet.mode)} />
                 <Metric label="单票上限" value={`${formatNumber(report.ruleSet.maxSinglePositionPercent)}%`} />
               </div>
@@ -348,12 +346,14 @@ function CandidateDetail({ candidate }: { candidate: MarketScanCandidate }) {
           <ScoreMetric label="综合" value={candidate.score.finalScore} />
         </div>
 
+        {candidate.longTermAssessment ? <LongTermAssessmentPanel assessment={candidate.longTermAssessment} /> : null}
         <TodayAdvicePanel advice={candidate.todayAdvice} />
         <V2StrategyBundlePanel
           symbol={candidate.symbol}
           companyName={candidate.name}
           focus="long"
           factorContext={marketFactorContext(candidate)}
+          canonicalAdvice={candidate.todayAdvice}
         />
         <EvidenceCompletenessPanel completeness={candidate.evidenceCompleteness} />
         <RecommendationEvidenceBundlePanel symbol={candidate.symbol} bundle={candidate.evidenceBundle} compact />
@@ -391,6 +391,113 @@ function CandidateDetail({ candidate }: { candidate: MarketScanCandidate }) {
   )
 }
 
+function LongTermAssessmentPanel({ assessment }: { assessment: LongTermInvestmentAssessment }) {
+  const valuation = assessment.valuation
+  const quality = assessment.financialQuality
+  const position = assessment.positionDiscipline
+  const audit = assessment.logicAudit
+  return (
+    <section className="border-y border-line-soft py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <ChartNoAxesCombined className="h-4 w-4 text-brand-600" />
+            <h3 className="text-sm font-semibold text-ink-900">行业估值模板</h3>
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-ink-500">
+            {assessment.modelLabel} · {assessment.strategyVersion}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Tag tone={assessment.status === 'BUILD_ZONE_REVIEW' ? 'success' : 'neutral'}>{assessment.statusLabel}</Tag>
+          <Tag tone={valuation.confidence === 'MEDIUM' ? 'brand' : 'warning'}>{valuation.confidenceLabel}</Tag>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+        <Metric label="财务样本" value={`${quality.sampleYears} 年`} />
+        <Metric label="ROE 中位数" value={formatRatioPercent(quality.medianRoe)} />
+        <Metric label="ROE 达标年份" value={`${quality.roeReferenceMetYears}/${quality.sampleYears}`} />
+        <Metric
+          label="现金含金量"
+          value={quality.cumulativeCashToProfitRatio == null
+            ? assessment.modelCode === 'FINANCIAL' ? '金融行业不适用' : '数据缺失'
+            : `${formatNumber(quality.cumulativeCashToProfitRatio)} 倍`}
+        />
+        <Metric label={valuation.metricLabel} value={formatPercent(valuation.impliedExpectationPercent)} />
+        <Metric label="经营证据中枢" value={formatPercent(valuation.evidenceExpectationPercent)} />
+        <Metric label="当前安全边际" value={formatPercent(valuation.discountToBasePercent)} />
+        <Metric label="建仓参考上沿" value={formatPerSharePrice(valuation.entryReferencePrice)} />
+      </div>
+
+      <div className="mt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-ink-700">悲观 / 基准 / 乐观价值区间</span>
+          <span className="text-xs text-ink-400">安全边际要求 {formatPercent(valuation.targetMarginOfSafetyPercent)}</span>
+        </div>
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          <Metric label="悲观" value={formatPerSharePrice(valuation.pessimisticValue)} compact />
+          <Metric label="基准" value={formatPerSharePrice(valuation.baseValue)} compact />
+          <Metric label="乐观" value={formatPerSharePrice(valuation.optimisticValue)} compact />
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-ink-500">
+          {valuation.normalizedEarningsUsed
+            ? '周期标准化经营者收益代理，不使用单年 PE 代表正常盈利。'
+            : valuation.metricCode === 'IMPLIED_ROE'
+              ? '金融行业采用 PB-ROE/剩余收益代理，不套用普通企业 DCF。'
+              : '经营者收益代理使用 EPS 与经营现金流/股的保守口径，不等同严格自由现金流。'}
+        </p>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-5">
+        <ScoreMetric label="盈利与现金 30%" value={assessment.factorScores.financialQualityScore} />
+        <ScoreMetric label="行业与壁垒 25%" value={assessment.factorScores.moatAndIndustryScore} />
+        <ScoreMetric label="隐含预期 25%" value={assessment.factorScores.valuationExpectationScore} />
+        <ScoreMetric label="资本配置 10%" value={assessment.factorScores.capitalAllocationScore} />
+        <ScoreMetric label="证据风险 10%" value={assessment.factorScores.evidenceRiskScore} />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="border-t border-line-soft pt-3">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-emerald-600" />
+            <h4 className="text-sm font-semibold text-ink-900">建仓与加仓纪律清单</h4>
+          </div>
+          <p className="mt-1 text-xs text-ink-500">
+            规则尚未自动触发 · 单票上限 {formatPercent(position.maxSinglePositionPercent)} · 前五大合计 {formatPercent(position.maxTopFivePositionPercent)} · {position.trancheCount} 批计划
+          </p>
+          <div className="mt-3 grid grid-cols-1 gap-3">
+            <ListBlock title="进入条件" items={position.entryConditions} tone="brand" />
+            <ListBlock title="加仓前提" items={position.addConditions} tone="success" />
+            <ListBlock title="强制复核" items={position.reviewTriggers} tone="warning" />
+          </div>
+        </div>
+
+        <div className="border-t border-line-soft pt-3">
+          <div className="flex items-center gap-2">
+            <ClipboardCheck className="h-4 w-4 text-brand-600" />
+            <h4 className="text-sm font-semibold text-ink-900">逻辑审计</h4>
+          </div>
+          <div className="mt-2 space-y-1 text-xs leading-relaxed text-ink-600">
+            <p>{audit.quarterlyReview}</p>
+            <p>{audit.annualReview}</p>
+            <p>{audit.reentryRule}</p>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-3">
+            <ListBlock title="事件触发" items={audit.eventTriggers} tone="brand" />
+            <ListBlock title="证伪条件" items={audit.invalidationConditions} tone="danger" />
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <ListBlock title="估值依据" items={valuation.evidence} tone="success" />
+        <ListBlock title="模型缺口" items={assessment.dataGaps} tone="warning" />
+      </div>
+    </section>
+  )
+}
+
 function EvidenceCompletenessPanel({ completeness }: { completeness: MarketScanCandidate['evidenceCompleteness'] }) {
   return (
     <div className="rounded-lg border border-line-soft bg-line-soft/30 p-3">
@@ -417,18 +524,19 @@ function visibleDataGaps(items: string[]) {
 }
 
 function marketFactorContext(candidate: MarketScanCandidate): Omit<V2StrategyBundleParams, 'symbol' | 'companyName'> {
-  const qualityScore = candidate.score.qualityProxyScore
+  const qualityScore = candidate.longTermAssessment?.factorScores.financialQualityScore ?? candidate.score.qualityProxyScore
+  const moatScore = candidate.longTermAssessment?.factorScores.moatAndIndustryScore ?? qualityScore
   const evidenceScore = candidate.evidenceCompleteness.score
   return {
     industry: candidate.industry ?? '全市场候选',
     valuationDiscountScore: candidate.score.valuationScore,
     qualityScore,
-    moatScore: qualityScore,
+    moatScore,
     profitabilityScore: qualityScore,
     cashFlowScore: evidenceScore,
     cyclePositionScore: candidate.score.priceActionScore,
     cycleRecoveryScore: candidate.score.priceActionScore,
-    industryLeaderScore: qualityScore,
+    industryLeaderScore: moatScore,
     policyCatalystScore: evidenceScore,
     liquidityScore: candidate.score.liquidityScore,
     fundamentalFloorScore: qualityScore,
@@ -600,7 +708,7 @@ function ListBlock({
     <div className="rounded-lg border border-line-soft p-3">
       <Tag tone={tone}>{title}</Tag>
       <ul className="mt-2 flex flex-col gap-1.5 text-xs leading-relaxed text-ink-600">
-        {items.slice(0, 5).map((item) => <li key={item}>{item}</li>)}
+        {items.map((item) => <li key={item}>{item}</li>)}
       </ul>
     </div>
   )

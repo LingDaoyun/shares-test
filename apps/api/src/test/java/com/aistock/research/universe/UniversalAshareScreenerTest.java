@@ -1,6 +1,7 @@
 package com.aistock.research.universe;
 
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
+import com.aistock.research.integration.eastmoney.EastMoneyAnnualIndicator;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import com.aistock.research.integration.eastmoney.AshareQuoteSnapshot;
@@ -13,6 +14,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.IntStream;
 
@@ -23,6 +25,36 @@ class UniversalAshareScreenerTest {
 
     private final StubEastMoneyClient client = new StubEastMoneyClient();
     private final UniversalAshareScreener screener = new UniversalAshareScreener(client);
+
+    @Test
+    void usesOnlyCompletedAnnualReportYears() {
+        assertThat(UniversalAshareScreener.latestCompletedAnnualReportYear(LocalDate.of(2026, 4, 30)))
+                .isEqualTo(2024);
+        assertThat(UniversalAshareScreener.latestCompletedAnnualReportYear(LocalDate.of(2026, 5, 1)))
+                .isEqualTo(2025);
+    }
+
+    @Test
+    void recordsEmptyLatestAnnualReportYearWithoutPromotingOlderDataToLatest() {
+        client.baseQuotes = List.of(
+                quote("600987", "航民股份", "纺织制造", "7.20", "0.20", "11.80", "1.02", "190000000")
+        );
+        client.tencentQuotes = client.baseQuotes;
+        client.annualIndicatorsByYear = Map.of(
+                2024,
+                Map.of("600987", annualIndicator("600987", 2024))
+        );
+
+        UniversalScreenReport report = screener.screen(new UniversalScreenRequest(
+                3, 50, null, null, null, null, false, true, "VALUE"));
+
+        UniversalScreenCandidate candidate = find(report, "600987");
+        assertThat(candidate.longTermAssessment().financialQuality().sampleYears()).isEqualTo(1);
+        assertThat(candidate.longTermAssessment().dataGaps())
+                .anyMatch(gap -> gap.contains("2025 年年报指标返回空集合"));
+        assertThat(candidate.dataGaps())
+                .anyMatch(gap -> gap.contains("最新年报 ROE"));
+    }
 
     @Test
     void shouldApplyShortTermLiquidityAndSidewaysGatesWithoutRequiringPositivePe() {
@@ -341,7 +373,7 @@ class UniversalAshareScreenerTest {
     }
 
     @Test
-    void missingFinancialHistoryUsesNeutralScoreInsteadOfIndustryGuess() {
+    void missingFinancialHistoryIsDowngradedByTheApplicableIndustryTemplate() {
         client.baseQuotes = List.of(
                 quote("600036", "银行样本", "银行", "10.00", "0.10", "8.00", "0.80", "900000000"),
                 quote("600912", "软件样本", "软件", "10.00", "0.10", "80.00", "8.00", "900000000")
@@ -352,8 +384,10 @@ class UniversalAshareScreenerTest {
                 10, 50, null, null, null, null, false, true, "VALUE"
         ));
 
-        assertThat(find(report, "600036").score().financialScore()).isEqualByComparingTo("50");
-        assertThat(find(report, "600912").score().financialScore()).isEqualByComparingTo("50");
+        assertThat(find(report, "600036").score().financialScore()).isLessThanOrEqualTo(new BigDecimal("20"));
+        assertThat(find(report, "600912").score().financialScore()).isLessThanOrEqualTo(new BigDecimal("20"));
+        assertThat(report.candidates()).allSatisfy(candidate ->
+                assertThat(candidate.longTermAssessment().financialQuality().status()).isEqualTo("INSUFFICIENT"));
         assertThat(report.candidates()).allMatch(candidate -> !"ACCUMULATE".equals(candidate.action()));
     }
 
@@ -425,6 +459,26 @@ class UniversalAshareScreenerTest {
                 .orElseThrow();
     }
 
+    private EastMoneyAnnualIndicator annualIndicator(String symbol, int year) {
+        return new EastMoneyAnnualIndicator(
+                symbol,
+                "fixture",
+                year + "-12-31",
+                year + "年 年报",
+                new BigDecimal("0.14"),
+                new BigDecimal("0.80"),
+                new BigDecimal("0.28"),
+                new BigDecimal("0.05"),
+                new BigDecimal("0.06"),
+                new BigDecimal("0.70"),
+                new BigDecimal("3.20"),
+                new BigDecimal("12000000000"),
+                new BigDecimal("900000000"),
+                "10派3元",
+                new BigDecimal("0.03")
+        );
+    }
+
     private static final class StubEastMoneyClient extends EastMoneyClient {
 
         private List<EastMoneyQuote> baseQuotes = List.of();
@@ -434,6 +488,7 @@ class UniversalAshareScreenerTest {
         private int tencentRequestSymbolCount;
         private long fetchAshareDelayMillis;
         private int expectedCount;
+        private Map<Integer, Map<String, EastMoneyAnnualIndicator>> annualIndicatorsByYear = Map.of();
 
         private StubEastMoneyClient() {
             super(null, null, null);
@@ -484,6 +539,11 @@ class UniversalAshareScreenerTest {
                     .filter(quote -> symbols.contains(quote.symbol()))
                     .limit(limit)
                     .toList();
+        }
+
+        @Override
+        public Map<String, EastMoneyAnnualIndicator> fetchAnnualIndicators(int dataYear, int pageSize) {
+            return annualIndicatorsByYear.getOrDefault(dataYear, Map.of());
         }
 
         @Override

@@ -1,5 +1,6 @@
 package com.aistock.research.universe;
 
+import com.aistock.research.longterm.LongTermInvestmentAssessment;
 import com.aistock.research.valuation.ValuationContext;
 
 import java.math.BigDecimal;
@@ -24,6 +25,7 @@ public record UniversalScreenCandidate(
         BigDecimal pbRatio,
         BigDecimal amount,
         ValuationContext valuationContext,
+        LongTermInvestmentAssessment longTermAssessment,
         UniversalScreenScore score,
         String bucket,
         String action,

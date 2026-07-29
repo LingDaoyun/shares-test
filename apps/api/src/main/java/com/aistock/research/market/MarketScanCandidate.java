@@ -1,5 +1,6 @@
 package com.aistock.research.market;
 
+import com.aistock.research.longterm.LongTermInvestmentAssessment;
 import com.aistock.research.trading.TradingAdvice;
 import com.aistock.research.quality.EvidenceCompleteness;
 import com.aistock.research.quality.RecommendationEvidenceBundle;
@@ -22,6 +23,7 @@ public record MarketScanCandidate(
         BigDecimal pbRatio,
         BigDecimal amount,
         ValuationContext valuationContext,
+        LongTermInvestmentAssessment longTermAssessment,
         MarketScanScoreBreakdown score,
         String screeningAction,
         String screeningActionLabel,

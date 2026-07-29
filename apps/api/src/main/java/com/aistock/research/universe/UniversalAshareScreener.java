@@ -1,9 +1,13 @@
 package com.aistock.research.universe;
 
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
+import com.aistock.research.integration.eastmoney.EastMoneyAnnualIndicator;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import com.aistock.research.integration.eastmoney.AshareQuoteSnapshot;
+import com.aistock.research.longterm.LongTermAssessmentInput;
+import com.aistock.research.longterm.LongTermInvestmentAssessment;
+import com.aistock.research.longterm.LongTermInvestmentAssessmentService;
 import com.aistock.research.quality.RecommendationQuality;
 import com.aistock.research.valuation.ValuationContext;
 import com.aistock.research.valuation.ValuationContextCalculator;
@@ -33,10 +37,11 @@ import java.util.stream.IntStream;
 @Service
 public class UniversalAshareScreener {
 
-    private static final int DEFAULT_LIMIT = 20;
+    private static final int DEFAULT_LIMIT = 3;
     private static final int DEFAULT_SCAN_LIMIT = 6000;
     private static final int MAX_LIMIT = 80;
     private static final int MAX_SCAN_LIMIT = 6000;
+    private static final int DIVIDEND_HISTORY_YEARS = 5;
     private static final BigDecimal DEFAULT_MIN_AMOUNT = RecommendationQuality.MIN_RECOMMENDED_AMOUNT;
     private static final BigDecimal DEFAULT_MAX_PE = new BigDecimal("45");
     private static final BigDecimal DEFAULT_MAX_PB = new BigDecimal("6.00");
@@ -47,6 +52,7 @@ public class UniversalAshareScreener {
     private final EastMoneyClient eastMoneyClient;
     private final Duration quoteTimeout;
     private final ValuationContextCalculator valuationContextCalculator = new ValuationContextCalculator();
+    private final LongTermInvestmentAssessmentService longTermAssessmentService = new LongTermInvestmentAssessmentService();
 
     @Autowired
     public UniversalAshareScreener(EastMoneyClient eastMoneyClient) {
@@ -110,8 +116,19 @@ public class UniversalAshareScreener {
                 : modeEligible;
         stageStats.add(stats("LIQUIDITY", "流动性资格", modeEligible.size(), liquid.size()));
 
+        AnnualEvidenceBundle annualEvidence = annualEvidence(mode, ruleSet);
+        Map<String, EastMoneyAnnualIndicator> annualIndicators = annualEvidence.latestIndicators();
+        Map<String, IndustryPositionSnapshot> industryPositions = industryPositions(quotes, annualIndicators);
+
         List<UniversalScreenCandidate> scoredCandidates = liquid.stream()
-                .map(quote -> candidate(quote, ruleSet))
+                .map(quote -> candidate(
+                        quote,
+                        ruleSet,
+                        annualIndicators.get(quote.symbol()),
+                        industryPositions.get(quote.symbol()),
+                        annualEvidence.historyFor(quote.symbol()),
+                        annualEvidence.dataGaps()
+                ))
                 .toList();
         List<UniversalScreenCandidate> scoredPool = scoredCandidates.stream()
                 .sorted(Comparator.comparing((UniversalScreenCandidate item) -> item.score().finalScore()).reversed()
@@ -372,7 +389,15 @@ public class UniversalAshareScreener {
         return null;
     }
 
-    private UniversalScreenCandidate candidate(EastMoneyQuote quote, UniversalScreenRuleSet ruleSet) {
+    private UniversalScreenCandidate candidate(
+            EastMoneyQuote quote,
+            UniversalScreenRuleSet ruleSet,
+            EastMoneyAnnualIndicator annualIndicator,
+            IndustryPositionSnapshot industryPosition,
+            List<EastMoneyAnnualIndicator> annualHistory,
+            List<String> sourceDataGaps
+    ) {
+        UniversalScreenMode mode = UniversalScreenMode.fromExternal(ruleSet.mode());
         BigDecimal pe = firstNonNull(quote.peTtm(), quote.peRatio());
         BigDecimal pb = quote.pbRatio();
         ValuationContext valuationContext = valuationContextCalculator.evaluate(
@@ -382,16 +407,36 @@ public class UniversalAshareScreener {
                 ruleSet.maxPb(),
                 quote.industry()
         );
-        BigDecimal valuation = valuationContext.score();
+        LongTermInvestmentAssessment longTermAssessment = mode == UniversalScreenMode.VALUE
+                ? longTermAssessmentService.assess(new LongTermAssessmentInput(
+                        quote.symbol(),
+                        quote.industry(),
+                        quote.latestPrice(),
+                        valuationContext,
+                        annualIndicator,
+                        annualHistory,
+                        industryPosition == null ? null : industryPosition.percentile(),
+                        industryPosition == null ? 0 : industryPosition.sampleCount(),
+                        industryPosition != null && industryPosition.revenueBased(),
+                        assetAdvantagedIndustry(quote.industry()),
+                        sourceDataGaps
+                ))
+                : null;
+        BigDecimal valuation = longTermAssessment == null
+                ? valuationContext.score()
+                : longTermAssessment.factorScores().valuationExpectationScore();
         BigDecimal liquidity = liquidityScore(quote.amount(), ruleSet.minAmount());
-        BigDecimal financial = financialScore(quote);
+        ValueQualityContext quality = valueQualityContext(quote, annualIndicator, industryPosition, annualHistory, mode);
+        BigDecimal financial = longTermAssessment == null
+                ? quality.score()
+                : longTermAssessment.factorScores().financialQualityScore();
         BigDecimal trend = trendScore(quote.changePercent());
-        BigDecimal risk = riskScore(quote);
-        BigDecimal finalScore = weighted(financial, "0.30")
-                .add(weighted(valuation, "0.10"))
-                .add(weighted(liquidity, "0.20"))
-                .add(weighted(trend, "0.10"))
-                .add(weighted(risk, "0.30"));
+        BigDecimal risk = longTermAssessment == null
+                ? riskScore(quote)
+                : longTermAssessment.factorScores().evidenceRiskScore();
+        BigDecimal finalScore = longTermAssessment == null
+                ? finalScore(mode, financial, valuation, liquidity, trend, risk)
+                : longTermAssessment.factorScores().overallScore();
         UniversalScreenScore score = new UniversalScreenScore(
                 scale(financial),
                 scale(valuation),
@@ -400,7 +445,7 @@ public class UniversalAshareScreener {
                 scale(risk),
                 scale(clamp(finalScore))
         );
-        ActionDecision decision = decision(score, valuationContext, quote, ruleSet);
+        ActionDecision decision = decision(score, valuationContext, quote, ruleSet, longTermAssessment);
         return new UniversalScreenCandidate(
                 0,
                 quote.symbol(),
@@ -418,15 +463,16 @@ public class UniversalAshareScreener {
                 pb,
                 quote.amount(),
                 valuationContext,
+                longTermAssessment,
                 score,
                 bucket(quote, ruleSet),
                 decision.action(),
                 decision.label(),
                 decision.reason(),
-                strengths(quote, valuationContext, ruleSet),
-                risks(quote, valuationContext),
-                dataGaps(quote),
-                trace(quote, valuationContext, score, ruleSet)
+                strengths(quote, valuationContext, ruleSet, quality, longTermAssessment),
+                risks(quote, valuationContext, quality, mode, longTermAssessment),
+                dataGaps(quote, quality, mode, longTermAssessment),
+                trace(quote, valuationContext, score, ruleSet, quality, longTermAssessment)
         );
     }
 
@@ -446,8 +492,220 @@ public class UniversalAshareScreener {
         return new BigDecimal("42");
     }
 
-    private BigDecimal financialScore(EastMoneyQuote quote) {
-        return new BigDecimal("50");
+    private BigDecimal finalScore(
+            UniversalScreenMode mode,
+            BigDecimal financial,
+            BigDecimal valuation,
+            BigDecimal liquidity,
+            BigDecimal trend,
+            BigDecimal risk
+    ) {
+        if (mode == UniversalScreenMode.VALUE) {
+            return weighted(financial, "0.42")
+                    .add(weighted(valuation, "0.25"))
+                    .add(weighted(risk, "0.18"))
+                    .add(weighted(trend, "0.10"))
+                    .add(weighted(liquidity, "0.05"));
+        }
+        return weighted(financial, "0.30")
+                .add(weighted(valuation, "0.10"))
+                .add(weighted(liquidity, "0.20"))
+                .add(weighted(trend, "0.10"))
+                .add(weighted(risk, "0.30"));
+    }
+
+    private ValueQualityContext valueQualityContext(
+            EastMoneyQuote quote,
+            EastMoneyAnnualIndicator indicator,
+            IndustryPositionSnapshot industryPosition,
+            List<EastMoneyAnnualIndicator> annualHistory,
+            UniversalScreenMode mode
+    ) {
+        if (mode != UniversalScreenMode.VALUE) {
+            return new ValueQualityContext(new BigDecimal("50"), List.of("非长线价投模式，质量分保持中性占位。"), List.of());
+        }
+        List<String> findings = new ArrayList<>();
+        List<String> gaps = new ArrayList<>();
+        BigDecimal score;
+        if (indicator == null) {
+            score = new BigDecimal("50");
+            gaps.add("最新年报 ROE、毛利率和经营现金流未命中，盈利质量只能中性偏低处理。");
+            return new ValueQualityContext(score, findings, gaps);
+        } else {
+            score = latestProfitabilityScore(indicator);
+            findings.add("最新年报 ROE " + percentText(indicator.roe())
+                    + "，毛利率 " + percentText(indicator.grossMargin())
+                    + "，每股经营现金流 " + plainOrMissing(indicator.operatingCashFlowPerShare()) + "。");
+            if (positive(indicator.operatingRevenue()) || positive(indicator.netProfit())) {
+                findings.add("规模证据：营收 " + moneyInYi(indicator.operatingRevenue())
+                        + "，归母净利 " + moneyInYi(indicator.netProfit()) + "。");
+            }
+            if (positive(indicator.operatingCashFlowPerShare())) {
+                findings.add("经营现金流为正，盈利质量不是只靠会计利润支撑。");
+            } else {
+                gaps.add("经营现金流未转正或缺失，盈利质量需要继续复核。");
+            }
+            if (indicator.dividendPlanDescription() != null && !indicator.dividendPlanDescription().isBlank()) {
+                findings.add("分红证据：" + indicator.dividendPlanDescription()
+                        + "，股息率 " + percentText(indicator.dividendYield()) + "。");
+            } else {
+                gaps.add("最新年报分红描述缺失，连续分红年限仍需接入历史分红序列。");
+            }
+            DividendContinuityContext dividendContinuity = dividendContinuity(annualHistory);
+            if (dividendContinuity.consecutiveCashDividendYears() >= 3) {
+                BigDecimal dividendBonus = dividendContinuity.consecutiveCashDividendYears() >= DIVIDEND_HISTORY_YEARS
+                        ? new BigDecimal("9")
+                        : new BigDecimal("5");
+                score = clamp(score.add(dividendBonus));
+                findings.add("近 " + dividendContinuity.sampleYears() + " 年连续分红 "
+                        + dividendContinuity.consecutiveCashDividendYears() + " 年，平均股息率 "
+                        + percentText(dividendContinuity.averageDividendYield()) + "。");
+            } else if (dividendContinuity.sampleYears() >= 3) {
+                gaps.add("近 " + dividendContinuity.sampleYears() + " 年现金分红连续性不足，红利属性需谨慎处理。");
+            } else {
+                gaps.add("历史分红样本少于 3 年，连续分红证据待补。");
+            }
+            ProfitDurabilityContext durability = profitDurability(annualHistory);
+            score = clamp(score.add(durability.scoreAdjustment()));
+            findings.addAll(durability.findings());
+            gaps.addAll(durability.gaps());
+        }
+
+        BigDecimal moatBonus = BigDecimal.ZERO;
+        if (quote.pbRatio() != null && quote.pbRatio().compareTo(new BigDecimal("1.20")) <= 0 && quote.pbRatio().compareTo(ZERO) > 0) {
+            moatBonus = moatBonus.add(new BigDecimal("10"));
+            findings.add("PB " + plain(quote.pbRatio()) + " 接近或低于净资产，具备资产安全边际观察价值。");
+        }
+        if (quote.peTtm() != null && quote.peTtm().compareTo(ZERO) > 0 && quote.peTtm().compareTo(new BigDecimal("18")) <= 0) {
+            moatBonus = moatBonus.add(new BigDecimal("4"));
+            findings.add("PE(TTM) " + plain(quote.peTtm()) + " 处在长线可解释区间。");
+        }
+        if (assetAdvantagedIndustry(quote.industry())) {
+            moatBonus = moatBonus.add(new BigDecimal("8"));
+            findings.add("行业具备重资产、能源成本或渠道资产属性，适合按行业地位和成本优势复核。");
+        }
+        if (industryPosition != null && industryPosition.sampleCount() >= 2 && industryPosition.percentile().compareTo(new BigDecimal("35")) <= 0) {
+            if (industryPosition.revenueBased()) {
+                moatBonus = moatBonus.add(new BigDecimal("12"));
+                findings.add("行业地位证据靠前：同业营收排名 " + industryPosition.rank() + "/" + industryPosition.sampleCount()
+                        + "，营收 " + moneyInYi(industryPosition.operatingRevenue())
+                        + "，归母净利 " + moneyInYi(industryPosition.netProfit()) + "。");
+            }
+        } else {
+            gaps.add("行业地位缺少同业营收排名证据，后续需用收入规模、市占率或产能数据复核。");
+        }
+        if (indicator != null && positive(indicator.operatingCashFlowPerShare())
+                && quote.pbRatio() != null && quote.pbRatio().compareTo(new BigDecimal("1.50")) <= 0) {
+            moatBonus = moatBonus.add(new BigDecimal("5"));
+            findings.add("低 PB 与正经营现金流同时出现，符合长线低估资产的初筛特征。");
+        }
+        return new ValueQualityContext(clamp(score.add(moatBonus)), findings, gaps);
+    }
+
+    private ProfitDurabilityContext profitDurability(List<EastMoneyAnnualIndicator> annualHistory) {
+        List<EastMoneyAnnualIndicator> history = annualHistory == null ? List.of() : annualHistory.stream()
+                .filter(indicator -> indicator != null && indicator.reportDate() != null && indicator.reportDate().contains("-12-31"))
+                .sorted(Comparator.comparing(EastMoneyAnnualIndicator::reportDate, Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(DIVIDEND_HISTORY_YEARS)
+                .toList();
+        if (history.size() < 3) {
+            return new ProfitDurabilityContext(
+                    new BigDecimal("-4"),
+                    List.of(),
+                    List.of("盈利持续性样本少于 3 年，不能只用单年高增长确认长线质量。")
+            );
+        }
+        int roeDurableYears = (int) history.stream()
+                .filter(indicator -> indicator.roe() != null && indicator.roe().compareTo(new BigDecimal("0.08")) >= 0)
+                .count();
+        int positiveCashFlowYears = (int) history.stream()
+                .filter(indicator -> positive(indicator.operatingCashFlowPerShare()))
+                .count();
+        int nonNegativeRevenueYears = (int) history.stream()
+                .filter(indicator -> indicator.revenueGrowth() != null && indicator.revenueGrowth().compareTo(ZERO) >= 0)
+                .count();
+        BigDecimal marginRange = marginRange(history);
+        BigDecimal adjustment = BigDecimal.ZERO;
+        List<String> findings = new ArrayList<>();
+        List<String> gaps = new ArrayList<>();
+        if (roeDurableYears >= 3) {
+            adjustment = adjustment.add(new BigDecimal("8"));
+            findings.add("多年 ROE 稳定：近 " + history.size() + " 年 ROE 不低于 8% 的年份 "
+                    + roeDurableYears + " 年。");
+        } else {
+            adjustment = adjustment.subtract(new BigDecimal("8"));
+            gaps.add("盈利持续性不足：近 " + history.size() + " 年 ROE 不低于 8% 的年份仅 "
+                    + roeDurableYears + " 年。");
+        }
+        if (positiveCashFlowYears >= 3) {
+            adjustment = adjustment.add(new BigDecimal("8"));
+            findings.add("经营现金流连续性较好：近 " + history.size() + " 年经营现金流为正 "
+                    + positiveCashFlowYears + " 年。");
+        } else {
+            adjustment = adjustment.subtract(new BigDecimal("8"));
+            gaps.add("盈利持续性与现金流存在缺口：近 " + history.size() + " 年经营现金流为正仅 "
+                    + positiveCashFlowYears + " 年。");
+        }
+        if (nonNegativeRevenueYears >= 3) {
+            adjustment = adjustment.add(new BigDecimal("4"));
+            findings.add("收入韧性较好：近 " + history.size() + " 年营收增速非负 "
+                    + nonNegativeRevenueYears + " 年。");
+        } else {
+            adjustment = adjustment.subtract(new BigDecimal("4"));
+            gaps.add("盈利持续性待验证：营收增速连续性不足，可能只是单年利润弹性。");
+        }
+        if (marginRange != null && marginRange.compareTo(new BigDecimal("0.08")) <= 0) {
+            adjustment = adjustment.add(new BigDecimal("4"));
+            findings.add("毛利率波动可控：近 " + history.size() + " 年毛利率区间差 "
+                    + percentText(marginRange) + "。");
+        } else if (marginRange != null) {
+            gaps.add("毛利率波动偏大：近 " + history.size() + " 年毛利率区间差 "
+                    + percentText(marginRange) + "，需复核成本优势是否稳定。");
+        }
+        return new ProfitDurabilityContext(adjustment, findings, gaps);
+    }
+
+    private BigDecimal marginRange(List<EastMoneyAnnualIndicator> history) {
+        List<BigDecimal> margins = history.stream()
+                .map(EastMoneyAnnualIndicator::grossMargin)
+                .filter(this::positive)
+                .toList();
+        if (margins.size() < 3) {
+            return null;
+        }
+        BigDecimal max = margins.stream().max(BigDecimal::compareTo).orElse(null);
+        BigDecimal min = margins.stream().min(BigDecimal::compareTo).orElse(null);
+        return max == null || min == null ? null : max.subtract(min);
+    }
+
+    private BigDecimal latestProfitabilityScore(EastMoneyAnnualIndicator indicator) {
+        BigDecimal base = new BigDecimal("18");
+        BigDecimal roeScore = boundedPercent(indicator.roe(), "0.04", "0.16").multiply(new BigDecimal("28"));
+        BigDecimal cashScore = positive(indicator.operatingCashFlowPerShare()) ? new BigDecimal("18") : BigDecimal.ZERO;
+        BigDecimal marginScore = boundedPercent(indicator.grossMargin(), "0.12", "0.45").multiply(new BigDecimal("18"));
+        BigDecimal revenueScore = boundedPercent(indicator.revenueGrowth(), "-0.05", "0.15").multiply(new BigDecimal("10"));
+        BigDecimal profitScore = boundedPercent(indicator.netProfitGrowth(), "-0.10", "0.20").multiply(new BigDecimal("10"));
+        BigDecimal epsScore = positive(indicator.eps()) ? new BigDecimal("8") : BigDecimal.ZERO;
+        return clamp(base.add(roeScore).add(cashScore).add(marginScore).add(revenueScore).add(profitScore).add(epsScore));
+    }
+
+    private BigDecimal boundedPercent(BigDecimal value, String low, String high) {
+        if (value == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal min = new BigDecimal(low);
+        BigDecimal max = new BigDecimal(high);
+        if (value.compareTo(min) <= 0) {
+            return BigDecimal.ZERO;
+        }
+        if (value.compareTo(max) >= 0) {
+            return BigDecimal.ONE;
+        }
+        return value.subtract(min).divide(max.subtract(min), 4, RoundingMode.HALF_UP);
+    }
+
+    private boolean positive(BigDecimal value) {
+        return value != null && value.compareTo(ZERO) > 0;
     }
 
     private BigDecimal trendScore(BigDecimal changePercent) {
@@ -478,7 +736,8 @@ public class UniversalAshareScreener {
             UniversalScreenScore score,
             ValuationContext valuationContext,
             EastMoneyQuote quote,
-            UniversalScreenRuleSet ruleSet
+            UniversalScreenRuleSet ruleSet,
+            LongTermInvestmentAssessment longTermAssessment
     ) {
         UniversalScreenMode mode = UniversalScreenMode.fromExternal(ruleSet.mode());
         if (!mode.allowsBuyLikeScreeningAction()) {
@@ -513,22 +772,31 @@ public class UniversalAshareScreener {
                     "估值数据缺失不作淘汰，但买入闸门保持关闭。"
             );
         }
-        if (score.finalScore().compareTo(new BigDecimal("72")) >= 0) {
-            return new ActionDecision("VALUE_RESEARCH", "财报复核", "已通过全 A 资格过滤，但财务维度仍为中性占位，需补齐点时财报后再形成买入动作。");
+        if (longTermAssessment != null && "BUILD_ZONE_REVIEW".equals(longTermAssessment.status())) {
+            return new ActionDecision(
+                    "WATCH_BUY_ZONE",
+                    "建仓复核",
+                    "五维长期评估进入建仓研究区，但仍须通过公告反证和组合仓位门禁。"
+            );
         }
-        return new ActionDecision("WAIT_CONFIRM", "等待确认", "通过资格过滤但综合分仍需财报、公告或价格信号继续确认。");
+        if (score.finalScore().compareTo(new BigDecimal("72")) >= 0) {
+            return new ActionDecision("VALUE_RESEARCH", "证据复核", "已通过全 A 资格过滤和长期多因子排序，需补齐评估中列出的证据缺口。");
+        }
+        return new ActionDecision("VALUE_RESEARCH", "价值研究", "已通过全 A 资格过滤，但综合分仍需点时财报、公告或价格信号继续确认。");
     }
 
     private List<String> strengths(
             EastMoneyQuote quote,
             ValuationContext valuationContext,
-            UniversalScreenRuleSet ruleSet
+            UniversalScreenRuleSet ruleSet,
+            ValueQualityContext quality,
+            LongTermInvestmentAssessment longTermAssessment
     ) {
         List<String> strengths = new ArrayList<>();
         UniversalScreenMode mode = UniversalScreenMode.fromExternal(ruleSet.mode());
         strengths.add(switch (mode) {
             case ALL -> "已通过代码、ST/退市名称风险和实时价格有效性检查";
-            case VALUE -> "已通过长线价值研究与流动性资格，横盘不作硬排除";
+            case VALUE -> "已通过长线价值研究资格，成交额和换手只做软约束，核心看行业地位、盈利质量和估值安全边际";
             case CYCLE -> "已通过周期行业与流动性资格，负 PE 不作硬排除";
             case SHORT_TERM -> "已通过短线流动性资格和无突破横盘检查";
         });
@@ -537,24 +805,58 @@ public class UniversalAshareScreener {
         if (quote.amount() != null) {
             strengths.add("成交额 " + plain(quote.amount()) + "，满足流动性要求");
         }
+        strengths.addAll(quality.findings());
+        if (longTermAssessment != null) {
+            strengths.add("行业估值模板：" + longTermAssessment.modelLabel());
+            strengths.addAll(longTermAssessment.evidence().stream().limit(3).toList());
+        }
         return strengths;
     }
 
-    private List<String> risks(EastMoneyQuote quote, ValuationContext valuationContext) {
+    private List<String> risks(
+            EastMoneyQuote quote,
+            ValuationContext valuationContext,
+            ValueQualityContext quality,
+            UniversalScreenMode mode,
+            LongTermInvestmentAssessment longTermAssessment
+    ) {
         List<String> risks = new ArrayList<>();
-        risks.add("本层未读取真实财务历史，财务分固定为中性 50，不能据此形成买入动作");
+        if (mode == UniversalScreenMode.VALUE && quality.gaps().stream().noneMatch(gap -> gap.contains("最新年报"))) {
+            risks.add("本层只接入最新年报指标，仍需近三到十年 ROE、毛利率、现金流和分红序列确认。");
+        } else {
+            risks.add("本层财务证据仍不完整，不能越过财报和公告复核门禁。");
+        }
         if (quote.changePercent() != null && quote.changePercent().compareTo(new BigDecimal("4")) > 0) {
             risks.add("单日涨幅偏大，不适合追价");
         }
+        risks.addAll(quality.gaps());
         risks.addAll(valuationContext.warnings());
+        if (longTermAssessment != null) {
+            risks.addAll(longTermAssessment.risks());
+        }
         return risks;
     }
 
-    private List<String> dataGaps(EastMoneyQuote quote) {
+    private List<String> dataGaps(
+            EastMoneyQuote quote,
+            ValueQualityContext quality,
+            UniversalScreenMode mode,
+            LongTermInvestmentAssessment longTermAssessment
+    ) {
         List<String> gaps = new ArrayList<>();
-        gaps.add("近三年点时财报尚未接入本轮排序");
+        if (mode == UniversalScreenMode.VALUE) {
+            gaps.addAll(quality.gaps());
+            if (longTermAssessment != null) {
+                gaps.addAll(longTermAssessment.dataGaps());
+                if (longTermAssessment.financialQuality().sampleYears() < 3) {
+                    gaps.add("近三年点时财报质量样本不足，买入闸门保持关闭。");
+                }
+            }
+        } else {
+            gaps.add("近三年点时财报尚未接入本轮排序");
+        }
         gaps.add("尚未逐只解析十年年报 PDF");
-        gaps.add("尚未接入严格自由现金流和分红连续性");
+        gaps.add("尚未接入严格自由现金流");
         if (quote.industry() == null || quote.industry().isBlank()) {
             gaps.add("行业字段缺失，同行估值分位待补");
         }
@@ -565,13 +867,17 @@ public class UniversalAshareScreener {
             EastMoneyQuote quote,
             ValuationContext valuationContext,
             UniversalScreenScore score,
-            UniversalScreenRuleSet ruleSet
+            UniversalScreenRuleSet ruleSet,
+            ValueQualityContext quality,
+            LongTermInvestmentAssessment longTermAssessment
     ) {
         List<String> valuationFindings = new ArrayList<>(valuationContext.evidence());
         valuationFindings.add("PE TTM=" + plainOrMissing(valuationContext.rawPe()));
         valuationFindings.add("PB=" + plainOrMissing(valuationContext.rawPb()));
         valuationFindings.add("估值语境分=" + plain(score.valuationScore()));
-        return List.of(
+        List<String> qualityFindings = new ArrayList<>(quality.findings());
+        qualityFindings.add("质量代理分=" + plain(score.financialScore()));
+        List<UniversalScreenTraceStep> steps = new ArrayList<>(List.of(
                 new UniversalScreenTraceStep(
                         "QUOTE",
                         "行情合并",
@@ -581,6 +887,14 @@ public class UniversalAshareScreener {
                                 "涨跌幅=" + plainOrMissing(quote.changePercent()) + "%",
                                 "成交额阈值 " + plain(ruleSet.minAmount())
                         ),
+                        quote.sourceName(),
+                        quote.quoteUrl()
+                ),
+                new UniversalScreenTraceStep(
+                        "QUALITY",
+                        "行业地位与盈利质量",
+                        "长线价投优先判断行业地位、盈利韧性、现金流和成本/资产优势，换手率不作为核心因子。",
+                        qualityFindings,
                         quote.sourceName(),
                         quote.quoteUrl()
                 ),
@@ -600,7 +914,23 @@ public class UniversalAshareScreener {
                         "系统风控",
                         null
                 )
-        );
+        ));
+        if (longTermAssessment != null) {
+            List<String> disciplineFindings = new ArrayList<>();
+            disciplineFindings.add("模型=" + longTermAssessment.modelLabel()
+                    + "，综合分=" + plain(longTermAssessment.factorScores().overallScore()));
+            disciplineFindings.addAll(longTermAssessment.valuation().evidence());
+            disciplineFindings.addAll(longTermAssessment.positionDiscipline().reviewTriggers());
+            steps.add(new UniversalScreenTraceStep(
+                    "LONG_TERM_DISCIPLINE",
+                    "长期估值与逻辑纪律",
+                    "行业模板、市场隐含预期、建仓纪律和逻辑审计共同决定长期研究状态。",
+                    disciplineFindings.stream().distinct().toList(),
+                    "系统长期价投模型",
+                    null
+            ));
+        }
+        return List.copyOf(steps);
     }
 
     private UniversalScreenCandidate rerank(UniversalScreenCandidate candidate, int rank) {
@@ -621,6 +951,7 @@ public class UniversalAshareScreener {
                 candidate.pbRatio(),
                 candidate.amount(),
                 candidate.valuationContext(),
+                candidate.longTermAssessment(),
                 candidate.score(),
                 candidate.bucket(),
                 candidate.action(),
@@ -696,6 +1027,150 @@ public class UniversalAshareScreener {
         return base + coverageNote;
     }
 
+    private AnnualEvidenceBundle annualEvidence(
+            UniversalScreenMode mode,
+            UniversalScreenRuleSet ruleSet
+    ) {
+        if (mode != UniversalScreenMode.VALUE) {
+            return AnnualEvidenceBundle.empty();
+        }
+        int latestFullYear = latestCompletedAnnualReportYear(LocalDate.now());
+        int limit = Math.min(ruleSet.scanLimit(), MAX_SCAN_LIMIT);
+        Map<String, EastMoneyAnnualIndicator> latestIndicators = Map.of();
+        Map<String, List<EastMoneyAnnualIndicator>> historyBySymbol = new LinkedHashMap<>();
+        List<String> dataGaps = new ArrayList<>();
+        for (int offset = 0; offset < DIVIDEND_HISTORY_YEARS; offset++) {
+            int reportYear = latestFullYear - offset;
+            try {
+                Map<String, EastMoneyAnnualIndicator> indicators = eastMoneyClient.fetchAnnualIndicators(reportYear, limit);
+                if (indicators.isEmpty()) {
+                    dataGaps.add(reportYear + " 年年报指标返回空集合，该年度未参与长期评估。");
+                } else {
+                    if (offset == 0) {
+                        latestIndicators = indicators;
+                    }
+                    indicators.values().forEach(indicator -> historyBySymbol
+                            .computeIfAbsent(indicator.symbol(), ignored -> new ArrayList<>())
+                        .add(indicator));
+                }
+            } catch (RuntimeException ignored) {
+                dataGaps.add(reportYear + " 年年报指标数据源获取失败，该年度未参与长期评估。");
+            }
+        }
+        historyBySymbol.replaceAll((symbol, history) -> history.stream()
+                .sorted(Comparator.comparing(EastMoneyAnnualIndicator::reportDate, Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(DIVIDEND_HISTORY_YEARS)
+                .toList());
+        return new AnnualEvidenceBundle(latestIndicators, historyBySymbol, List.copyOf(dataGaps));
+    }
+
+    static int latestCompletedAnnualReportYear(LocalDate asOf) {
+        return asOf.getMonthValue() >= 5 ? asOf.getYear() - 1 : asOf.getYear() - 2;
+    }
+
+    private DividendContinuityContext dividendContinuity(List<EastMoneyAnnualIndicator> annualHistory) {
+        List<EastMoneyAnnualIndicator> history = annualHistory == null ? List.of() : annualHistory.stream()
+                .filter(indicator -> indicator != null && indicator.reportDate() != null && indicator.reportDate().contains("-12-31"))
+                .sorted(Comparator.comparing(EastMoneyAnnualIndicator::reportDate, Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(DIVIDEND_HISTORY_YEARS)
+                .toList();
+        int sampleYears = history.size();
+        int cashDividendYears = (int) history.stream().filter(this::hasCashDividend).count();
+        int consecutiveCashDividendYears = 0;
+        for (EastMoneyAnnualIndicator indicator : history) {
+            if (!hasCashDividend(indicator)) {
+                break;
+            }
+            consecutiveCashDividendYears++;
+        }
+        BigDecimal averageDividendYield = average(history.stream()
+                .map(EastMoneyAnnualIndicator::dividendYield)
+                .filter(this::positive)
+                .toList());
+        return new DividendContinuityContext(sampleYears, cashDividendYears, consecutiveCashDividendYears, averageDividendYield);
+    }
+
+    private boolean hasCashDividend(EastMoneyAnnualIndicator indicator) {
+        if (indicator == null) {
+            return false;
+        }
+        if (positive(indicator.dividendYield())) {
+            return true;
+        }
+        String description = indicator.dividendPlanDescription();
+        if (description == null || description.isBlank()) {
+            return false;
+        }
+        if (containsAny(description, "不分配", "不派发", "不进行利润分配")) {
+            return false;
+        }
+        return containsAny(description, "派", "现金红利", "分红");
+    }
+
+    private BigDecimal average(List<BigDecimal> values) {
+        List<BigDecimal> present = values.stream().filter(this::positive).toList();
+        if (present.isEmpty()) {
+            return null;
+        }
+        return present.stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(BigDecimal.valueOf(present.size()), 4, RoundingMode.HALF_UP)
+                .stripTrailingZeros();
+    }
+
+    private Map<String, IndustryPositionSnapshot> industryPositions(
+            List<EastMoneyQuote> quotes,
+            Map<String, EastMoneyAnnualIndicator> annualIndicators
+    ) {
+        Map<String, IndustryPositionSnapshot> result = new LinkedHashMap<>();
+        Map<String, List<EastMoneyQuote>> byIndustry = quotes.stream()
+                .filter(quote -> quote.symbol() != null && quote.industry() != null && !quote.industry().isBlank())
+                .collect(Collectors.groupingBy(EastMoneyQuote::industry));
+        for (Map.Entry<String, List<EastMoneyQuote>> entry : byIndustry.entrySet()) {
+            List<EastMoneyQuote> revenueRanked = entry.getValue().stream()
+                    .filter(quote -> positive(indicatorRevenue(annualIndicators, quote.symbol())))
+                    .sorted(Comparator.comparing(
+                            (EastMoneyQuote quote) -> indicatorRevenue(annualIndicators, quote.symbol()),
+                            Comparator.reverseOrder()
+                    ))
+                    .toList();
+            if (revenueRanked.size() >= 2) {
+                putIndustryPositions(result, revenueRanked, annualIndicators, true);
+                continue;
+            }
+        }
+        return result;
+    }
+
+    private void putIndustryPositions(
+            Map<String, IndustryPositionSnapshot> result,
+            List<EastMoneyQuote> ranked,
+            Map<String, EastMoneyAnnualIndicator> annualIndicators,
+            boolean revenueBased
+    ) {
+        int sampleCount = ranked.size();
+        for (int index = 0; index < ranked.size(); index++) {
+            EastMoneyQuote quote = ranked.get(index);
+            BigDecimal percentile = BigDecimal.valueOf(index + 1)
+                    .divide(BigDecimal.valueOf(sampleCount), 4, RoundingMode.HALF_UP)
+                    .multiply(new BigDecimal("100"));
+            EastMoneyAnnualIndicator indicator = annualIndicators.get(quote.symbol());
+            result.put(quote.symbol(), new IndustryPositionSnapshot(
+                    index + 1,
+                    sampleCount,
+                    percentile,
+                    revenueBased,
+                    indicator == null ? null : indicator.operatingRevenue(),
+                    indicator == null ? null : indicator.netProfit()
+            ));
+        }
+    }
+
+    private BigDecimal indicatorRevenue(Map<String, EastMoneyAnnualIndicator> annualIndicators, String symbol) {
+        EastMoneyAnnualIndicator indicator = annualIndicators.get(symbol);
+        return indicator == null ? null : indicator.operatingRevenue();
+    }
+
     private boolean hasZeroOrMissingAmount(EastMoneyQuote quote) {
         return quote.amount() == null || quote.amount().compareTo(ZERO) <= 0;
     }
@@ -730,6 +1205,12 @@ public class UniversalAshareScreener {
 
     private boolean isCycleIndustry(String industry) {
         return containsAny(industry, "农业", "养殖", "煤炭", "有色", "钢铁", "化工", "水泥", "建材", "航运", "猪", "电池");
+    }
+
+    private boolean assetAdvantagedIndustry(String industry) {
+        return containsAny(industry,
+                "纺织", "印染", "电力", "热电", "公用", "水电", "煤炭", "港口", "高速", "铁路",
+                "造纸", "水泥", "建材", "化工", "家电", "食品", "饮料");
     }
 
     private boolean containsAny(String value, String... needles) {
@@ -804,9 +1285,70 @@ public class UniversalAshareScreener {
         return value == null ? "缺失" : value.stripTrailingZeros().toPlainString();
     }
 
+    private String moneyInYi(BigDecimal value) {
+        if (value == null) {
+            return "缺失";
+        }
+        return value.divide(new BigDecimal("100000000"), 2, RoundingMode.HALF_UP)
+                .stripTrailingZeros()
+                .toPlainString() + "亿元";
+    }
+
+    private String percentText(BigDecimal value) {
+        if (value == null) {
+            return "缺失";
+        }
+        return value.multiply(new BigDecimal("100"))
+                .setScale(2, RoundingMode.HALF_UP)
+                .stripTrailingZeros()
+                .toPlainString() + "%";
+    }
+
     private record StageProblem(String reason, List<String> evidence) {
     }
 
     private record ActionDecision(String action, String label, String reason) {
+    }
+
+    private record ValueQualityContext(BigDecimal score, List<String> findings, List<String> gaps) {
+    }
+
+    private record ProfitDurabilityContext(
+            BigDecimal scoreAdjustment,
+            List<String> findings,
+            List<String> gaps
+    ) {
+    }
+
+    private record DividendContinuityContext(
+            int sampleYears,
+            int cashDividendYears,
+            int consecutiveCashDividendYears,
+            BigDecimal averageDividendYield
+    ) {
+    }
+
+    private record AnnualEvidenceBundle(
+            Map<String, EastMoneyAnnualIndicator> latestIndicators,
+            Map<String, List<EastMoneyAnnualIndicator>> historyBySymbol,
+            List<String> dataGaps
+    ) {
+        private static AnnualEvidenceBundle empty() {
+            return new AnnualEvidenceBundle(Map.of(), Map.of(), List.of());
+        }
+
+        private List<EastMoneyAnnualIndicator> historyFor(String symbol) {
+            return historyBySymbol.getOrDefault(symbol, List.of());
+        }
+    }
+
+    private record IndustryPositionSnapshot(
+            int rank,
+            int sampleCount,
+            BigDecimal percentile,
+            boolean revenueBased,
+            BigDecimal operatingRevenue,
+            BigDecimal netProfit
+    ) {
     }
 }

@@ -74,6 +74,10 @@ public class EastMoneyClient {
             "SJLTZ",
             "BASIC_EPS",
             "BPS",
+            "TOTAL_OPERATE_INCOME",
+            "PARENT_NETPROFIT",
+            "ASSIGNDSCRPT",
+            "ZXGXL",
             "SECUCODE"
     );
 
@@ -1274,7 +1278,11 @@ public class EastMoneyClient {
                 percent(item, "YSTZ"),
                 percent(item, "SJLTZ"),
                 decimal(item, "BASIC_EPS"),
-                decimal(item, "BPS")
+                decimal(item, "BPS"),
+                decimal(item, "TOTAL_OPERATE_INCOME"),
+                decimal(item, "PARENT_NETPROFIT"),
+                text(item, "ASSIGNDSCRPT"),
+                percent(item, "ZXGXL")
         ));
     }
 
