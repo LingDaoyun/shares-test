@@ -3,11 +3,12 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchMarketScanReport } from '../api/client'
+import { fetchLongTermCandidateContext, fetchMarketScanReport } from '../api/client'
 import { MarketScanPage } from './MarketScanPage'
 
 vi.mock('../api/client', () => ({
-  fetchMarketScanReport: vi.fn()
+  fetchMarketScanReport: vi.fn(),
+  fetchLongTermCandidateContext: vi.fn()
 }))
 
 vi.mock('../components/watchlist/WatchButton', () => ({
@@ -25,6 +26,7 @@ vi.mock('../components/recommendation/EvidenceBundlePanel', () => ({
 }))
 
 const mockedFetchMarketScanReport = vi.mocked(fetchMarketScanReport)
+const mockedFetchLongTermCandidateContext = vi.mocked(fetchLongTermCandidateContext)
 
 describe('MarketScanPage long-term assessment', () => {
   let host: HTMLDivElement
@@ -37,6 +39,7 @@ describe('MarketScanPage long-term assessment', () => {
     document.body.append(host)
     root = createRoot(host)
     mockedFetchMarketScanReport.mockResolvedValue(report as never)
+    mockedFetchLongTermCandidateContext.mockResolvedValue(candidateContext as never)
   })
 
   afterEach(() => {
@@ -77,7 +80,201 @@ describe('MarketScanPage long-term assessment', () => {
     expect(text).toContain('V2策略 护城河 88 行业地位 88')
     expect(text).toContain('季度轻审计')
   })
+
+  it('defaults long-term value scanning to eight candidates', async () => {
+    await act(async () => {
+      root.render(<MarketScanPage />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mockedFetchMarketScanReport).toHaveBeenCalledWith(expect.objectContaining({ limit: 8 }))
+    expect(document.body.textContent).toContain('默认输出八只候选')
+  })
+
+  it('loads industry policy and cycle context when a candidate is opened', async () => {
+    await act(async () => {
+      root.render(<MarketScanPage />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const candidateButton = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('航民股份'))
+
+    await act(async () => {
+      candidateButton?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mockedFetchLongTermCandidateContext).toHaveBeenCalledWith('600987', '纺织制造')
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('行业环境')
+    expect(text).toContain('纺织制造')
+    expect(text).toContain('最近政策')
+    expect(text).toContain('纺织行业绿色低碳转型实施意见')
+    expect(text).toContain('当前周期')
+    expect(text).toContain('经营早期修复')
+    expect(text).toContain('价格修复')
+  })
+
+  it('ignores a late context response after switching candidates', async () => {
+    const secondCandidate = {
+      ...report.candidates[0],
+      rank: 2,
+      symbol: '600588',
+      name: '用友网络',
+      industry: '软件开发'
+    }
+    mockedFetchMarketScanReport.mockResolvedValue({
+      ...report,
+      candidateCount: 2,
+      candidates: [report.candidates[0], secondCandidate]
+    } as never)
+    let resolveFirst: (value: unknown) => void = () => undefined
+    let resolveSecond: (value: unknown) => void = () => undefined
+    mockedFetchLongTermCandidateContext
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }) as never)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }) as never)
+
+    await act(async () => {
+      root.render(<MarketScanPage />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const findCandidate = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes(name))
+
+    await act(async () => {
+      findCandidate('航民股份')?.click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      findCandidate('用友网络')?.click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      resolveSecond({
+        ...candidateContext,
+        symbol: '600588',
+        companyName: '用友网络',
+        industry: '软件开发',
+        industryContext: {
+          ...candidateContext.industryContext,
+          industry: '软件开发',
+          modelCode: 'GROWTH',
+          modelLabel: '成长企业模型',
+          cycleType: 'GROWTH',
+          cycleTypeLabel: '成长行业'
+        },
+        policyEvidence: { documents: [], dataGaps: ['最近两年未匹配到可靠官方政策文件'] }
+      })
+      await Promise.resolve()
+    })
+    await act(async () => {
+      resolveFirst(candidateContext)
+      await Promise.resolve()
+    })
+
+    expect(document.body.textContent).toContain('软件开发')
+    expect(document.body.textContent).not.toContain('纺织行业绿色低碳转型实施意见')
+  })
+
+  it('does not flash a previously loaded context after switching candidates', async () => {
+    const secondCandidate = {
+      ...report.candidates[0],
+      rank: 2,
+      symbol: '600588',
+      name: '用友网络',
+      industry: '软件开发'
+    }
+    mockedFetchMarketScanReport.mockResolvedValue({
+      ...report,
+      candidateCount: 2,
+      candidates: [report.candidates[0], secondCandidate]
+    } as never)
+    let resolveSecond: (value: unknown) => void = () => undefined
+    mockedFetchLongTermCandidateContext
+      .mockResolvedValueOnce(candidateContext as never)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }) as never)
+
+    await act(async () => {
+      root.render(<MarketScanPage />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const findCandidate = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes(name))
+
+    await act(async () => {
+      findCandidate('航民股份')?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(document.body.textContent).toContain('纺织行业绿色低碳转型实施意见')
+
+    await act(async () => {
+      findCandidate('用友网络')?.click()
+      await Promise.resolve()
+    })
+    expect(document.body.textContent).not.toContain('纺织行业绿色低碳转型实施意见')
+    expect(document.body.textContent).toContain('正在核对行业、政策与周期证据')
+
+    await act(async () => {
+      resolveSecond({
+        ...candidateContext,
+        symbol: '600588',
+        companyName: '用友网络',
+        industry: '软件开发'
+      })
+      await Promise.resolve()
+    })
+  })
 })
+
+const candidateContext = {
+  symbol: '600987',
+  companyName: '航民股份',
+  market: '沪A',
+  industry: '纺织制造',
+  industryContext: {
+    industry: '纺织制造',
+    modelCode: 'STANDARD',
+    modelLabel: '普通企业模型',
+    cycleType: 'STANDARD',
+    cycleTypeLabel: '一般行业',
+    evidence: ['依据东方财富行业分类匹配长期估值与周期模板'],
+    dataGaps: []
+  },
+  policyEvidence: {
+    documents: [{
+      title: '纺织行业绿色低碳转型实施意见',
+      source: '工业和信息化部',
+      publishedAt: '2026-06-18',
+      url: 'https://www.miit.gov.cn/zwgk/zcwj/a.html',
+      impact: 'SUPPORT',
+      relevanceScore: 84,
+      matchedKeywords: ['纺织', '绿色制造'],
+      rationale: '标题命中行业关键词'
+    }],
+    dataGaps: []
+  },
+  cycleContext: {
+    businessStage: 'EARLY_RECOVERY',
+    businessStageLabel: '经营早期修复',
+    priceStage: 'RECOVERY',
+    priceStageLabel: '价格修复',
+    confidence: 68,
+    provisional: true,
+    supportingEvidence: ['营收增速改善'],
+    contraryEvidence: ['原材料成本仍有压力'],
+    dataGaps: ['缺少行业库存月度数据']
+  },
+  generatedAt: '2026-07-30T04:00:00Z',
+  dataGaps: ['缺少行业库存月度数据']
+}
 
 const report = {
   scope: '沪深北 A 股全市场扫描',

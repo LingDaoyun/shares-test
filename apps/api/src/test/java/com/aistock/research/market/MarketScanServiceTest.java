@@ -70,7 +70,7 @@ class MarketScanServiceTest {
     }
 
     @Test
-    void valueModeDefaultsToThreeLongTermRecommendations() {
+    void valueModeDefaultsToEightLongTermRecommendations() {
         eastMoneyClient.baseQuotes = List.of(
                 quote("601166", "兴业银行", "银行", "17.45", "-0.11", "3.87", "0.45", "1800000000"),
                 quote("600036", "招商银行", "银行", "37.18", "-0.19", "6.19", "0.85", "2900000000"),
@@ -82,9 +82,9 @@ class MarketScanServiceTest {
 
         MarketScanReport report = service.report(null, 100, null, null, null, null, true, true, "VALUE");
 
-        assertThat(report.candidates()).hasSize(3);
+        assertThat(report.candidates()).hasSize(5);
         assertThat(report.methodology()).anySatisfy(item ->
-                assertThat(item).contains("长线价投", "三支", "行业地位", "盈利质量"));
+                assertThat(item).contains("长线价投", "八只", "行业地位", "盈利质量"));
     }
 
     @Test

@@ -112,8 +112,25 @@ class UniversalAshareScreenerTest {
         ));
 
         assertThat(report.ruleSet().scanLimit()).isEqualTo(6000);
+        assertThat(report.ruleSet().limit()).isEqualTo(3);
         assertThat(report.ruleSet().minAmount()).isEqualByComparingTo("80000000");
         assertThat(report.ruleSet().excludeSideways()).isFalse();
+        assertThat(report.candidates()).allSatisfy(candidate ->
+                assertThat(candidate.action()).isNotEqualTo("ACCUMULATE"));
+    }
+
+    @Test
+    void valueModeDefaultsToEightCandidatesWithoutChangingOtherModes() {
+        client.baseQuotes = List.of(
+                quote("000777", "朋友推荐", "机械设备", "18.00", "-0.20", "16.00", "1.80", "260000000")
+        );
+        client.tencentQuotes = client.baseQuotes;
+
+        UniversalScreenReport report = screener.screen(new UniversalScreenRequest(
+                null, 50, null, null, null, null, false, true, "VALUE"
+        ));
+
+        assertThat(report.ruleSet().limit()).isEqualTo(8);
         assertThat(report.candidates()).allSatisfy(candidate ->
                 assertThat(candidate.action()).isNotEqualTo("ACCUMULATE"));
     }

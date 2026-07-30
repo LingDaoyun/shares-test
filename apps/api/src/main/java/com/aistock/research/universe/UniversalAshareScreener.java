@@ -38,6 +38,7 @@ import java.util.stream.IntStream;
 public class UniversalAshareScreener {
 
     private static final int DEFAULT_LIMIT = 3;
+    private static final int DEFAULT_VALUE_LIMIT = 8;
     private static final int DEFAULT_SCAN_LIMIT = 6000;
     private static final int MAX_LIMIT = 80;
     private static final int MAX_SCAN_LIMIT = 6000;
@@ -970,8 +971,9 @@ public class UniversalAshareScreener {
                 : request;
         UniversalScreenMode mode = UniversalScreenMode.fromExternal(safe.mode());
         boolean requestedSidewaysReview = safe.excludeSideways() == null || safe.excludeSideways();
+        int defaultLimit = mode == UniversalScreenMode.VALUE ? DEFAULT_VALUE_LIMIT : DEFAULT_LIMIT;
         return new UniversalScreenRuleSet(
-                Math.max(1, Math.min(safe.limit() == null ? DEFAULT_LIMIT : safe.limit(), MAX_LIMIT)),
+                Math.max(1, Math.min(safe.limit() == null ? defaultLimit : safe.limit(), MAX_LIMIT)),
                 Math.max(50, Math.min(safe.scanLimit() == null ? DEFAULT_SCAN_LIMIT : safe.scanLimit(), MAX_SCAN_LIMIT)),
                 RecommendationQuality.requiredAmount(positiveOrDefault(safe.minAmount(), DEFAULT_MIN_AMOUNT)),
                 positiveOrDefault(safe.maxPe(), DEFAULT_MAX_PE),

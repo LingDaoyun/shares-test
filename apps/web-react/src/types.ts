@@ -354,6 +354,56 @@ export interface LongTermInvestmentAssessment {
   dataGaps: string[]
 }
 
+export interface LongTermIndustryContext {
+  industry: string
+  modelCode: string
+  modelLabel: string
+  cycleType: string
+  cycleTypeLabel: string
+  evidence: string[]
+  dataGaps: string[]
+}
+
+export interface LongTermPolicyDocument {
+  title: string
+  source: string
+  publishedAt: string
+  url: string
+  impact: 'SUPPORT' | 'CONSTRAINT' | 'NEUTRAL'
+  relevanceScore: number
+  matchedKeywords: string[]
+  rationale: string
+}
+
+export interface LongTermPolicyEvidence {
+  documents: LongTermPolicyDocument[]
+  dataGaps: string[]
+}
+
+export interface LongTermCycleContext {
+  businessStage: string
+  businessStageLabel: string
+  priceStage: string
+  priceStageLabel: string
+  confidence: number
+  provisional: boolean
+  supportingEvidence: string[]
+  contraryEvidence: string[]
+  dataGaps: string[]
+}
+
+export interface LongTermCandidateContext {
+  symbol: string
+  companyName: string
+  market: string
+  industry: string
+  industryContext: LongTermIndustryContext
+  policyEvidence: LongTermPolicyEvidence
+  cycleContext: LongTermCycleContext
+  generatedAt: string
+  dataGaps: string[]
+}
+
 export interface MarketScanCandidate {
   rank: number
   symbol: string

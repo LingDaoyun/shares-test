@@ -39,7 +39,16 @@ public class GovPolicyClient {
     }
 
     public List<GovPolicyItem> fetchLatestPolicies(int limit) {
+        GovPolicyFetchResult result = fetchLatestPoliciesWithStatus(limit);
+        if (result.items().isEmpty()) {
+            throw new IllegalStateException("所有政策源均获取失败");
+        }
+        return result.items();
+    }
+
+    public GovPolicyFetchResult fetchLatestPoliciesWithStatus(int limit) {
         Map<String, GovPolicyItem> items = new LinkedHashMap<>();
+        List<String> failedSources = new ArrayList<>();
         List<PolicySourceProperties> sources = policySources();
         int perSourceLimit = Math.max(8, (int) Math.ceil(limit / (double) Math.max(sources.size(), 1)));
         for (PolicySourceProperties source : sources) {
@@ -49,12 +58,13 @@ public class GovPolicyClient {
                 }
             } catch (Exception exception) {
                 logger.warn("政策源获取失败：{}", source.name(), exception);
+                failedSources.add(source.name() + "：" + rootMessage(exception));
             }
         }
-        if (items.isEmpty()) {
-            throw new IllegalStateException("所有政策源均获取失败");
-        }
-        return selectDiversePolicies(new ArrayList<>(items.values()), sources, limit);
+        return new GovPolicyFetchResult(
+                selectDiversePolicies(new ArrayList<>(items.values()), sources, limit),
+                failedSources
+        );
     }
 
     private List<GovPolicyItem> fetchFromSource(PolicySourceProperties source, int limit) {
@@ -259,5 +269,15 @@ public class GovPolicyClient {
         String title = item.title() == null ? "" : item.title();
         String url = item.url() == null ? "" : item.url();
         return URLEncoder.encode(title + "|" + url, StandardCharsets.UTF_8);
+    }
+
+    private String rootMessage(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current.getMessage() == null || current.getMessage().isBlank()
+                ? current.getClass().getSimpleName()
+                : current.getMessage();
     }
 }

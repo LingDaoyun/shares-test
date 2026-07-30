@@ -8,6 +8,7 @@ import type {
   LlmConfigPreview,
   LlmRuntimeConfig,
   InvestmentDecisionReport,
+  LongTermCandidateContext,
   MarketScanReport,
   MispricingReport,
   RecommendationEvidenceBundle,
@@ -94,6 +95,12 @@ export interface MarketScanParams {
 
 export function fetchMarketScanReport(params: MarketScanParams = {}) {
   return http.get<MarketScanReport>('/market-scan/report', { params }).then((res) => res.data)
+}
+
+export function fetchLongTermCandidateContext(symbol: string, industry?: string | null) {
+  return http.get<LongTermCandidateContext>(`/market-scan/candidates/${symbol}/context`, {
+    params: industry ? { industry } : undefined
+  }).then((res) => res.data)
 }
 
 export interface ShortTermParams {

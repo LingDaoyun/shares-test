@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ChartNoAxesCombined, ClipboardCheck, DatabaseZap, RefreshCw, ShieldCheck, SlidersHorizontal } from 'lucide-react'
-import { fetchMarketScanReport } from '../api/client'
+import { fetchLongTermCandidateContext, fetchMarketScanReport } from '../api/client'
 import type { MarketScanParams } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -10,10 +10,11 @@ import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOv
 import { Loader } from '../components/ui/Loader'
 import { RecommendationEvidenceBundlePanel } from '../components/recommendation/EvidenceBundlePanel'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
+import { LongTermCandidateContextPanel } from '../components/longterm/LongTermCandidateContextPanel'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { SectionBanner } from '../components/ui/SectionBanner'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
-import type { LongTermInvestmentAssessment, MarketScanCandidate, MarketScanReport, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { LongTermCandidateContext, LongTermInvestmentAssessment, MarketScanCandidate, MarketScanReport, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -28,7 +29,7 @@ interface DraftParams {
 }
 
 const DEFAULT_DRAFT: DraftParams = {
-  limit: 3,
+  limit: 8,
   scanLimit: 6000,
   minAmountYi: 0.8,
   maxPe: 35,
@@ -44,6 +45,10 @@ export function MarketScanPage() {
   const [params, setParams] = useState<DraftParams>(DEFAULT_DRAFT)
   const [report, setReport] = useState<MarketScanReport | null>(null)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  const [candidateContext, setCandidateContext] = useState<LongTermCandidateContext | null>(null)
+  const [candidateContextSymbol, setCandidateContextSymbol] = useState<string | null>(null)
+  const [candidateContextLoading, setCandidateContextLoading] = useState(false)
+  const [candidateContextError, setCandidateContextError] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -76,12 +81,40 @@ export function MarketScanPage() {
     return resolveDetailSelection(report?.candidates ?? [], selectedSymbol, (candidate) => candidate.symbol)
   }, [report, selectedSymbol])
 
+  useEffect(() => {
+    if (!selected) {
+      setCandidateContext(null)
+      setCandidateContextSymbol(null)
+      setCandidateContextLoading(false)
+      setCandidateContextError('')
+      return
+    }
+    let alive = true
+    setCandidateContext(null)
+    setCandidateContextSymbol(selected.symbol)
+    setCandidateContextLoading(true)
+    setCandidateContextError('')
+    fetchLongTermCandidateContext(selected.symbol, selected.industry)
+      .then((context) => {
+        if (alive) setCandidateContext(context)
+      })
+      .catch((contextError) => {
+        if (alive) setCandidateContextError(extractErrorMessage(contextError))
+      })
+      .finally(() => {
+        if (alive) setCandidateContextLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [selected])
+
   return (
     <div className="flex flex-col gap-4">
       <SectionBanner
         eyebrow="LONG VALUE"
         title="长期价投"
-        description="覆盖沪深北 A 股并核对数据完整度，默认按长期价值投资模式输出三支候选。"
+        description="覆盖沪深北 A 股并核对数据完整度，默认输出八只候选，按长期价值投资规则排序。"
         extra={
           <Button
             variant="primary"
@@ -131,7 +164,7 @@ export function MarketScanPage() {
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
           <p className="text-xs leading-relaxed text-ink-500">
-            长投默认输出三支全市场价投候选；PE、PB 只形成估值语境，不作为统一行业硬门槛。
+            长投默认输出八只全市场价投候选；PE、PB 只形成估值语境，不作为统一行业硬门槛。
           </p>
           <Button variant="secondary" onClick={() => setParams({ ...draft })}>应用阈值</Button>
         </div>
@@ -193,7 +226,14 @@ export function MarketScanPage() {
             subtitle={selected ? `${selected.market ?? 'A股'} · ${selected.industry ?? '行业待补'} · 排名 #${selected.rank}` : undefined}
             onClose={() => setSelectedSymbol(null)}
           >
-            {selected ? <CandidateDetail candidate={selected} /> : null}
+            {selected ? (
+              <CandidateDetail
+                candidate={selected}
+                context={candidateContextSymbol === selected.symbol ? candidateContext : null}
+                contextLoading={candidateContextSymbol === selected.symbol ? candidateContextLoading : true}
+                contextError={candidateContextSymbol === selected.symbol ? candidateContextError : ''}
+              />
+            ) : null}
           </DetailOverlay>
 
           <ExclusionPanel report={report} />
@@ -306,7 +346,17 @@ function CandidateRow({
   )
 }
 
-function CandidateDetail({ candidate }: { candidate: MarketScanCandidate }) {
+function CandidateDetail({
+  candidate,
+  context,
+  contextLoading,
+  contextError
+}: {
+  candidate: MarketScanCandidate
+  context: LongTermCandidateContext | null
+  contextLoading: boolean
+  contextError: string
+}) {
   return (
     <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft pb-4">
@@ -346,6 +396,11 @@ function CandidateDetail({ candidate }: { candidate: MarketScanCandidate }) {
           <ScoreMetric label="综合" value={candidate.score.finalScore} />
         </div>
 
+        <LongTermCandidateContextPanel
+          context={context}
+          loading={contextLoading}
+          error={contextError}
+        />
         {candidate.longTermAssessment ? <LongTermAssessmentPanel assessment={candidate.longTermAssessment} /> : null}
         <TodayAdvicePanel advice={candidate.todayAdvice} />
         <V2StrategyBundlePanel

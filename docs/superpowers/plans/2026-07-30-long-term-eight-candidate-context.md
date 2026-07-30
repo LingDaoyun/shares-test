@@ -32,7 +32,7 @@
 - Consumes: `UniversalScreenRequest.limit()`.
 - Produces: a default limit of eight in both the React request and backend fallback.
 
-- [ ] **Step 1: Write failing backend and frontend tests**
+- [x] **Step 1: Write failing backend and frontend tests**
 
 ```java
 @Test
@@ -52,7 +52,7 @@ it('defaults long-term value scanning to eight candidates', async () => {
 })
 ```
 
-- [ ] **Step 2: Run tests and verify expected failures**
+- [x] **Step 2: Run tests and verify expected failures**
 
 Run:
 
@@ -63,11 +63,11 @@ npm test -- --run MarketScanPage.test.tsx
 
 Expected: backend or frontend still observes the old default of three.
 
-- [ ] **Step 3: Implement the default**
+- [x] **Step 3: Implement the default**
 
 Set the backend `DEFAULT_LIMIT` used by `UniversalAshareScreener` to `8`. Set `DEFAULT_DRAFT.limit` in `MarketScanPage.tsx` to `8` and replace both “三支/三只” descriptions with “八只”.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Expected: both focused test commands pass.
 
@@ -103,7 +103,7 @@ public record LongTermPolicyEvidence(
 ) {}
 ```
 
-- [ ] **Step 1: Write failing matcher tests**
+- [x] **Step 1: Write failing matcher tests**
 
 Cover:
 
@@ -130,7 +130,7 @@ void returnsAnExplicitGapInsteadOfUnrelatedPolicies() {
 
 Also test that ordinary commercial domains and stale documents are removed, and that restriction keywords such as “规范、限制、整治、去产能” produce `CONSTRAINT` rather than `SUPPORT`.
 
-- [ ] **Step 2: Run the policy tests and verify failure**
+- [x] **Step 2: Run the policy tests and verify failure**
 
 Run:
 
@@ -140,7 +140,7 @@ mvn -pl apps/api -Dtest=LongTermPolicyEvidenceServiceTest test
 
 Expected: missing types and service.
 
-- [ ] **Step 3: Implement deterministic matching**
+- [x] **Step 3: Implement deterministic matching**
 
 Use an immutable industry-keyword map for the major EastMoney industry labels and a generic token fallback. Accept official URLs only when the host equals `gov.cn`, ends with `.gov.cn`, or is an explicitly recognized central-government host. Reject blank dates and dates older than two years.
 
@@ -155,7 +155,7 @@ Score each document from:
 
 Keep only scores at least `58`, sort descending by score and publication date, and return at most five.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Expected: `LongTermPolicyEvidenceServiceTest` passes.
 
@@ -196,7 +196,7 @@ public record LongTermCycleSnapshot(
 ) {}
 ```
 
-- [ ] **Step 1: Write failing cycle tests**
+- [x] **Step 1: Write failing cycle tests**
 
 Test these behaviors separately:
 
@@ -227,7 +227,7 @@ void highRangePositionAndFallingLongAverageIsNotExpansion() {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run:
 
@@ -235,7 +235,7 @@ Run:
 mvn -pl apps/api -Dtest=LongTermCycleContextServiceTest test
 ```
 
-- [ ] **Step 3: Implement cycle rules**
+- [x] **Step 3: Implement cycle rules**
 
 Classify financial and cyclical industries with the same industry vocabulary already used by `LongTermInvestmentAssessmentService` and `UniversalAshareScreener`.
 
@@ -254,7 +254,7 @@ Price-stage inputs:
 
 Never return confidence above `69` for a strong-cycle industry without product-price, inventory and capacity evidence.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Expected: cycle tests pass without changing policy or scan behavior.
 
@@ -285,7 +285,7 @@ public record LongTermCandidateContext(
 ) {}
 ```
 
-- [ ] **Step 1: Write failing service and controller tests**
+- [x] **Step 1: Write failing service and controller tests**
 
 Assert that:
 
@@ -296,7 +296,7 @@ Assert that:
 - controller returns `200` and the complete response shape for a valid six-digit A-share symbol;
 - invalid symbols return `400`.
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run:
 
@@ -304,11 +304,11 @@ Run:
 mvn -pl apps/api -Dtest=LongTermCandidateContextServiceTest,LongTermCandidateContextControllerTest test
 ```
 
-- [ ] **Step 3: Implement orchestration**
+- [x] **Step 3: Implement orchestration**
 
 Fetch one live quote with `fetchEastMoneyQuotesBySymbols`, fall back to `fetchStockBoardIndustry` for missing industry, fetch up to five annual indicators and one year of daily K-lines, then call the policy and cycle services. Catch each upstream failure independently and append a stable Chinese gap message.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Expected: service and controller tests pass.
 
@@ -328,7 +328,7 @@ Expected: service and controller tests pass.
 - Consumes: `fetchLongTermCandidateContext(symbol, industry)`.
 - Produces: a detail panel with industry, policy, business cycle and price cycle.
 
-- [ ] **Step 1: Add failing frontend tests**
+- [x] **Step 1: Add failing frontend tests**
 
 Test:
 
@@ -350,7 +350,7 @@ Panel tests must assert:
 - empty-policy gap;
 - partial API failure does not remove the base detail.
 
-- [ ] **Step 2: Run frontend tests and verify failure**
+- [x] **Step 2: Run frontend tests and verify failure**
 
 Run:
 
@@ -358,7 +358,7 @@ Run:
 npm test -- --run MarketScanPage.test.tsx LongTermCandidateContextPanel.test.tsx
 ```
 
-- [ ] **Step 3: Implement lazy loading**
+- [x] **Step 3: Implement lazy loading**
 
 Add state keyed by selected symbol:
 
@@ -373,7 +373,7 @@ const [contextState, setContextState] = useState<{
 
 Fetch on `selectedSymbol` change, ignore responses whose symbol no longer matches, and render `LongTermCandidateContextPanel` immediately after the basic valuation metrics.
 
-- [ ] **Step 4: Run focused tests and production build**
+- [x] **Step 4: Run focused tests and production build**
 
 Run:
 
@@ -394,7 +394,7 @@ Expected: tests and TypeScript build pass.
 **Interfaces:**
 - Produces: tested Docker runtime at `http://127.0.0.1:5176/#/market`.
 
-- [ ] **Step 1: Run all backend and frontend tests**
+- [x] **Step 1: Run all backend and frontend tests**
 
 ```bash
 mvn -pl apps/api test
@@ -403,7 +403,7 @@ cd apps/web-react && npm test -- --run && npm run build
 
 Expected: zero failures.
 
-- [ ] **Step 2: Package and deploy**
+- [x] **Step 2: Package and deploy**
 
 ```bash
 mvn -pl apps/api -DskipTests package
@@ -413,7 +413,7 @@ docker compose ps
 
 Expected: `ai-stock-api` and `ai-stock-web` are healthy.
 
-- [ ] **Step 3: Verify live endpoints**
+- [x] **Step 3: Verify live endpoints**
 
 Request an eight-candidate value scan, open at least one candidate context endpoint, and verify:
 
@@ -423,11 +423,11 @@ Request an eight-candidate value scan, open at least one candidate context endpo
 - business and price cycles are separate;
 - missing cycle inputs appear as data gaps.
 
-- [ ] **Step 4: Verify in the in-app browser**
+- [x] **Step 4: Verify in the in-app browser**
 
 Open `http://127.0.0.1:5176/#/market`, confirm eight candidate rows, open a candidate, inspect the three new context sections, close the overlay, and confirm no console errors.
 
-- [ ] **Step 5: Review and commit**
+- [x] **Step 5: Review and commit**
 
 Run `git diff --check`, stage only files from this plan, request a read-only code review, and commit the implementation with:
 
