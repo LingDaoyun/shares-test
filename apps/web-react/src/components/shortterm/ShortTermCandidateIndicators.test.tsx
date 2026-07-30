@@ -22,10 +22,10 @@ describe('short-term candidate indicators', () => {
     expect(markup).not.toContain('bg-emerald-50')
   })
 
-  it('labels the numeric value as composite score', () => {
+  it('labels the numeric value as ranking score', () => {
     const markup = renderToStaticMarkup(<CompositeScoreBadge value={94.3} />)
 
-    expect(markup).toContain('综合分')
+    expect(markup).toContain('排序分')
     expect(markup).toContain('94.3')
     expect(markup).toContain('whitespace-nowrap')
   })

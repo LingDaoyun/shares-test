@@ -377,7 +377,7 @@ public class ShortTermScheduledScanService {
         }
         store.finish(
                 run.claim(), snapshot.status(), snapshot.report(), snapshot.dataCutoffAt(), checkedAt,
-                "尾盘最终快照通过就绪检查", List.of());
+                "14:55 前买入确认已通过就绪检查", List.of());
     }
 
     private boolean afterFinalDeadline(LocalDate tradeDate, Instant instant) {

@@ -1,0 +1,34 @@
+research:
+  short-term:
+    schedule:
+      enabled: true
+      zone: Asia/Shanghai
+      preselect-cron: "0 30 14 * * MON-FRI"
+      final-cron: "0 48 14 * * MON-FRI"
+      readiness-cron: "0 54 14 * * MON-FRI"
+      final-deadline: "14:53:59"
+      freshness-seconds: 180
+      limit: 8
+      scan-limit: 6000
+      kline-limit: 60
+      min-amount: 80000000
+      max-pe: 100
+      max-pb: 15
+      min-volume-ratio: 1.20
+      max-entry-rise: 4
+      max-distance-to-ma20: 8
+      min-financial-score: 58
+    overnight:
+      entry-start: "14:45"
+      entry-end: "14:56"
+      normal-exit-time: "14:50"
+      max-holding-trading-days: 2
+      max-position-ratio: 0.3333
+      max-t2-position-ratio: 0.50
+      first-target-floor-percent: 2.5
+      first-target-cap-percent: 4.0
+      second-target-floor-percent: 4.5
+      second-target-cap-percent: 7.0
+      stop-floor-percent: 2.5
+      stop-cap-percent: 4.5
+      trailing-drawdown-percent: 2.0

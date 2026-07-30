@@ -93,7 +93,7 @@ function statusLabel(status: ShortTermSnapshotStatus, origin: ReportOrigin) {
   }
   switch (status) {
     case 'FINAL_READY':
-      return '尾盘最终结果已就绪'
+      return '14:55 前买入确认已就绪'
     case 'PRESELECT_READY':
       return '自动预选已就绪'
     case 'RUNNING':

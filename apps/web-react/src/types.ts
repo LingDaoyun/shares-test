@@ -481,6 +481,21 @@ export interface ShortTermTechnicalSnapshot {
   consecutiveAboveMa20Days: number
   rightSideSignal: string
   goldenCross?: ShortTermGoldenCrossSnapshot | null
+  momentumQuality?: ShortTermMomentumQuality | null
+}
+
+export interface ShortTermMomentumQuality {
+  turnoverRatePercent: number | null
+  turnoverBand: 'PREFERRED' | 'OBSERVATION' | 'INSUFFICIENT' | 'OVERHEATED' | 'UNAVAILABLE'
+  turnoverScore: number
+  latestUpperShadowPercent: number | null
+  bullishUpperShadowMedian3Percent: number | null
+  closeLocationPercent: number | null
+  closeStrengthLabel: string
+  closeStrengthScore: number
+  provisional: boolean
+  extremeUpperShadow: boolean
+  dataGaps: string[]
 }
 
 export interface ShortTermFinancialSnapshot {
@@ -500,12 +515,17 @@ export interface ShortTermFinancialSnapshot {
 
 export interface ShortTermScoreBreakdown {
   technicalScore: number
+  goldenCrossScore: number
   volumeScore: number
+  turnoverScore: number
+  closeStrengthScore: number
   marketHeatScore: number
   valuationScore: number
   financialScore: number
   riskPenalty: number
   finalScore: number
+  stageAdjustment?: number
+  rankingScore?: number
 }
 
 export interface ShortTermWeightProfile {
@@ -513,11 +533,12 @@ export interface ShortTermWeightProfile {
   preliminaryLiquidity: number
   preliminaryNonChase: number
   preliminaryHeat: number
-  finalTechnical: number
+  finalGoldenCross: number
   finalVolume: number
-  finalHeat: number
-  finalFinancial: number
-  finalValuation: number
+  finalTurnover: number
+  finalCloseStrength: number
+  modelVersion?: string
+  weightMeaning?: string
 }
 
 export interface ShortTermEvidence {

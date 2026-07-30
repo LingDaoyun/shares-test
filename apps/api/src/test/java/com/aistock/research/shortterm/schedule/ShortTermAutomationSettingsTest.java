@@ -22,7 +22,7 @@ class ShortTermAutomationSettingsTest {
     void readsApprovedDefaults() {
         ShortTermAutomationSettings settings = new ShortTermAutomationSettings(new MockEnvironment());
 
-        assertThat(settings.enabled()).isFalse();
+        assertThat(settings.enabled()).isTrue();
         assertThat(settings.zone()).isEqualTo("Asia/Shanghai");
         assertThat(settings.preselectCron()).isEqualTo("0 30 14 * * MON-FRI");
         assertThat(settings.finalCron()).isEqualTo("0 48 14 * * MON-FRI");
@@ -31,13 +31,13 @@ class ShortTermAutomationSettingsTest {
         assertThat(settings.freshness()).isEqualTo(Duration.ofSeconds(180));
 
         ShortTermScanRequest scan = settings.scanRequest();
-        assertThat(scan.limit()).isEqualTo(3);
+        assertThat(scan.limit()).isEqualTo(8);
         assertThat(scan.scanLimit()).isEqualTo(6000);
         assertThat(scan.klineLimit()).isEqualTo(60);
         assertThat(scan.minAmount()).isEqualByComparingTo("80000000");
         assertThat(scan.maxPe()).isEqualByComparingTo("100");
         assertThat(scan.maxPb()).isEqualByComparingTo("15");
-        assertThat(scan.minVolumeRatio()).isEqualByComparingTo("1.15");
+        assertThat(scan.minVolumeRatio()).isEqualByComparingTo("1.20");
         assertThat(scan.maxEntryRise()).isEqualByComparingTo("4");
         assertThat(scan.maxDistanceToMa20()).isEqualByComparingTo("8");
         assertThat(scan.minFinancialScore()).isEqualByComparingTo("58");
@@ -69,6 +69,19 @@ class ShortTermAutomationSettingsTest {
         environment.setProperty("research.short-term.schedule.limit", "7");
 
         assertThat(settings.scanRequest().limit()).isEqualTo(7);
+    }
+
+    @Test
+    void rejectsVolumeRatioThresholdsOutsideTheApprovedRange() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("research.short-term.schedule.min-volume-ratio", "0.8");
+        ShortTermAutomationSettings settings = new ShortTermAutomationSettings(environment);
+
+        assertThat(settings.scanRequest().minVolumeRatio()).isEqualByComparingTo("1.20");
+
+        environment.setProperty("research.short-term.schedule.min-volume-ratio", "3.3");
+
+        assertThat(settings.scanRequest().minVolumeRatio()).isEqualByComparingTo("1.20");
     }
 
     @Test
@@ -153,12 +166,12 @@ class ShortTermAutomationSettingsTest {
 
         ShortTermAutomationSettings settings = new ShortTermAutomationSettings(environment);
 
-        assertThat(settings.enabled()).isFalse();
+        assertThat(settings.enabled()).isTrue();
         assertThat(settings.zone()).isEqualTo("Asia/Shanghai");
         assertThat(settings.finalCron()).isEqualTo("0 48 14 * * MON-FRI");
         assertThat(settings.finalDeadline()).isEqualTo(LocalTime.of(14, 53, 59));
         assertThat(settings.freshness()).isEqualTo(Duration.ofSeconds(180));
-        assertThat(settings.scanRequest().limit()).isEqualTo(3);
+        assertThat(settings.scanRequest().limit()).isEqualTo(8);
         assertThat(settings.scanRequest().maxPe()).isEqualByComparingTo("100");
         assertThat(settings.overnightRules().entryStart()).isEqualTo(LocalTime.of(14, 45));
         assertThat(settings.overnightRules().entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);

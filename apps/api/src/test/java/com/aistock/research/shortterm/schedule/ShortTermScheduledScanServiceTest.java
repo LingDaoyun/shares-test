@@ -65,8 +65,8 @@ class ShortTermScheduledScanServiceTest {
     private static final Instant NOW = Instant.parse("2026-07-23T06:50:00Z");
     private static final Duration STALE_TIMEOUT = Duration.ofMinutes(5);
     private static final ShortTermScanRequest REQUEST = new ShortTermScanRequest(
-            3, 6000, 60, new BigDecimal("80000000"), new BigDecimal("100"),
-            new BigDecimal("15"), new BigDecimal("1.15"), new BigDecimal("4"),
+            8, 6000, 60, new BigDecimal("80000000"), new BigDecimal("100"),
+            new BigDecimal("15"), new BigDecimal("1.20"), new BigDecimal("4"),
             new BigDecimal("8"), new BigDecimal("58"));
     private static final OvernightRuleSet RULES = new OvernightRuleSet(
             LocalTime.of(14, 45), LocalTime.of(14, 56, 59), LocalTime.of(14, 50),
@@ -155,7 +155,7 @@ class ShortTermScheduledScanServiceTest {
         InOrder order = inOrder(store, attestationService, historyService);
         order.verify(store).finish(
                 eq(new ShortTermSnapshotClaim(snapshotKey, 1)), eq(FINAL_READY), eq(raw),
-                eq(raw.dataCutoffAt()), eq(NOW), eq("尾盘最终结果已就绪"), eq(List.of()));
+                eq(raw.dataCutoffAt()), eq(NOW), eq("14:55 前买入确认已就绪"), eq(List.of()));
         order.verify(attestationService).attest(raw);
         order.verify(historyService).recordShortTermReport(snapshotKey, attested);
     }
@@ -175,7 +175,7 @@ class ShortTermScheduledScanServiceTest {
         service.runNow(FINAL);
 
         verify(store).finish(any(), eq(FINAL_READY), eq(raw), eq(raw.dataCutoffAt()),
-                eq(NOW), eq("尾盘最终结果已就绪"), eq(List.of()));
+                eq(NOW), eq("14:55 前买入确认已就绪"), eq(List.of()));
         verify(store, never()).fail(any(), any(), any(), anyList());
         verify(store, never()).finish(any(), eq(DATA_BLOCKED), any(), any(), any(), any(), anyList());
     }
@@ -445,7 +445,7 @@ class ShortTermScheduledScanServiceTest {
             service.runNow(READINESS_GUARD);
 
             verify(store).finish(any(), eq(status), eq(report), eq(report.dataCutoffAt()), eq(NOW),
-                    eq("尾盘最终快照通过就绪检查"), eq(List.of()));
+                    eq("14:55 前买入确认已通过就绪检查"), eq(List.of()));
         }
         verify(shortTermService, never()).report(any(ShortTermScanRequest.class));
         verify(shortTermService, never()).finalReport(any(), anySet());
@@ -472,7 +472,7 @@ class ShortTermScheduledScanServiceTest {
         guardService.runNow(READINESS_GUARD);
 
         verify(store).finish(any(), eq(FINAL_READY), eq(report), eq(report.dataCutoffAt()),
-                eq(guardClock.instant()), eq("尾盘最终快照通过就绪检查"), eq(List.of()));
+                eq(guardClock.instant()), eq("14:55 前买入确认已通过就绪检查"), eq(List.of()));
     }
 
     @Test
@@ -492,7 +492,7 @@ class ShortTermScheduledScanServiceTest {
 
         verify(store, never()).find(eq(TRADE_DATE), eq(FINAL), any());
         verify(store).finish(any(), eq(FINAL_READY), eq(report), eq(report.dataCutoffAt()), eq(NOW),
-                eq("尾盘最终快照通过就绪检查"), eq(List.of()));
+                eq("14:55 前买入确认已通过就绪检查"), eq(List.of()));
     }
 
     @Test

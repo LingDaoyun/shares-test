@@ -57,6 +57,14 @@ class ShortTermServiceTest {
     }
 
     @Test
+    void clampsManualVolumeRatioThresholdToTheApprovedRange() {
+        ShortTermReport report = service.report(
+                8, null, null, null, null, null, new BigDecimal("0.80"), null, null, null);
+
+        assertThat(report.ruleSet().minVolumeRatio()).isEqualByComparingTo("1.00");
+    }
+
+    @Test
     void finalReportRestrictsExpensiveReviewToPreselectedSymbols() {
         eastMoneyClient.quotes = List.of(
                 quote("600795", "国电电力", "4.90", "1.03", "12.95", "1.49", "900000000"),
@@ -76,8 +84,12 @@ class ShortTermServiceTest {
         assertThat(report.reviewedSymbols()).containsExactlyInAnyOrder("600795", "002128");
         assertThat(eastMoneyClient.requestedKlineSymbols).containsExactlyInAnyOrder("600795", "002128");
         assertThat(eastMoneyClient.requestedKlineSymbols).doesNotContain("601918");
-        assertThat(eastMoneyClient.requestedFinancialSymbols).containsExactlyInAnyOrder("600795", "002128");
+        assertThat(eastMoneyClient.requestedFinancialSymbols).containsExactly("002128");
         assertThat(eastMoneyClient.requestedFinancialSymbols).doesNotContain("601918");
+        assertThat(report.exclusions()).anySatisfy(exclusion -> {
+            assertThat(exclusion.symbol()).isEqualTo("600795");
+            assertThat(exclusion.category()).isEqualTo("GOLDEN_CROSS_UNAVAILABLE");
+        });
         assertThat(report.universeCount()).isEqualTo(3);
     }
 
@@ -477,7 +489,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldDefaultToThreeShortTermRecommendations() {
+    void shouldReturnUpToEightShortTermRecommendationsByDefault() {
         eastMoneyClient.quotes = List.of(
                 quoteWithIndustry("600101", "光通信甲", "光通信", "10.62", "1.60", "35", "4.2", "900000000"),
                 quoteWithIndustry("600102", "光通信乙", "光通信", "10.62", "1.50", "42", "4.6", "860000000"),
@@ -492,9 +504,9 @@ class ShortTermServiceTest {
 
         ShortTermReport report = service.report(null, 100, 10, null, null, null, null, null, null, null);
 
-        assertThat(report.candidates()).hasSize(3);
+        assertThat(report.candidates()).hasSize(5);
         assertThat(report.methodology()).anySatisfy(item ->
-                assertThat(item).contains("只输出前三个", "热门方向", "分歧低吸"));
+                assertThat(item).contains("默认输出八个", "观察层", "不会为了凑数"));
     }
 
     @Test
@@ -624,8 +636,9 @@ class ShortTermServiceTest {
         assertThat(confirmed.technical().goldenCross().priorityTier())
                 .isEqualTo(observed.technical().goldenCross().priorityTier())
                 .isEqualTo(1);
-        assertThat(confirmed.score().finalScore()).isEqualByComparingTo("83.45");
-        assertThat(observed.score().finalScore()).isEqualByComparingTo("89.00");
+        assertThat(confirmed.score().rankingScore()).isGreaterThan(observed.score().rankingScore());
+        assertThat(confirmed.score().rankingScore())
+                .isEqualByComparingTo(confirmed.score().finalScore().add(confirmed.score().stageAdjustment()));
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
                 .containsExactly("600601", "600602");
     }
@@ -830,7 +843,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldTreatShrinkingRiseAsConstructiveVolumeSignal() {
+    void shouldKeepShrinkingRiseAsObservationInsteadOfVolumeConfirmation() {
         eastMoneyClient.quotes = List.of(
                 quote("600214", "缩量上涨", "10.62", "1.10", "28", "2.6", "280000000")
         );
@@ -841,10 +854,11 @@ class ShortTermServiceTest {
 
         ShortTermCandidate candidate = find(report, "600214");
         assertThat(candidate.technical().volumeRatio20()).isLessThan(BigDecimal.ONE);
-        assertThat(candidate.score().volumeScore()).isGreaterThanOrEqualTo(new BigDecimal("72"));
+        assertThat(candidate.score().volumeScore()).isLessThan(new BigDecimal("65"));
+        assertThat(candidate.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
         assertThat(candidate.strengths()).anySatisfy(strength -> assertThat(strength).contains("缩量上涨", "惜售"));
         assertThat(candidate.evidence()).extracting(ShortTermEvidence::summary)
-                .anySatisfy(summary -> assertThat(summary).contains("缩量上涨"));
+                .anySatisfy(summary -> assertThat(summary).contains("量比 1.20-3.20 才属于主确认区间"));
     }
 
     @Test
@@ -1115,7 +1129,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldExposeApprovedSoftValuationWeights() {
+    void shouldExposeApprovedCoreSignalWeights() {
         eastMoneyClient.quotes = List.of(
                 quote("600021", "权重样本", "10.62", "1.60", "18.00", "1.60", "900000000")
         );
@@ -1127,7 +1141,106 @@ class ShortTermServiceTest {
         assertThat(report.weightProfile().preliminaryTotal()).isEqualByComparingTo("1.00");
         assertThat(report.weightProfile().finalTotal()).isEqualByComparingTo("1.00");
         assertThat(report.weightProfile().preliminaryValuation()).isEqualByComparingTo("0.10");
-        assertThat(report.weightProfile().finalValuation()).isEqualByComparingTo("0.05");
+        assertThat(report.weightProfile().finalGoldenCross()).isEqualByComparingTo("0.45");
+        assertThat(report.weightProfile().finalVolume()).isEqualByComparingTo("0.30");
+        assertThat(report.weightProfile().finalTurnover()).isEqualByComparingTo("0.15");
+        assertThat(report.weightProfile().finalCloseStrength()).isEqualByComparingTo("0.10");
+    }
+
+    @Test
+    void shouldReturnEightCandidatesByDefaultWithoutManufacturingExecutableAdvice() {
+        eastMoneyClient.quotes = IntStream.range(0, 10)
+                .mapToObj(index -> withTurnover(
+                        quote(
+                                String.format("600%03d", 100 + index),
+                                "八只候选" + index,
+                                "10.62",
+                                "1.60",
+                                "18.00",
+                                "1.60",
+                                "900000000"
+                        ),
+                        "3.00"
+                ))
+                .toList();
+        eastMoneyClient.quotes.forEach(quote -> {
+            eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "230000"));
+            eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
+        });
+
+        ShortTermReport report = service.report(null, 100, 20, null, null, null, null, null, null, null);
+
+        assertThat(report.candidates()).hasSize(8);
+        assertThat(report.candidates()).allSatisfy(candidate ->
+                assertThat(candidate.todayAdvice().action()).isNotBlank());
+    }
+
+    @Test
+    void shouldKeepValuationOutOfTheCoreShortTermScore() {
+        eastMoneyClient.quotes = List.of(
+                withTurnover(quote("600031", "低估值样本", "10.62", "1.60", "12", "1.2", "900000000"), "3.00"),
+                withTurnover(quote("600032", "高估值样本", "10.62", "1.60", "300", "45", "900000000"), "3.00")
+        );
+        eastMoneyClient.quotes.forEach(quote -> {
+            eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "230000"));
+            eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
+        });
+
+        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+
+        ShortTermCandidate lowValuation = find(report, "600031");
+        ShortTermCandidate highValuation = find(report, "600032");
+        assertThat(lowValuation.score().finalScore()).isEqualByComparingTo(highValuation.score().finalScore());
+        assertThat(lowValuation.score().goldenCrossScore()).isEqualByComparingTo(highValuation.score().goldenCrossScore());
+        assertThat(lowValuation.score().turnoverScore()).isEqualByComparingTo(highValuation.score().turnoverScore());
+    }
+
+    @Test
+    void shouldDowngradeAnExtremeUpperShadowToObservation() {
+        EastMoneyQuote quote = withTurnover(
+                quote("600033", "长上影样本", "10.62", "1.60", "18", "1.6", "900000000"),
+                "3.00"
+        );
+        eastMoneyClient.quotes = List.of(quote);
+        eastMoneyClient.klines.put("600033", longUpperShadowKLines("600033"));
+        eastMoneyClient.financials.put("600033", goodFinancial("600033"));
+
+        ShortTermCandidate candidate = find(
+                service.report(1, 100, 10, null, null, null, null, null, null, null),
+                "600033"
+        );
+
+        assertThat(candidate.technical().momentumQuality().extremeUpperShadow()).isTrue();
+        assertThat(candidate.action()).isNotEqualTo("RIGHT_EARLY_ADD");
+        assertThat(candidate.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
+        assertThat(candidate.risks()).anySatisfy(item -> assertThat(item).contains("长上影", "观察"));
+        assertThat(candidate.evidence()).extracting(ShortTermEvidence::title)
+                .contains("换手适配", "K线收盘强度");
+    }
+
+    @Test
+    void shouldHideHardRiskCandidatesAndWriteTheirReasonsToTheExclusionAudit() {
+        EastMoneyQuote eligible = quote("600034", "合格样本", "10.62", "1.60", "18", "1.6", "900000000");
+        EastMoneyQuote financialRisk = quote("600035", "财务红旗", "10.62", "1.60", "18", "1.6", "900000000");
+        EastMoneyQuote volumeMissing = quote("600036", "量能缺失", "10.62", "1.60", "18", "1.6", "900000000");
+        EastMoneyQuote noGoldenCross = quote("600037", "无金叉", "9.60", "1.60", "18", "1.6", "900000000");
+        eastMoneyClient.quotes = List.of(eligible, financialRisk, volumeMissing, noGoldenCross);
+        eastMoneyClient.klines.put("600034", rightEarlyKLines("600034", "10.62", "230000"));
+        eastMoneyClient.klines.put("600035", rightEarlyKLines("600035", "10.62", "230000"));
+        eastMoneyClient.klines.put("600036", latestVolumeMissingKLines("600036"));
+        eastMoneyClient.klines.put("600037", belowMa20KLines("600037"));
+        eastMoneyClient.financials.put("600034", goodFinancial("600034"));
+        eastMoneyClient.financials.put("600035", badFinancial("600035"));
+        eastMoneyClient.financials.put("600036", goodFinancial("600036"));
+        eastMoneyClient.financials.put("600037", goodFinancial("600037"));
+
+        ShortTermReport report = service.report(8, 100, 20, null, null, null, null, null, null, null);
+
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .contains("600034")
+                .doesNotContain("600035", "600036", "600037");
+        assertThat(report.exclusions()).extracting(ShortTermRiskExclusion::category)
+                .contains("FINANCIAL_HARD_RISK", "VOLUME_DATA_MISSING", "GOLDEN_CROSS_UNAVAILABLE");
     }
 
     @Test
@@ -1490,6 +1603,38 @@ class ShortTermServiceTest {
         return rows;
     }
 
+    private List<EastMoneyKLine> longUpperShadowKLines(String symbol) {
+        List<EastMoneyKLine> rows = new ArrayList<>(rightEarlyKLines(symbol, "10.62", "230000"));
+        EastMoneyKLine latest = rows.get(rows.size() - 1);
+        rows.set(rows.size() - 1, new EastMoneyKLine(
+                symbol,
+                latest.tradeDate(),
+                new BigDecimal("10.55"),
+                new BigDecimal("10.62"),
+                new BigDecimal("12.20"),
+                new BigDecimal("10.50"),
+                latest.volume(),
+                latest.amount()
+        ));
+        return rows;
+    }
+
+    private List<EastMoneyKLine> latestVolumeMissingKLines(String symbol) {
+        List<EastMoneyKLine> rows = new ArrayList<>(rightEarlyKLines(symbol, "10.62", "230000"));
+        EastMoneyKLine latest = rows.get(rows.size() - 1);
+        rows.set(rows.size() - 1, new EastMoneyKLine(
+                symbol,
+                latest.tradeDate(),
+                latest.open(),
+                latest.close(),
+                latest.high(),
+                latest.low(),
+                null,
+                latest.amount()
+        ));
+        return rows;
+    }
+
     private EastMoneyKLine kline(String symbol, LocalDate date, BigDecimal close, String volume) {
         return new EastMoneyKLine(
                 symbol,
@@ -1515,7 +1660,7 @@ class ShortTermServiceTest {
                 industry,
                 new BigDecimal(price),
                 new BigDecimal(changePercent),
-                BigDecimal.ONE,
+                new BigDecimal("3.00"),
                 new BigDecimal("100000"),
                 new BigDecimal(amount),
                 new BigDecimal(pe),
@@ -1526,6 +1671,28 @@ class ShortTermServiceTest {
                 Instant.parse("2026-07-07T06:59:00Z"),
                 LocalDate.parse("2026-07-07"),
                 Instant.parse("2026-07-07T06:58:00Z")
+        );
+    }
+
+    private EastMoneyQuote withTurnover(EastMoneyQuote quote, String turnoverRate) {
+        return new EastMoneyQuote(
+                quote.symbol(),
+                quote.name(),
+                quote.market(),
+                quote.industry(),
+                quote.latestPrice(),
+                quote.changePercent(),
+                new BigDecimal(turnoverRate),
+                quote.volume(),
+                quote.amount(),
+                quote.peRatio(),
+                quote.pbRatio(),
+                quote.peTtm(),
+                quote.sourceName(),
+                quote.quoteUrl(),
+                quote.fetchedAt(),
+                quote.tradeDate(),
+                quote.marketTimestamp()
         );
     }
 
@@ -1583,6 +1750,14 @@ class ShortTermServiceTest {
                 new EastMoneyAnnualIndicator(symbol, "样本", "2025-12-31", "年报", new BigDecimal("0.0600"),
                         new BigDecimal("0.60"), new BigDecimal("0.1200"), new BigDecimal("-0.0200"),
                         new BigDecimal("0.0300"), BigDecimal.ONE, new BigDecimal("3.00"))
+        );
+    }
+
+    private List<EastMoneyAnnualIndicator> badFinancial(String symbol) {
+        return List.of(
+                new EastMoneyAnnualIndicator(symbol, "样本", "2025-12-31", "年报", new BigDecimal("-0.0500"),
+                        new BigDecimal("-0.20"), new BigDecimal("0.0800"), new BigDecimal("-0.1000"),
+                        new BigDecimal("-0.5000"), BigDecimal.ONE, new BigDecimal("1.00"))
         );
     }
 

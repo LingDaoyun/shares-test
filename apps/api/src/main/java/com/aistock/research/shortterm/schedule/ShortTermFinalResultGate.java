@@ -71,7 +71,7 @@ public class ShortTermFinalResultGate {
         return classify(
                 report,
                 "全部执行闸门通过，今日无合格候选",
-                "尾盘最终结果已就绪"
+                "14:55 前买入确认已就绪"
         );
     }
 

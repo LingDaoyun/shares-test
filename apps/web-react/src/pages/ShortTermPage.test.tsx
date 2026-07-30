@@ -18,7 +18,8 @@ vi.mock('../api/client', () => ({
   fetchLatestShortTermScheduledSnapshot: vi.fn(),
   fetchOvernightBacktest: vi.fn(),
   fetchShortTermScanJob: vi.fn(),
-  startShortTermScanJob: vi.fn()
+  startShortTermScanJob: vi.fn(),
+  fetchV2StrategyBundle: vi.fn().mockRejectedValue(new Error('测试中不加载 V2 策略束'))
 }))
 
 const emptyReport = {
@@ -44,13 +45,13 @@ const emptyReport = {
   },
   methodology: ['只使用当天行情'],
   ruleSet: {
-    limit: 3,
+    limit: 8,
     scanLimit: 6000,
     klineLimit: 60,
     minAmount: 80000000,
     maxPe: 100,
     maxPb: 15,
-    minVolumeRatio: 1.15,
+    minVolumeRatio: 1.2,
     maxEntryRisePercent: 4,
     maxDistanceToMa20Percent: 8,
     minFinancialScore: 58
@@ -60,11 +61,10 @@ const emptyReport = {
     preliminaryLiquidity: 0.3,
     preliminaryNonChase: 0.3,
     preliminaryHeat: 0.2,
-    finalTechnical: 0.4,
-    finalVolume: 0.2,
-    finalHeat: 0.15,
-    finalFinancial: 0.2,
-    finalValuation: 0.05
+    finalGoldenCross: 0.45,
+    finalVolume: 0.3,
+    finalTurnover: 0.15,
+    finalCloseStrength: 0.1
   },
   candidates: [],
   hotDirections: [],
@@ -114,21 +114,54 @@ const candidate = (symbol: string, name = `候选${symbol}`) => ({
   industry: '电力',
   latestPrice: 5.21,
   changePercent: 1.2,
+  peTtm: 18,
+  pbRatio: 1.6,
   amount: 900_000_000,
+  valuationContext: {
+    score: 70,
+    state: 'FAIR',
+    applicableModel: 'STANDARD',
+    rawPe: 18,
+    rawPb: 1.6,
+    peReference: 100,
+    pbReference: 15,
+    warnings: [],
+    evidence: []
+  },
+  phase: 'RIGHT_EARLY',
   phaseLabel: '右侧早期',
   action: 'WATCH_RIGHT_SIDE',
   actionLabel: '观察',
   reason: '量价结构确认',
-  todayAdvice: { action: 'NEXT_WATCH', actionLabel: '次日关注' },
-  tailSignal: { status: 'CONFIRMED', statusLabel: '尾盘确认', score: 75 },
+  todayAdvice: {
+    action: 'NEXT_WATCH',
+    actionLabel: '次日关注',
+    confidence: 80,
+    summary: '次日继续观察',
+    reasons: [],
+    riskControls: []
+  },
+  tailSignal: {
+    status: 'CONFIRMED',
+    statusLabel: '尾盘确认',
+    score: 75,
+    latestMinute: '14:50',
+    reasons: [],
+    riskControls: []
+  },
   score: {
     technicalScore: 80,
+    goldenCrossScore: 100,
     volumeScore: 75,
+    turnoverScore: 100,
+    closeStrengthScore: 95,
     marketHeatScore: 70,
     valuationScore: 60,
     financialScore: 65,
     riskPenalty: 5,
-    finalScore: 74
+    finalScore: 74,
+    stageAdjustment: 11,
+    rankingScore: 85
   },
   technical: {
     goldenCross: null,
@@ -136,10 +169,52 @@ const candidate = (symbol: string, name = `候选${symbol}`) => ({
     ma20SlopePercent: 0.8,
     distanceToMa20Percent: 2.1,
     breakoutFromPreviousHigh20Percent: 1.3,
-    volumeRatio20: 1.5
+    volumeRatio20: 1.5,
+    momentumQuality: {
+      turnoverRatePercent: 3,
+      turnoverBand: 'PREFERRED',
+      turnoverScore: 100,
+      latestUpperShadowPercent: 12,
+      bullishUpperShadowMedian3Percent: 18,
+      closeLocationPercent: 88,
+      closeStrengthLabel: '上攻收盘强',
+      closeStrengthScore: 95,
+      provisional: true,
+      extremeUpperShadow: false,
+      dataGaps: []
+    }
   },
-  financial: { qualityScore: 65 },
-  quoteFreshness: { blocksRealtimeDecision: false, statusLabel: '新鲜' }
+  financial: {
+    qualityScore: 65,
+    statusLabel: '财报无红旗',
+    positiveCashFlowYears: 3,
+    roe: 0.12,
+    grossMargin: 0.28,
+    dataGaps: []
+  },
+  quoteFreshness: {
+    blocksRealtimeDecision: false,
+    statusLabel: '新鲜',
+    marketTimestamp: '2026-07-23T14:50:00+08:00'
+  },
+  buyZoneLow: 5.1,
+  buyZoneHigh: 5.3,
+  stopPrice: 4.98,
+  strengths: [],
+  risks: [],
+  entryRules: [],
+  exitRules: [],
+  evidenceCompleteness: {
+    score: 90,
+    status: 'COMPLETE',
+    statusLabel: '证据完整',
+    allowsBuy: true,
+    presentEvidence: [],
+    missingEvidence: [],
+    riskControls: []
+  },
+  evidence: [],
+  tradePlan: null
 })
 
 function reportWithCandidates(
@@ -154,7 +229,12 @@ function reportWithCandidates(
     candidateCount: symbols.length,
     candidates: symbols.map((symbol) => ({
       ...candidate(symbol),
-      tradePlan: { trailingDrawdownPercent }
+      tradePlan: {
+        status: 'BLOCKED',
+        strategyLabel: '隔夜超短波段',
+        blockedReasons: ['测试候选仅作观察'],
+        trailingDrawdownPercent
+      }
     })),
     generatedAt
   } as never
@@ -181,7 +261,7 @@ function overnightReport(
       stampDutyPercent: 0.05,
       slippagePercent: 0.05,
       limitMovePercent: 9.8,
-      minVolumeRatio: 1.15,
+      minVolumeRatio: 1.2,
       maxDistanceToMa20Percent: 8,
       trailingDrawdownPercent: 2
     },
@@ -247,6 +327,30 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(document.body.textContent).toContain('计划任务')
   })
 
+  it('shows the four core signals and candle-strength evidence in the candidate detail', async () => {
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600795'])
+    })
+
+    await renderPage(root)
+    await clickButton('候选600795')
+
+    expect(document.body.textContent).toContain('金叉 45%')
+    expect(document.body.textContent).toContain('量能 30%')
+    expect(document.body.textContent).toContain('换手 15%')
+    expect(document.body.textContent).toContain('收盘强度 10%')
+    expect(document.body.textContent).toContain('四因子原始分')
+    expect(document.body.textContent).toContain('阶段校准')
+    expect(document.body.textContent).toContain('排序分')
+    expect(document.body.textContent).not.toContain('综合分')
+    expect(document.body.textContent).toContain('换手率')
+    expect(document.body.textContent).toContain('3%')
+    expect(document.body.textContent).toContain('上影线中位数')
+    expect(document.body.textContent).toContain('18.00%')
+    expect(document.body.textContent).toContain('盘中暂定')
+  })
+
   it('requests the T1/T2 overnight contract without a legacy 20-day holding window', async () => {
     vi.mocked(fetchOvernightBacktest).mockResolvedValue(overnightReport(['600795'], 12))
     vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
@@ -263,7 +367,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
       secondTargetPercent: 4.5,
       hardStopPercent: 3.5,
       maxHoldingTradingDays: 2,
-      minVolumeRatio: 1.15,
+      minVolumeRatio: 1.2,
       maxDistanceToMa20Percent: 8,
       trailingDrawdownPercent: 2
     }))
@@ -475,6 +579,10 @@ describe('ShortTermPage prepared snapshot mount', () => {
     })
 
     expect(startShortTermScanJob).toHaveBeenCalledTimes(1)
+    expect(startShortTermScanJob).toHaveBeenCalledWith(expect.objectContaining({
+      limit: 8,
+      minVolumeRatio: 1.2
+    }))
     expect(fetchShortTermScanJob).toHaveBeenCalledWith('manual-1')
     expect(fetchLatestShortTermScheduledSnapshot).toHaveBeenCalledTimes(1)
     }
@@ -544,7 +652,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
 
 describe('ScheduledSnapshotStatus', () => {
   const expectations: Array<[ShortTermSnapshotStatus, string, string]> = [
-    ['FINAL_READY', '尾盘最终结果已就绪', 'emerald'],
+    ['FINAL_READY', '14:55 前买入确认已就绪', 'emerald'],
     ['PRESELECT_READY', '自动预选已就绪', 'border-line'],
     ['RUNNING', '自动任务执行中', 'border-line'],
     ['NO_TRADE', '今日不交易', 'amber'],
@@ -568,6 +676,9 @@ describe('ScheduledSnapshotStatus', () => {
     expect(html).toContain(label)
     expect(html).toContain(tone)
     expect(html).toContain('short-term-right-side-v2')
+    if (status === 'FINAL_READY') {
+      expect(html).not.toContain('尾盘最终结果已就绪')
+    }
   })
 
   it.each([

@@ -12,7 +12,7 @@ import { SectionBanner } from '../components/ui/SectionBanner'
 import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
 import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
 import type { ReportOrigin } from '../components/shortterm/ScheduledSnapshotStatus'
-import { CompositeScoreBadge, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
+import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
@@ -34,13 +34,13 @@ interface DraftParams {
 }
 
 const DEFAULT_DRAFT: DraftParams = {
-  limit: 3,
+  limit: 8,
   scanLimit: 6000,
   klineLimit: 60,
   minAmountYi: 0.8,
   maxPe: 100,
   maxPb: 15,
-  minVolumeRatio: 1.15,
+  minVolumeRatio: 1.2,
   maxEntryRise: 4,
   maxDistanceToMa20: 8,
   minFinancialScore: 58
@@ -56,7 +56,7 @@ const OVERNIGHT_DEFAULT_RULES = {
   stampDutyPercent: 0.05,
   slippagePercent: 0.05,
   limitMovePercent: 9.8,
-  minVolumeRatio: 1.15,
+  minVolumeRatio: 1.2,
   maxDistanceToMa20Percent: 8,
   trailingDrawdownPercent: 2
 } as const
@@ -339,7 +339,7 @@ export function ShortTermPage() {
           <NumberField label="成交额下限(亿)" value={draft.minAmountYi} min={0.8} max={30} step={0.05} onChange={(value) => setDraft({ ...draft, minAmountYi: value })} />
           <NumberField label="PE 参考带" value={draft.maxPe} min={4} max={200} onChange={(value) => setDraft({ ...draft, maxPe: value })} />
           <NumberField label="PB 参考带" value={draft.maxPb} min={0.2} max={40} step={0.1} onChange={(value) => setDraft({ ...draft, maxPb: value })} />
-          <NumberField label="量比下限" value={draft.minVolumeRatio} min={0.8} max={3} step={0.05} onChange={(value) => setDraft({ ...draft, minVolumeRatio: value })} />
+          <NumberField label="量比下限" value={draft.minVolumeRatio} min={1} max={3.2} step={0.05} onChange={(value) => setDraft({ ...draft, minVolumeRatio: value })} />
           <NumberField label="追涨上限%" value={draft.maxEntryRise} min={1} max={10} step={0.1} onChange={(value) => setDraft({ ...draft, maxEntryRise: value })} />
           <NumberField label="距20日线%" value={draft.maxDistanceToMa20} min={2} max={20} step={0.5} onChange={(value) => setDraft({ ...draft, maxDistanceToMa20: value })} />
           <NumberField label="财报分下限" value={draft.minFinancialScore} min={30} max={90} onChange={(value) => setDraft({ ...draft, minFinancialScore: value })} />
@@ -570,6 +570,7 @@ function CandidateRow({
               : ''}
           </Tag>
           <Tag tone="neutral">20日斜率 {formatNumber(candidate.technical.ma20SlopePercent)}%</Tag>
+          <MomentumQualityTags quality={candidate.technical.momentumQuality} />
           {candidate.score.marketHeatScore >= 68 ? <Tag tone="brand">热度 {formatNumber(candidate.score.marketHeatScore)}</Tag> : null}
           <Tag tone="neutral">财报 {formatNumber(candidate.financial.qualityScore)}</Tag>
           <Tag tone={tailTone(candidate.tailSignal.status)}>尾盘：{candidate.tailSignal.statusLabel}</Tag>
@@ -584,11 +585,12 @@ function CandidateRow({
         <Metric label="涨跌幅" value={<span className={changeClass(candidate.changePercent)}>{formatSignedPercent(candidate.changePercent)}</span>} compact />
         <Metric label="距20日" value={`${formatNumber(candidate.technical.distanceToMa20Percent)}%`} compact />
         <Metric label="突破20高" value={`${formatNumber(candidate.technical.breakoutFromPreviousHigh20Percent)}%`} compact />
-        <Metric label="20日量比" value={formatNumber(candidate.technical.volumeRatio20)} compact />
+          <Metric label="20日量比" value={formatNumber(candidate.technical.volumeRatio20)} compact />
+          <Metric label="换手率" value={`${formatNumber(candidate.technical.momentumQuality?.turnoverRatePercent)}%`} compact />
       </div>
 
       <div className="flex items-center justify-between gap-3 md:flex-col md:items-end md:justify-center">
-        <CompositeScoreBadge value={candidate.score.finalScore} />
+        <CompositeScoreBadge value={candidate.score.rankingScore ?? candidate.score.finalScore} />
         <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
         <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
         <Tag tone={tailTone(candidate.tailSignal.status)}>{candidate.tailSignal.statusLabel}</Tag>
@@ -612,7 +614,7 @@ function CandidateDetail({
     <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft pb-4">
           <div className="flex flex-wrap items-center gap-2">
-            <ScoreBadge value={candidate.score.finalScore} />
+            <ScoreBadge value={candidate.score.rankingScore ?? candidate.score.finalScore} />
             <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
             <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
           </div>
@@ -654,21 +656,20 @@ function CandidateDetail({
         </div>
 
         <div className="grid grid-cols-2 gap-2">
-          <ScoreMetric label="K线" value={candidate.score.technicalScore} />
-          <ScoreMetric label="量能" value={candidate.score.volumeScore} />
-          <ScoreMetric label="热度" value={candidate.score.marketHeatScore} />
-          <ScoreMetric label="估值语境 5%" value={candidate.score.valuationScore} />
-          <ScoreMetric label="财报" value={candidate.score.financialScore} />
-          <ScoreMetric label="扣分" value={candidate.score.riskPenalty} />
-          <ScoreMetric label="综合" value={candidate.score.finalScore} />
+          <ScoreMetric label="金叉 45%" value={candidate.score.goldenCrossScore} />
+          <ScoreMetric label="量能 30%" value={candidate.score.volumeScore} />
+          <ScoreMetric label="换手 15%" value={candidate.score.turnoverScore} />
+          <ScoreMetric label="收盘强度 10%" value={candidate.score.closeStrengthScore} />
+          <ScoreMetric label="四因子原始分" value={candidate.score.finalScore} />
+          <ScoreMetric label="阶段校准" value={candidate.score.stageAdjustment ?? 0} />
+          <ScoreMetric label="排序分" value={candidate.score.rankingScore ?? candidate.score.finalScore} />
         </div>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line-soft pt-3 text-xs text-ink-500">
-          <span>K线 {formatNumber(weightProfile.finalTechnical * 100)}%</span>
+          <span>{weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型技术' : '金叉'} {formatNumber(weightProfile.finalGoldenCross * 100)}%</span>
           <span>量能 {formatNumber(weightProfile.finalVolume * 100)}%</span>
-          <span>热度 {formatNumber(weightProfile.finalHeat * 100)}%</span>
-          <span>财报 {formatNumber(weightProfile.finalFinancial * 100)}%</span>
-          <span>估值语境 {formatNumber(weightProfile.finalValuation * 100)}%</span>
+          <span>{weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型热度' : '换手'} {formatNumber(weightProfile.finalTurnover * 100)}%</span>
+          <span>{weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型财务与估值' : '收盘强度'} {formatNumber(weightProfile.finalCloseStrength * 100)}%</span>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
@@ -678,8 +679,23 @@ function CandidateDetail({
           <Metric label="60/120日位置" value={`${formatNumber(candidate.technical.rangePosition60)}% / ${formatNumber(candidate.technical.rangePosition120)}%`} />
           <Metric label="120日高点回撤" value={`${formatNumber(candidate.technical.drawdownFrom120HighPercent)}%`} />
           <Metric label="站上20日线天数" value={candidate.technical.consecutiveAboveMa20Days} />
+          <Metric label="换手率" value={`${formatNumber(candidate.technical.momentumQuality?.turnoverRatePercent)}% · ${turnoverBandLabel(candidate.technical.momentumQuality?.turnoverBand)}`} />
+          <Metric label="最新上影线" value={`${formatNumber(candidate.technical.momentumQuality?.latestUpperShadowPercent)}%`} />
+          <Metric label="上影线中位数" value={`${formatNumber(candidate.technical.momentumQuality?.bullishUpperShadowMedian3Percent)}%`} />
+          <Metric
+            label="收盘位置"
+            value={`${formatNumber(candidate.technical.momentumQuality?.closeLocationPercent)}% · ${candidate.technical.momentumQuality?.provisional ? '盘中暂定' : '正式日 K'}`}
+          />
           <Metric label="ROE/毛利率" value={`${formatRatioPercent(candidate.financial.roe)} / ${formatRatioPercent(candidate.financial.grossMargin)}`} />
           <Metric label="现金流年数" value={`${candidate.financial.positiveCashFlowYears}/3`} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <ScoreMetric label="技术结构语境" value={candidate.score.technicalScore} />
+          <ScoreMetric label="市场热度语境" value={candidate.score.marketHeatScore} />
+          <ScoreMetric label="估值语境" value={candidate.score.valuationScore} />
+          <ScoreMetric label="财报语境" value={candidate.score.financialScore} />
+          <ScoreMetric label="风险提示分（不计主分）" value={candidate.score.riskPenalty} />
         </div>
 
         <GoldenCrossDetail snapshot={candidate.technical.goldenCross} />
@@ -966,6 +982,14 @@ function tailTone(status: string): 'success' | 'brand' | 'warning' | 'danger' | 
   return 'neutral'
 }
 
+function turnoverBandLabel(band: string | null | undefined) {
+  if (band === 'PREFERRED') return '优选区间'
+  if (band === 'OBSERVATION') return '观察区间'
+  if (band === 'INSUFFICIENT') return '活跃不足'
+  if (band === 'OVERHEATED') return '换手过热'
+  return '待补充'
+}
+
 function backtestTone(summary: OvernightBacktestSummary): 'success' | 'brand' | 'warning' | 'neutral' {
   if (summary.conclusion.includes('支持')) return 'success'
   if (summary.conclusion.includes('正收益')) return 'brand'
@@ -1022,7 +1046,7 @@ function Metric({ label, value, compact = false }: { label: string; value: React
 }
 
 function ScoreMetric({ label, value }: { label: string; value: number }) {
-  const width = label === '扣分' ? Math.max(0, Math.min(100, value * 2.5)) : Math.max(0, Math.min(100, value))
+  const width = label.includes('风险') ? Math.max(0, Math.min(100, value * 2.5)) : Math.max(0, Math.min(100, value))
   return (
     <div className="rounded-lg border border-line-soft px-3 py-2">
       <div className="flex items-center justify-between gap-2">
