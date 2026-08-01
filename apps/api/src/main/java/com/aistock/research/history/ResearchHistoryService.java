@@ -17,7 +17,7 @@ import java.util.UUID;
 public class ResearchHistoryService {
 
     private static final String RULE_VERSION = "investment-decision-v1";
-    private static final String SHORT_TERM_RULE_VERSION = "short-term-right-side-v2";
+    private static final String SHORT_TERM_RULE_VERSION = "short-term-right-side-v3-chip-verified";
 
     private final AnalysisHistoryRepository analysisRepository;
     private final DecisionHistoryRepository decisionRepository;

@@ -48,6 +48,9 @@ public class KlineHistoryEntity implements Persistable<String> {
     @Column(name = "amount", precision = 30, scale = 4)
     private BigDecimal amount;
 
+    @Column(name = "turnover_rate", precision = 12, scale = 4)
+    private BigDecimal turnoverRate;
+
     @Column(name = "source_name", nullable = false, length = 128)
     private String sourceName;
 
@@ -71,6 +74,7 @@ public class KlineHistoryEntity implements Persistable<String> {
             BigDecimal low,
             BigDecimal volume,
             BigDecimal amount,
+            BigDecimal turnoverRate,
             String sourceName,
             Instant observedAt
     ) {
@@ -84,6 +88,7 @@ public class KlineHistoryEntity implements Persistable<String> {
         this.low = low;
         this.volume = volume;
         this.amount = amount;
+        this.turnoverRate = turnoverRate;
         this.sourceName = sourceName;
         this.observedAt = observedAt;
         this.newEntity = true;
@@ -119,5 +124,9 @@ public class KlineHistoryEntity implements Persistable<String> {
 
     public LocalDate getTradeDate() {
         return tradeDate;
+    }
+
+    public BigDecimal getTurnoverRate() {
+        return turnoverRate;
     }
 }

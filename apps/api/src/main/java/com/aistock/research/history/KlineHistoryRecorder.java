@@ -48,6 +48,7 @@ public class KlineHistoryRecorder {
                     row.low(),
                     row.volume(),
                     row.amount(),
+                    row.turnoverRate(),
                     sourceName == null || sourceName.isBlank() ? "未知行情源" : sourceName,
                     observedAt
             ));
@@ -98,6 +99,7 @@ public class KlineHistoryRecorder {
                 value(row.low()),
                 value(row.volume()),
                 value(row.amount()),
+                value(row.turnoverRate()),
                 BAR_TYPE
         );
         try {

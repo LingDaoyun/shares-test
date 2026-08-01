@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,6 +26,45 @@ class EastMoneyClientTest {
     void shouldScopeNorthExchangeQuotesToListedSharesInsteadOfAllType81Securities() {
         assertThat(EastMoneyClient.A_SHARE_FILTER)
                 .isEqualTo("m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048");
+    }
+
+    @Test
+    void shouldParseTurnoverRateFromExpandedDailyKLine() throws Exception {
+        java.lang.reflect.Method method = EastMoneyClient.class
+                .getDeclaredMethod("readKLine", String.class, String.class);
+        method.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        Optional<EastMoneyKLine> parsed = (Optional<EastMoneyKLine>) method.invoke(
+                client,
+                "002580",
+                "2026-07-30,10.00,10.50,10.80,9.90,123456,128000000,5.00,2.30,1.20,3.42"
+        );
+
+        assertThat(parsed).isPresent();
+        assertThat(parsed.orElseThrow().turnoverRate()).isEqualByComparingTo("3.42");
+    }
+
+    @Test
+    void shouldMergeTurnoverByTradeDateWithoutReplacingCanonicalPrices() {
+        LocalDate date = LocalDate.of(2026, 7, 30);
+        EastMoneyKLine canonical = new EastMoneyKLine(
+                "002580", date, bd("10.00"), bd("10.50"), bd("10.80"), bd("9.90"),
+                bd("123456"), bd("128000000")
+        );
+        EastMoneyKLine turnoverSource = new EastMoneyKLine(
+                "002580", date, bd("9.80"), bd("10.40"), bd("10.70"), bd("9.70"),
+                bd("120000"), bd("125000000"), bd("3.42")
+        );
+
+        List<EastMoneyKLine> merged = EastMoneyClient.mergeTurnoverRates(
+                List.of(canonical), List.of(turnoverSource));
+
+        assertThat(merged).singleElement().satisfies(row -> {
+            assertThat(row.close()).isEqualByComparingTo("10.50");
+            assertThat(row.volume()).isEqualByComparingTo("123456");
+            assertThat(row.turnoverRate()).isEqualByComparingTo("3.42");
+        });
     }
 
     @Test
@@ -79,7 +119,8 @@ class EastMoneyClientTest {
                   "f78": 14572502,
                   "f81": 3.58,
                   "f84": -69135541,
-                  "f87": -16.97
+                  "f87": -16.97,
+                  "f124": 1785481200
                 }
                 """);
 
@@ -97,6 +138,8 @@ class EastMoneyClientTest {
         assertThat(snapshot.largeNetInflow()).isEqualByComparingTo(new BigDecimal("38575071"));
         assertThat(snapshot.smallNetInflow()).isEqualByComparingTo(new BigDecimal("-69135541"));
         assertThat(snapshot.mainNetInflowRatio()).isEqualByComparingTo(new BigDecimal("13.39"));
+        assertThat(snapshot.marketTimestamp()).isEqualTo(Instant.parse("2026-07-31T07:00:00Z"));
+        assertThat(snapshot.tradeDate()).isEqualTo(LocalDate.parse("2026-07-31"));
     }
 
     @Test
@@ -189,6 +232,56 @@ class EastMoneyClientTest {
         assertThat(snapshot.smallNetInflow()).isEqualByComparingTo(new BigDecimal("-79788940"));
         assertThat(snapshot.mainNetInflowRatio()).isEqualByComparingTo(new BigDecimal("13.71"));
         assertThat(snapshot.smallNetInflowRatio()).isEqualByComparingTo(new BigDecimal("-17.99"));
+        assertThat(snapshot.tradeDate()).isEqualTo(LocalDate.parse("2026-07-03"));
+        assertThat(snapshot.marketTimestamp()).isNull();
+    }
+
+    @Test
+    void shouldBuildOneDeduplicatedBatchFundFlowUrl() {
+        String url = client.fundFlowBatchUrl(List.of("600000", "000001", "600000", "invalid"));
+
+        assertThat(url)
+                .contains("secids=1.600000%2C0.000001")
+                .contains("fields=f12%2Cf13%2Cf14%2Cf62");
+    }
+
+    @Test
+    void shouldParseMultipleFundFlowSnapshotsFromOneBatchResponse() throws Exception {
+        JsonNode diff = objectMapper.readTree("""
+                [
+                  {
+                    "f12": "600000",
+                    "f14": "浦发银行",
+                    "f62": 100000000,
+                    "f184": 5.2,
+                    "f66": 60000000,
+                    "f69": 3.1,
+                    "f72": 40000000,
+                    "f75": 2.1,
+                    "f124": 1785481200
+                  },
+                  {
+                    "f12": "000001",
+                    "f14": "平安银行",
+                    "f62": -50000000,
+                    "f184": -2.5,
+                    "f66": -30000000,
+                    "f69": -1.5,
+                    "f72": -20000000,
+                    "f75": -1.0,
+                    "f124": 1785481200
+                  }
+                ]
+                """);
+
+        java.util.Map<String, EastMoneyFundFlowSnapshot> snapshots =
+                client.readFundFlowSnapshots(diff, Instant.parse("2026-07-31T07:01:00Z"));
+
+        assertThat(snapshots).containsOnlyKeys("600000", "000001");
+        assertThat(snapshots.get("600000").mainNetInflowRatio()).isEqualByComparingTo("5.2");
+        assertThat(snapshots.get("000001").mainNetInflowRatio()).isEqualByComparingTo("-2.5");
+        assertThat(snapshots.values()).allSatisfy(snapshot ->
+                assertThat(snapshot.tradeDate()).isEqualTo(LocalDate.parse("2026-07-31")));
     }
 
     @Test
@@ -313,6 +406,10 @@ class EastMoneyClientTest {
                 6,
                 List.of()
         );
+    }
+
+    private BigDecimal bd(String value) {
+        return new BigDecimal(value);
     }
 
     private static final class SnapshotStubClient extends EastMoneyClient {

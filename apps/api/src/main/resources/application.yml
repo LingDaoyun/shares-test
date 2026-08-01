@@ -33,6 +33,26 @@ server:
   port: 19080
 
 research:
+  short-term:
+    chip:
+      enabled: true
+      lookback-bars: 120
+      price-buckets: 150
+      min-valid-bars: 80
+      min-turnover-coverage: 0.95
+      weight: 0.25
+      activation-mode: SHADOW
+      single-source-coefficient: 0.60
+      max-average-cost-deviation: 0.03
+      min-cost-band-overlap: 0.70
+      max-winner-rate-deviation: 0.10
+      tushare:
+        enabled: false
+        base-url: https://api.tushare.pro
+        token: ${TUSHARE_TOKEN:}
+        connect-timeout-ms: 1200
+        read-timeout-ms: 1800
+        max-concurrency: 4
   ai:
     llm:
       provider: ${LLM_PROVIDER:deepseek}

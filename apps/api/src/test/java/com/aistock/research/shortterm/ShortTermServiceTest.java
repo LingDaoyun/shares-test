@@ -3,11 +3,16 @@ package com.aistock.research.shortterm;
 import com.aistock.research.integration.eastmoney.EastMoneyAnnualIndicator;
 import com.aistock.research.integration.eastmoney.AshareQuoteSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
+import com.aistock.research.integration.eastmoney.EastMoneyFundFlowSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyIntradayPoint;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
+import com.aistock.research.configuration.ShortTermChipSettings;
 import com.aistock.research.quality.EvidenceCompleteness;
 import com.aistock.research.quality.EvidenceCompletenessService;
+import com.aistock.research.shortterm.chip.ShortTermChipAnalysisService;
+import com.aistock.research.shortterm.chip.ShortTermChipSnapshot;
+import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
 import com.aistock.research.trading.QuoteFreshnessSnapshot;
 import com.aistock.research.trading.QuoteFreshnessService;
 import com.aistock.research.trading.TradingAdvice;
@@ -15,6 +20,7 @@ import com.aistock.research.trading.TradingClockService;
 import com.aistock.research.valuation.ValuationContextState;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -33,6 +39,11 @@ import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ShortTermServiceTest {
 
@@ -440,6 +451,32 @@ class ShortTermServiceTest {
         );
     }
 
+    private ShortTermService chipAwareService(
+            String activationMode,
+            ShortTermChipAnalysisService chipAnalysisService
+    ) {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("research.short-term.chip.enabled", "true")
+                .withProperty("research.short-term.chip.activation-mode", activationMode);
+        return new ShortTermService(
+                eastMoneyClient,
+                new EvidenceCompletenessService(),
+                tradingClockService,
+                new QuoteFreshnessService(tradingClockService, TEST_CLOCK),
+                new ShortTermTechnicalSignalEvaluator(new ShortTermGoldenCrossAnalyzer()),
+                new ShortTermTradePlanService(tradingClockService),
+                new ShortTermAutomationSettings(environment),
+                chipAnalysisService,
+                new ShortTermChipSettings(environment)
+        );
+    }
+
+    private ShortTermChipSnapshot chipSnapshot(String contribution) {
+        ShortTermChipSnapshot snapshot = mock(ShortTermChipSnapshot.class);
+        when(snapshot.contributionScore()).thenReturn(new BigDecimal(contribution));
+        return snapshot;
+    }
+
     private void assertManualReportIgnoresInvalidQuote(EastMoneyQuote invalidQuote) {
         EastMoneyQuote validQuote = quoteAt(
                 "600001",
@@ -637,10 +674,101 @@ class ShortTermServiceTest {
                 .isEqualTo(observed.technical().goldenCross().priorityTier())
                 .isEqualTo(1);
         assertThat(confirmed.score().rankingScore()).isGreaterThan(observed.score().rankingScore());
-        assertThat(confirmed.score().rankingScore())
+        assertThat(confirmed.score().technicalRankingScore())
                 .isEqualByComparingTo(confirmed.score().finalScore().add(confirmed.score().stageAdjustment()));
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
                 .containsExactly("600601", "600602");
+    }
+
+    @Test
+    void shouldPrioritizeStrongBuyingPressureWithinTheSameActionLayer() {
+        eastMoneyClient.quotes = List.of(
+                quote("600607", "强买盘样本", "10.62", "1.20", "18", "1.6", "600000000"),
+                quote("600608", "资金流出样本", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600607", rightEarlyKLines("600607", "10.62", "180000"));
+        eastMoneyClient.klines.put("600608", rightEarlyKLines("600608", "10.62", "180000"));
+        eastMoneyClient.quotes.forEach(quote ->
+                eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
+        eastMoneyClient.fundFlows.put("600607", fundFlow("600607", "8", "3", "2"));
+        eastMoneyClient.fundFlows.put("600608", fundFlow("600608", "-6", "-2", "-1"));
+
+        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+
+        ShortTermCandidate strongBuying = find(report, "600607");
+        ShortTermCandidate outflow = find(report, "600608");
+        assertThat(strongBuying.action()).isEqualTo(outflow.action());
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600607", "600608");
+        assertThat(strongBuying.score().buyPressureScore())
+                .isGreaterThan(outflow.score().buyPressureScore());
+        assertThat(strongBuying.score().mainNetInflowRatio()).isEqualByComparingTo("8.00");
+        assertThat(strongBuying.strengths()).anyMatch(item -> item.contains("主力净流入"));
+        assertThat(eastMoneyClient.fundFlowBatchCalls).isEqualTo(1);
+        assertThat(eastMoneyClient.requestedFundFlowSymbols)
+                .containsExactlyInAnyOrder("600607", "600608");
+    }
+
+    @Test
+    void shadowRecordsChipRankingWhileActiveModeAppliesItWithinTheSameActionLayer() {
+        eastMoneyClient.quotes = List.of(
+                quote("600607", "强买盘样本", "10.62", "1.20", "18", "1.6", "600000000"),
+                quote("600608", "优质筹码样本", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600607", rightEarlyKLines("600607", "10.62", "180000"));
+        eastMoneyClient.klines.put("600608", rightEarlyKLines("600608", "10.62", "180000"));
+        eastMoneyClient.quotes.forEach(quote ->
+                eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
+        eastMoneyClient.fundFlows.put("600607", fundFlow("600607", "8", "3", "2"));
+        eastMoneyClient.fundFlows.put("600608", fundFlow("600608", "-6", "-2", "-1"));
+        ShortTermChipAnalysisService chipAnalysis = mock(ShortTermChipAnalysisService.class);
+        when(chipAnalysis.analyze(any(), anyList(), anyBoolean(), any())).thenAnswer(invocation -> {
+            EastMoneyQuote quote = invocation.getArgument(0);
+            return chipSnapshot("600608".equals(quote.symbol()) ? "25" : "0");
+        });
+
+        ShortTermReport shadow = chipAwareService("SHADOW", chipAnalysis)
+                .report(2, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport active = chipAwareService("ACTIVE", chipAnalysis)
+                .report(2, 100, 10, null, null, null, null, null, null, null);
+
+        assertThat(shadow.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600607", "600608");
+        assertThat(shadow.candidates()).allSatisfy(candidate -> assertThat(candidate.chip()).isNotNull());
+        assertThat(find(shadow, "600608").score().v3RankingScore())
+                .isGreaterThan(find(shadow, "600607").score().v3RankingScore());
+        assertThat(active.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600608", "600607");
+        assertThat(find(active, "600608").action()).isEqualTo(find(active, "600607").action());
+        assertThat(eastMoneyClient.turnoverEnrichmentCalls).isPositive();
+    }
+
+    @Test
+    void deserializesLegacyV2CandidateWithoutChipAndV3RankingFields() throws Exception {
+        eastMoneyClient.quotes = List.of(
+                quote("600607", "历史样本", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600607", rightEarlyKLines("600607", "10.62", "180000"));
+        eastMoneyClient.financials.put("600607", goodFinancial("600607"));
+        ShortTermCandidate current = service
+                .report(1, 100, 10, null, null, null, null, null, null, null)
+                .candidates()
+                .get(0);
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        com.fasterxml.jackson.databind.node.ObjectNode legacy = mapper.valueToTree(current);
+        legacy.remove("chip");
+        com.fasterxml.jackson.databind.node.ObjectNode score =
+                (com.fasterxml.jackson.databind.node.ObjectNode) legacy.get("score");
+        List.of(
+                "v2RankingScore", "chipContributionScore", "v3RankingScore",
+                "v2Rank", "v3Rank", "rankDelta"
+        ).forEach(score::remove);
+
+        ShortTermCandidate restored = mapper.treeToValue(legacy, ShortTermCandidate.class);
+
+        assertThat(restored.symbol()).isEqualTo("600607");
+        assertThat(restored.chip()).isNull();
+        assertThat(restored.score().v3RankingScore()).isNull();
     }
 
     @Test
@@ -1696,6 +1824,33 @@ class ShortTermServiceTest {
         );
     }
 
+    private EastMoneyFundFlowSnapshot fundFlow(
+            String symbol,
+            String mainRatio,
+            String superLargeRatio,
+            String largeRatio
+    ) {
+        return new EastMoneyFundFlowSnapshot(
+                symbol,
+                "样本" + symbol,
+                new BigDecimal("100000000"),
+                new BigDecimal("60000000"),
+                new BigDecimal("40000000"),
+                BigDecimal.ZERO,
+                new BigDecimal("-100000000"),
+                new BigDecimal(mainRatio),
+                new BigDecimal(superLargeRatio),
+                new BigDecimal(largeRatio),
+                BigDecimal.ZERO,
+                new BigDecimal("-10"),
+                "东方财富资金流",
+                "https://quote.eastmoney.com/sh" + symbol + ".html",
+                Instant.parse("2026-07-07T07:01:00Z"),
+                LocalDate.parse("2026-07-07"),
+                Instant.parse("2026-07-07T07:00:00Z")
+        );
+    }
+
     private EastMoneyQuote quoteAt(
             String symbol,
             String name,
@@ -1870,6 +2025,10 @@ class ShortTermServiceTest {
         private final Map<String, List<EastMoneyKLine>> klines = new HashMap<>();
         private final Map<String, List<EastMoneyAnnualIndicator>> financials = new HashMap<>();
         private final Map<String, List<EastMoneyIntradayPoint>> intraday = new HashMap<>();
+        private final Map<String, EastMoneyFundFlowSnapshot> fundFlows = new HashMap<>();
+        private int fundFlowBatchCalls;
+        private int turnoverEnrichmentCalls;
+        private List<String> requestedFundFlowSymbols = List.of();
 
         private StubEastMoneyClient() {
             super(null, null, null);
@@ -1915,6 +2074,17 @@ class ShortTermServiceTest {
         }
 
         @Override
+        public List<EastMoneyKLine> enrichDailyKLineTurnover(
+                String symbol,
+                LocalDate begin,
+                LocalDate end,
+                List<EastMoneyKLine> canonicalRows
+        ) {
+            turnoverEnrichmentCalls++;
+            return canonicalRows;
+        }
+
+        @Override
         public List<EastMoneyQuote> fetchIndustryBoardConstituents(String industryName, int limit) {
             return quotes.stream()
                     .filter(quote -> unstableIndustrySymbols.contains(quote.symbol()))
@@ -1931,6 +2101,20 @@ class ShortTermServiceTest {
         @Override
         public List<EastMoneyIntradayPoint> fetchIntradayTrends(String symbol) {
             return intraday.getOrDefault(symbol, List.of());
+        }
+
+        @Override
+        public Map<String, EastMoneyFundFlowSnapshot> fetchFundFlowSnapshots(List<String> symbols) {
+            fundFlowBatchCalls++;
+            requestedFundFlowSymbols = List.copyOf(symbols);
+            Map<String, EastMoneyFundFlowSnapshot> result = new HashMap<>();
+            symbols.forEach(symbol -> {
+                EastMoneyFundFlowSnapshot snapshot = fundFlows.get(symbol);
+                if (snapshot != null) {
+                    result.put(symbol, snapshot);
+                }
+            });
+            return result;
         }
     }
 

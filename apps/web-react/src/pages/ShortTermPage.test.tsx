@@ -98,7 +98,7 @@ const finalReadySnapshot: ShortTermScheduledSnapshot = {
   tradeDate: '2026-07-23',
   stage: 'FINAL',
   status: 'FINAL_READY',
-  strategyVersion: 'short-term-right-side-v2',
+  strategyVersion: 'short-term-right-side-v3-chip-verified',
   message: '尾盘最终结果已就绪',
   dataCutoffAt: '2026-07-23T14:52:00+08:00',
   completedAt: '2026-07-23T14:53:00+08:00',
@@ -327,6 +327,16 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(document.body.textContent).toContain('计划任务')
   })
 
+  it('keeps four summary cards by removing the current-rule card', async () => {
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('方法')
+    expect(document.body.textContent).toContain('市场情绪')
+    expect(document.body.textContent).toContain('扫描快照')
+    expect(document.body.textContent).toContain('热门方向')
+    expect(document.body.textContent).not.toContain('当前规则')
+  })
+
   it('shows the four core signals and candle-strength evidence in the candidate detail', async () => {
     vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
       ...finalReadySnapshot,
@@ -349,6 +359,122 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(document.body.textContent).toContain('上影线中位数')
     expect(document.body.textContent).toContain('18.00%')
     expect(document.body.textContent).toContain('盘中暂定')
+  })
+
+  it('shows verified chip contribution in the row and auditable evidence in the detail', async () => {
+    const verifiedCandidate = {
+      ...candidate('600795'),
+      score: {
+        ...candidate('600795').score,
+        v2RankingScore: 82,
+        chipContributionScore: 21.5,
+        v3RankingScore: 88.4,
+        v2Rank: 5,
+        v3Rank: 2,
+        rankDelta: 3,
+        rankingScore: 82
+      },
+      chip: {
+        dataQuality: 'VALID',
+        calculationMode: 'COMPLETED_BAR',
+        localTradeDate: '2026-07-22',
+        externalTradeDate: '2026-07-22',
+        averageCost: 5.05,
+        cost5: 4.72,
+        cost15: 4.86,
+        cost50: 5.03,
+        cost85: 5.28,
+        cost95: 5.46,
+        winnerRatePercent: 68.2,
+        overheadChipRatioPercent: 31.8,
+        cost70Low: 4.86,
+        cost70High: 5.28,
+        cost70ConcentrationPercent: 8.31,
+        cost90Low: 4.72,
+        cost90High: 5.46,
+        cost90ConcentrationPercent: 14.65,
+        distanceToAverageCostPercent: 3.17,
+        priorHighPrice: 5.8,
+        priorHighZoneResidualRatioPercent: 7.5,
+        turnoverSincePriorHighPercent: 128,
+        costPositionScore: 85,
+        concentrationScore: 78,
+        overheadReliefScore: 68.2,
+        priorHighDigestionScore: 92,
+        chipStructureScore: 86,
+        verificationStatus: 'VERIFIED',
+        verificationLabel: '双源认证通过',
+        verificationCoefficient: 1,
+        contributionScore: 21.5,
+        averageCostDeviation: 0.018,
+        cost70BandOverlap: 0.82,
+        winnerRateDeviation: 0.04,
+        modelVersion: 'short-term-chip-v1',
+        dataGaps: []
+      }
+    }
+    const baseReport = reportWithCandidates(['600795']) as unknown as Record<string, unknown>
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: {
+        ...baseReport,
+        candidates: [verifiedCandidate]
+      } as never
+    })
+
+    await renderPage(root)
+    expect(document.body.textContent).toContain('筹码认证')
+    expect(document.body.textContent).toContain('+21.50')
+    expect(document.body.textContent).toContain('距成本 +3.17%')
+
+    await clickButton('候选600795')
+    expect(document.body.textContent).toContain('筹码结构与外部认证')
+    expect(document.body.textContent).toContain('双源认证通过')
+    expect(document.body.textContent).toContain('V2 / V3 排名')
+    expect(document.body.textContent).toContain('#5 / #2')
+    expect(document.body.textContent).toContain('前高区残余筹码')
+    expect(document.body.textContent).toContain('7.50%')
+  })
+
+  it('labels legacy candidates whose historical report has no chip snapshot', async () => {
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600795'])
+    })
+
+    await renderPage(root)
+    await clickButton('候选600795')
+
+    expect(document.body.textContent).toContain('筹码结构与外部认证')
+    expect(document.body.textContent).toContain('历史版本未计算')
+  })
+
+  it('opens a partial legacy report without ruleSet or chip dataGaps', async () => {
+    const legacyReport = {
+      ...emptyReport,
+      candidateCount: 1,
+      candidates: [{
+        ...candidate('600795'),
+        chip: {
+          dataQuality: 'OK',
+          calculationMode: 'COMPLETED_BAR',
+          verificationStatus: 'SINGLE_SOURCE',
+          verificationLabel: '仅本地模型',
+          modelVersion: 'short-term-chip-v1'
+        }
+      }]
+    } as Record<string, unknown>
+    delete legacyReport.ruleSet
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: legacyReport as never
+    })
+
+    await renderPage(root)
+    await clickButton('候选600795')
+
+    expect(document.body.textContent).toContain('筹码结构与外部认证')
+    expect(document.body.textContent).toContain('仅本地模型')
   })
 
   it('requests the T1/T2 overnight contract without a legacy 20-day holding window', async () => {
@@ -547,7 +673,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
       status: 'RUNNING',
       tradeDate: '2026-07-23',
       resultStatus: 'RUNNING',
-      strategyVersion: 'short-term-right-side-v2',
+      strategyVersion: 'short-term-right-side-v3-chip-verified',
       blockedReasons: [],
       createdAt: '2026-07-23T14:54:00+08:00',
       startedAt: null,
@@ -560,7 +686,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
       status: 'SUCCEEDED',
       tradeDate: '2026-07-23',
       resultStatus: 'NO_TRADE',
-      strategyVersion: 'short-term-right-side-v2',
+      strategyVersion: 'short-term-right-side-v3-chip-verified',
       blockedReasons: [],
       createdAt: '2026-07-23T14:54:00+08:00',
       startedAt: '2026-07-23T14:54:00+08:00',
@@ -596,7 +722,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
       status: 'RUNNING',
       tradeDate: '2026-07-23',
       resultStatus: 'RUNNING',
-      strategyVersion: 'short-term-right-side-v2',
+      strategyVersion: 'short-term-right-side-v3-chip-verified',
       blockedReasons: [],
       createdAt: '2026-07-23T14:54:00+08:00',
       startedAt: null,
@@ -609,7 +735,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
       status: 'SUCCEEDED',
       tradeDate: '2026-07-23',
       resultStatus: 'DATA_BLOCKED',
-      strategyVersion: 'short-term-right-side-v2',
+      strategyVersion: 'short-term-right-side-v3-chip-verified',
       blockedReasons: ['QUOTE_STALE'],
       createdAt: '2026-07-23T14:54:00+08:00',
       startedAt: '2026-07-23T14:54:00+08:00',
@@ -675,7 +801,7 @@ describe('ScheduledSnapshotStatus', () => {
 
     expect(html).toContain(label)
     expect(html).toContain(tone)
-    expect(html).toContain('short-term-right-side-v2')
+    expect(html).toContain('short-term-right-side-v3-chip-verified')
     if (status === 'FINAL_READY') {
       expect(html).not.toContain('尾盘最终结果已就绪')
     }
@@ -743,7 +869,7 @@ function mockManualReport(report: typeof emptyReport, jobId: string) {
     status: 'RUNNING',
     tradeDate: '2026-07-23',
     resultStatus: 'RUNNING',
-    strategyVersion: 'short-term-right-side-v2',
+    strategyVersion: 'short-term-right-side-v3-chip-verified',
     blockedReasons: [],
     createdAt: '2026-07-23T14:54:00+08:00',
     startedAt: null,
@@ -756,7 +882,7 @@ function mockManualReport(report: typeof emptyReport, jobId: string) {
     status: 'SUCCEEDED',
     tradeDate: '2026-07-23',
     resultStatus: report.candidateCount ? 'FINAL_READY' : 'NO_TRADE',
-    strategyVersion: 'short-term-right-side-v2',
+    strategyVersion: 'short-term-right-side-v3-chip-verified',
     blockedReasons: [],
     createdAt: '2026-07-23T14:54:00+08:00',
     startedAt: '2026-07-23T14:54:00+08:00',

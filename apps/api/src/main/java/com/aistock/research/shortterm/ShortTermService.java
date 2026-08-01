@@ -1,9 +1,11 @@
 package com.aistock.research.shortterm;
 
 import com.aistock.research.factor.RatioScale;
+import com.aistock.research.configuration.ShortTermChipSettings;
 import com.aistock.research.integration.eastmoney.EastMoneyAnnualIndicator;
 import com.aistock.research.integration.eastmoney.AshareQuoteSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
+import com.aistock.research.integration.eastmoney.EastMoneyFundFlowSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyIntradayPoint;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
@@ -12,6 +14,10 @@ import com.aistock.research.quality.EvidenceCompletenessInput;
 import com.aistock.research.quality.EvidenceCompletenessService;
 import com.aistock.research.quality.RecommendationQuality;
 import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
+import com.aistock.research.shortterm.chip.ChipActivationMode;
+import com.aistock.research.shortterm.chip.ChipVerificationStatus;
+import com.aistock.research.shortterm.chip.ShortTermChipAnalysisService;
+import com.aistock.research.shortterm.chip.ShortTermChipSnapshot;
 import com.aistock.research.trading.TradingAdvice;
 import com.aistock.research.trading.AsharePriceLimitRule;
 import com.aistock.research.trading.QuoteFreshnessService;
@@ -130,7 +136,7 @@ public class ShortTermService {
                     List.of("煤炭", "煤业", "能源", "电力", "石油", "油气")
             )
     );
-    private static final String QUOTE_NOTE = "短线右侧模块先做全 A 股行情漏斗，再对候选拉取近一年 K 线和最近年报指标；PE/PB 仅作低权重估值语境，最终以右侧形态、量能、热门方向和财报质量共同约束。";
+    private static final String QUOTE_NOTE = "短线右侧模块先做全 A 股行情漏斗，再对候选拉取近一年 K 线、最近年报、同日资金流和推算筹码成本；PE/PB 仅作估值语境，筹码只参与同动作层候选排序。";
 
     private final EastMoneyClient eastMoneyClient;
     private final EvidenceCompletenessService evidenceCompletenessService;
@@ -139,8 +145,11 @@ public class ShortTermService {
     private final ShortTermTechnicalSignalEvaluator technicalSignalEvaluator;
     private final ShortTermTradePlanService tradePlanService;
     private final ShortTermAutomationSettings automationSettings;
+    private final ShortTermChipAnalysisService chipAnalysisService;
+    private final ShortTermChipSettings chipSettings;
     private final ShortTermMomentumQualityEvaluator momentumQualityEvaluator = new ShortTermMomentumQualityEvaluator();
     private final ShortTermCoreSignalScorer coreSignalScorer = new ShortTermCoreSignalScorer();
+    private final ShortTermSupplyDemandScorer supplyDemandScorer = new ShortTermSupplyDemandScorer();
     private final ValuationContextCalculator valuationContextCalculator = new ValuationContextCalculator();
 
     public ShortTermService(EastMoneyClient eastMoneyClient) {
@@ -189,7 +198,31 @@ public class ShortTermService {
                 quoteFreshnessService,
                 new ShortTermTechnicalSignalEvaluator(goldenCrossAnalyzer),
                 new ShortTermTradePlanService(tradingClockService),
-                new ShortTermAutomationSettings(new StandardEnvironment())
+                new ShortTermAutomationSettings(new StandardEnvironment()),
+                null,
+                new ShortTermChipSettings(new StandardEnvironment())
+        );
+    }
+
+    public ShortTermService(
+            EastMoneyClient eastMoneyClient,
+            EvidenceCompletenessService evidenceCompletenessService,
+            TradingClockService tradingClockService,
+            QuoteFreshnessService quoteFreshnessService,
+            ShortTermTechnicalSignalEvaluator technicalSignalEvaluator,
+            ShortTermTradePlanService tradePlanService,
+            ShortTermAutomationSettings automationSettings
+    ) {
+        this(
+                eastMoneyClient,
+                evidenceCompletenessService,
+                tradingClockService,
+                quoteFreshnessService,
+                technicalSignalEvaluator,
+                tradePlanService,
+                automationSettings,
+                null,
+                new ShortTermChipSettings(new StandardEnvironment())
         );
     }
 
@@ -201,7 +234,9 @@ public class ShortTermService {
             QuoteFreshnessService quoteFreshnessService,
             ShortTermTechnicalSignalEvaluator technicalSignalEvaluator,
             ShortTermTradePlanService tradePlanService,
-            ShortTermAutomationSettings automationSettings
+            ShortTermAutomationSettings automationSettings,
+            ShortTermChipAnalysisService chipAnalysisService,
+            ShortTermChipSettings chipSettings
     ) {
         this.eastMoneyClient = eastMoneyClient;
         this.evidenceCompletenessService = evidenceCompletenessService;
@@ -210,6 +245,8 @@ public class ShortTermService {
         this.technicalSignalEvaluator = technicalSignalEvaluator;
         this.tradePlanService = tradePlanService;
         this.automationSettings = automationSettings;
+        this.chipAnalysisService = chipAnalysisService;
+        this.chipSettings = chipSettings;
     }
 
     public ShortTermReport report(
@@ -364,13 +401,32 @@ public class ShortTermService {
                 .filter(item -> !hasSeriousFinancialRedFlag(financialMap.get(item.quote().symbol())))
                 .toList();
 
-        List<ScoredShortTerm> scored = eligibleTechnicalCandidates.stream()
-                .map(item -> score(item, financialMap.get(item.quote().symbol()), ruleSet, hotDirectionMap, marketSentiment))
-                .sorted(Comparator.comparingInt((ScoredShortTerm item) -> eligibilityGatePriority(item.candidate().action())).reversed()
-                        .thenComparing(Comparator.comparingInt((ScoredShortTerm item) -> eligibleGoldenCrossPriority(item.candidate())).reversed())
-                        .thenComparing(Comparator.comparingInt((ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed())
-                        .thenComparing(Comparator.comparingInt((ScoredShortTerm item) -> rightSideMaturityPriority(item.candidate())).reversed())
-                        .thenComparing(item -> item.candidate().score().rankingScore(), Comparator.reverseOrder()))
+        Map<String, EastMoneyFundFlowSnapshot> fundFlowMap = fetchFundFlows(
+                eligibleTechnicalCandidates.stream()
+                        .map(item -> item.quote().symbol())
+                        .toList()
+        );
+
+        Map<String, ShortTermChipSnapshot> chipMap = fetchChipSnapshots(
+                eligibleTechnicalCandidates,
+                klineMap,
+                allowExternalChipFetch(decisionAt),
+                quoteSnapshot.fetchedAt()
+        );
+
+        List<ScoredShortTerm> rawScored = eligibleTechnicalCandidates.stream()
+                .map(item -> score(
+                        item,
+                        financialMap.get(item.quote().symbol()),
+                        fundFlowMap.get(item.quote().symbol()),
+                        chipMap.get(item.quote().symbol()),
+                        ruleSet,
+                        hotDirectionMap,
+                        marketSentiment
+                ))
+                .toList();
+        List<ScoredShortTerm> scored = attachRankingDiagnostics(rawScored).stream()
+                .sorted(shortTermRankingComparator())
                 .toList();
 
         List<ShortTermRiskExclusion> exclusions = java.util.stream.Stream.of(
@@ -405,7 +461,10 @@ public class ShortTermService {
                 List.of(
                         "第一层用全 A 股行情做流动性、非 ST、热门方向和追涨风险排序，PE/PB 只占预选分的 10%。",
                         "第二层拉取候选近一年 K 线，优先确认 MA5/MA10 金叉及其形成阶段，并计算实时换手率和收盘强度。",
-                        "第三层原始主分固定为金叉 45%、放量上涨 30%、换手适配 15%、K 线收盘强度 10%；阶段校准只用于保证确认层排序在观察层之前，并单独披露。",
+                        "第三层技术底分固定为金叉 45%、放量上涨 30%、换手适配 15%、K 线收盘强度 10%。",
+                        "通过资格门禁后，V3 使用技术 45%、认证后筹码结构最多 25%、上方抛压弱度 20%、同日资金流 10% 形成排序。",
+                        "筹码由东方财富换手率和日 K 在 Java 本地复算，Tushare 只认证最近完整交易日；认证失败不阻断扫描，也不能改变动作建议。",
+                        "当前激活模式为 " + chipSettings.activationMode() + "；SHADOW 只记录 V2/V3 顺位差，ACTIVE 才采用 V3 正式顺序。",
                         "默认输出八个短线候选：可执行层在前、观察层补足展示，但不会为了凑数制造加仓建议。",
                         "PE、PB、热门方向和普通财务质量只作上下文与风险说明，不进入短线四项主分。",
                         "热门方向可帮助全市场预选，但不能覆盖金叉、放量、换手、上影线和硬风险门禁。",
@@ -464,6 +523,8 @@ public class ShortTermService {
     private ScoredShortTerm score(
             TechnicalCandidate item,
             ShortTermFinancialSnapshot financial,
+            EastMoneyFundFlowSnapshot fundFlow,
+            ShortTermChipSnapshot chip,
             ShortTermRuleSet ruleSet,
             Map<String, ShortTermHotDirection> hotDirectionMap,
             ShortTermMarketSentiment marketSentiment
@@ -485,6 +546,14 @@ public class ShortTermService {
         ShortTermCoreSignalScore coreSignalScore = item.coreSignalScore();
         BigDecimal finalScore = coreSignalScore.finalScore();
         StageAdjustedScore stageScore = stageAdjustedCoreScore(finalScore, technical.goldenCross());
+        ShortTermSupplyDemandScore supplyDemand = supplyDemandScorer.score(
+                fundFlow,
+                quote.tradeDate(),
+                technical,
+                stageScore.rankingScore(),
+                chip,
+                chipSettings.activationMode()
+        );
         ActionDecision decision = decide(
                 quote,
                 technical,
@@ -529,20 +598,42 @@ public class ShortTermService {
                         riskPenalty,
                         finalScore,
                         stageScore.adjustment(),
-                        stageScore.rankingScore()
+                        supplyDemand.mainNetInflowRatio(),
+                        supplyDemand.largeOrderNetInflowRatio(),
+                        supplyDemand.buyPressureScore(),
+                        supplyDemand.overheadPressureReliefScore(),
+                        supplyDemand.technicalRankingScore(),
+                        supplyDemand.v2RankingScore(),
+                        supplyDemand.chipContributionScore(),
+                        supplyDemand.v3RankingScore(),
+                        null,
+                        null,
+                        null,
+                        supplyDemand.rankingScore()
                 ),
                 technical,
                 financial,
                 buyZoneLow(price, technical),
                 buyZoneHigh(price, technical, ruleSet),
                 stopPrice(price, technical),
-                strengths(quote, technical, financial, valuationContext),
-                risks(quote, technical, financial, ruleSet, valuationContext, quoteFreshness),
+                chipStrengths(supplyDemandStrengths(
+                        strengths(quote, technical, financial, valuationContext),
+                        supplyDemand
+                ), chip),
+                chipRisks(supplyDemandRisks(
+                        risks(quote, technical, financial, ruleSet, valuationContext, quoteFreshness),
+                        supplyDemand
+                ), chip),
                 entryRules(decision, ruleSet),
                 exitRules(ruleSet),
                 pendingEvidenceCompleteness(quote, technical, financial, quoteFreshness),
-                evidence(quote, technical, financial, item.technical(), valuationContext, quoteFreshness, ruleSet),
-                null
+                chipEvidence(supplyDemandEvidence(
+                        evidence(quote, technical, financial, item.technical(), valuationContext, quoteFreshness, ruleSet),
+                        fundFlow,
+                        supplyDemand
+                ), chip),
+                null,
+                chip
         );
         return new ScoredShortTerm(candidate);
     }
@@ -1201,7 +1292,8 @@ public class ShortTermService {
                 candidate.exitRules(),
                 completeness,
                 withTailEvidence(candidate.evidence(), tailSignal),
-                candidate.tradePlan()
+                candidate.tradePlan(),
+                candidate.chip()
         );
     }
 
@@ -1284,7 +1376,8 @@ public class ShortTermService {
                 candidate.exitRules(),
                 candidate.evidenceCompleteness(),
                 candidate.evidence(),
-                plan
+                plan,
+                candidate.chip()
         );
     }
 
@@ -1882,6 +1975,43 @@ public class ShortTermService {
         return strengths;
     }
 
+    private List<String> supplyDemandStrengths(
+            List<String> base,
+            ShortTermSupplyDemandScore supplyDemand
+    ) {
+        List<String> strengths = new ArrayList<>(base == null ? List.of() : base);
+        if (supplyDemand.mainNetInflowRatio() != null
+                && supplyDemand.mainNetInflowRatio().compareTo(BigDecimal.ZERO) > 0) {
+            strengths.add("主力净流入占比 " + valueText(supplyDemand.mainNetInflowRatio())
+                    + "%，买盘强度 " + valueText(supplyDemand.buyPressureScore()) + " 分。");
+        }
+        if (supplyDemand.overheadPressureReliefScore().compareTo(new BigDecimal("70")) >= 0) {
+            strengths.add("上影、收盘位置和前 20 日压力位共同显示抛压较弱，缓解分 "
+                    + valueText(supplyDemand.overheadPressureReliefScore()) + " 分。");
+        }
+        return strengths.stream().distinct().limit(8).toList();
+    }
+
+    private List<String> chipStrengths(List<String> base, ShortTermChipSnapshot chip) {
+        List<String> strengths = new ArrayList<>(base == null ? List.of() : base);
+        if (chip == null) {
+            return strengths;
+        }
+        if (chip.verificationStatus() == ChipVerificationStatus.VERIFIED
+                && chip.contributionScore() != null
+                && chip.contributionScore().compareTo(BigDecimal.ZERO) > 0) {
+            strengths.add("筹码模型已认证：当前价距推算成本中枢 "
+                    + valueText(chip.distanceToAverageCostPercent()) + "% ，认证后贡献 "
+                    + valueText(chip.contributionScore()) + " 分。");
+        }
+        if (chip.overheadChipRatioPercent() != null
+                && chip.overheadChipRatioPercent().compareTo(new BigDecimal("35")) <= 0) {
+            strengths.add("推算上方筹码约 " + valueText(chip.overheadChipRatioPercent())
+                    + "% ，上方供给压力相对较低。");
+        }
+        return strengths.stream().distinct().limit(9).toList();
+    }
+
     private List<String> risks(
             EastMoneyQuote quote,
             ShortTermTechnicalSnapshot technical,
@@ -1943,6 +2073,50 @@ public class ShortTermService {
             risks.add("短线交易仍受指数波动和板块轮动影响，需要严格止损。");
         }
         return risks;
+    }
+
+    private List<String> supplyDemandRisks(
+            List<String> base,
+            ShortTermSupplyDemandScore supplyDemand
+    ) {
+        List<String> risks = new ArrayList<>(base == null ? List.of() : base);
+        if (supplyDemand.mainNetInflowRatio() != null
+                && supplyDemand.mainNetInflowRatio().compareTo(BigDecimal.ZERO) < 0) {
+            risks.add("主力净流入占比 " + valueText(supplyDemand.mainNetInflowRatio())
+                    + "% 为负，主动买盘不足，推荐顺位下调。");
+        }
+        if (supplyDemand.overheadPressureReliefScore().compareTo(new BigDecimal("55")) < 0) {
+            risks.add("上影、收盘位置或前 20 日压力位显示上方抛压偏强，推荐顺位下调。");
+        }
+        risks.addAll(supplyDemand.dataGaps());
+        return risks.stream()
+                .filter(item -> item != null && !item.isBlank())
+                .distinct()
+                .limit(10)
+                .toList();
+    }
+
+    private List<String> chipRisks(List<String> base, ShortTermChipSnapshot chip) {
+        List<String> risks = new ArrayList<>(base == null ? List.of() : base);
+        if (chip == null) {
+            risks.add("历史版本未计算筹码结构，筹码因子未参与排序。");
+            return risks.stream().distinct().limit(11).toList();
+        }
+        if (chip.verificationStatus() == ChipVerificationStatus.SINGLE_SOURCE) {
+            risks.add("筹码结构仅由本地模型推算，外部认证缺失，贡献已按60%折减。");
+        } else if (chip.verificationStatus() == ChipVerificationStatus.CONFLICT) {
+            risks.add("本地与外部筹码模型冲突，本轮筹码贡献为0。");
+        } else if (chip.verificationStatus() == ChipVerificationStatus.STALE) {
+            risks.add("筹码认证日期过期，本轮筹码贡献为0。");
+        } else if (chip.verificationStatus() == ChipVerificationStatus.INSUFFICIENT) {
+            risks.add("K线或换手率质量不足，本轮筹码贡献为0。");
+        }
+        risks.addAll(chip.dataGaps());
+        return risks.stream()
+                .filter(item -> item != null && !item.isBlank())
+                .distinct()
+                .limit(11)
+                .toList();
     }
 
     private List<String> entryRules(ActionDecision decision, ShortTermRuleSet ruleSet) {
@@ -2067,6 +2241,72 @@ public class ShortTermService {
         if (!context.dataGaps().isEmpty()) {
             evidence.add(new ShortTermEvidence("数据缺口", String.join("；", context.dataGaps()), null, 10));
         }
+        return evidence;
+    }
+
+    private List<ShortTermEvidence> supplyDemandEvidence(
+            List<ShortTermEvidence> base,
+            EastMoneyFundFlowSnapshot fundFlow,
+            ShortTermSupplyDemandScore supplyDemand
+    ) {
+        List<ShortTermEvidence> evidence = new ArrayList<>(base == null ? List.of() : base);
+        evidence.add(new ShortTermEvidence(
+                "主力买盘",
+                "主力净流入占比 " + valueText(supplyDemand.mainNetInflowRatio())
+                        + "%，超大单与大单合计净流入占比 "
+                        + valueText(supplyDemand.largeOrderNetInflowRatio())
+                        + "%，买盘强度 " + valueText(supplyDemand.buyPressureScore())
+                        + " 分；V3 中该项占排序 10%，且仅表示按成交单量级推算的资金流。",
+                fundFlow == null ? null : fundFlow.sourceUrl(),
+                10
+        ));
+        evidence.add(new ShortTermEvidence(
+                "上方抛压",
+                "结合近期上涨 K 线上影、最新收盘位置与前 20 日压力位，抛压弱度 "
+                        + valueText(supplyDemand.overheadPressureReliefScore())
+                        + " 分；V3 中该项占排序 20%。",
+                null,
+                20
+        ));
+        if (!supplyDemand.dataGaps().isEmpty()) {
+            evidence.add(new ShortTermEvidence(
+                    "供需数据缺口",
+                    String.join("；", supplyDemand.dataGaps()),
+                    null,
+                    25
+            ));
+        }
+        return evidence;
+    }
+
+    private List<ShortTermEvidence> chipEvidence(
+            List<ShortTermEvidence> base,
+            ShortTermChipSnapshot chip
+    ) {
+        List<ShortTermEvidence> evidence = new ArrayList<>(base == null ? List.of() : base);
+        if (chip == null) {
+            evidence.add(new ShortTermEvidence(
+                    "筹码结构",
+                    "历史版本未计算；没有使用中性分补齐。",
+                    null,
+                    0
+            ));
+            return evidence;
+        }
+        evidence.add(new ShortTermEvidence(
+                "筹码结构",
+                chip.verificationLabel() + "；推算平均成本 " + valueText(chip.averageCost())
+                        + " 元，70%成本区 " + valueText(chip.cost70Low()) + "-"
+                        + valueText(chip.cost70High()) + " 元，上方筹码 "
+                        + valueText(chip.overheadChipRatioPercent()) + "% ，原始分 "
+                        + valueText(chip.chipStructureScore()) + "，认证系数 "
+                        + valueText(chip.verificationCoefficient()) + "，最终贡献 "
+                        + valueText(chip.contributionScore()) + " 分。",
+                chip.externalTradeDate() == null
+                        ? null
+                        : "https://tushare.pro/document/2?doc_id=293",
+                25
+        ));
         return evidence;
     }
 
@@ -2330,12 +2570,67 @@ public class ShortTermService {
 
     private List<EastMoneyKLine> fetchKLinesSafely(String symbol) {
         try {
-            LocalDate end = LocalDate.now();
-            return eastMoneyClient.fetchDailyKLines(symbol, end.minusDays(420), end);
+            LocalDate end = tradingClockService.currentMarketDate();
+            LocalDate begin = end.minusDays(420);
+            List<EastMoneyKLine> rows = eastMoneyClient.fetchDailyKLines(symbol, begin, end);
+            if (chipAnalysisService == null || !chipSettings.enabled()) {
+                return rows;
+            }
+            List<EastMoneyKLine> enriched = eastMoneyClient.enrichDailyKLineTurnover(
+                    symbol, begin, end, rows);
+            return enriched == null || enriched.isEmpty() ? rows : enriched;
         } catch (RuntimeException exception) {
             logger.warn("短线右侧 K 线获取失败：{}", symbol, exception);
             return List.of();
         }
+    }
+
+    private Map<String, EastMoneyFundFlowSnapshot> fetchFundFlows(List<String> symbols) {
+        if (symbols == null || symbols.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return eastMoneyClient.fetchFundFlowSnapshots(symbols);
+        } catch (RuntimeException exception) {
+            logger.warn("短线候选批量资金流获取失败，本轮按资金流待补处理：{}", rootMessage(exception));
+            return Map.of();
+        }
+    }
+
+    private Map<String, ShortTermChipSnapshot> fetchChipSnapshots(
+            List<TechnicalCandidate> candidates,
+            Map<String, List<EastMoneyKLine>> klineMap,
+            boolean allowExternalFetch,
+            Instant dataCutoffAt
+    ) {
+        if (chipAnalysisService == null || !chipSettings.enabled()
+                || candidates == null || candidates.isEmpty()) {
+            return Map.of();
+        }
+        return candidates.parallelStream()
+                .map(candidate -> new java.util.AbstractMap.SimpleImmutableEntry<>(
+                        candidate.quote().symbol(),
+                        chipAnalysisService.analyze(
+                                candidate.quote(),
+                                klineMap.getOrDefault(candidate.quote().symbol(), List.of()),
+                                allowExternalFetch,
+                                dataCutoffAt
+                        )
+                ))
+                .filter(entry -> entry.getValue() != null)
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (left, right) -> left
+                ));
+    }
+
+    private boolean allowExternalChipFetch(LocalDateTime decisionAt) {
+        if (decisionAt == null) {
+            return false;
+        }
+        LocalTime time = decisionAt.toLocalTime();
+        return time.isBefore(ACTIONABLE_TAIL_START) || !time.isBefore(ACTIONABLE_TAIL_END_EXCLUSIVE);
     }
 
     private ShortTermRuleSet resolveRuleSet(
@@ -2372,6 +2667,70 @@ public class ShortTermService {
         return Math.max(1, Math.min(limit == null ? DEFAULT_LIMIT : limit, 40));
     }
 
+    private List<ScoredShortTerm> attachRankingDiagnostics(List<ScoredShortTerm> scored) {
+        Map<String, Integer> v2Ranks = rankingPositions(scored, shortTermV2RankingComparator());
+        Map<String, Integer> v3Ranks = rankingPositions(scored, shortTermV3RankingComparator());
+        return scored.stream()
+                .map(item -> {
+                    String symbol = item.candidate().symbol();
+                    Integer v2Rank = v2Ranks.get(symbol);
+                    Integer v3Rank = v3Ranks.get(symbol);
+                    Integer rankDelta = v2Rank == null || v3Rank == null ? null : v2Rank - v3Rank;
+                    return new ScoredShortTerm(copyWithScore(
+                            item.candidate(),
+                            withRankingDiagnostics(item.candidate().score(), v2Rank, v3Rank, rankDelta)
+                    ));
+                })
+                .toList();
+    }
+
+    private Map<String, Integer> rankingPositions(
+            List<ScoredShortTerm> scored,
+            Comparator<ScoredShortTerm> comparator
+    ) {
+        List<ScoredShortTerm> ordered = scored.stream().sorted(comparator).toList();
+        Map<String, Integer> positions = new LinkedHashMap<>();
+        for (int index = 0; index < ordered.size(); index++) {
+            positions.put(ordered.get(index).candidate().symbol(), index + 1);
+        }
+        return positions;
+    }
+
+    private ShortTermScoreBreakdown withRankingDiagnostics(
+            ShortTermScoreBreakdown score,
+            Integer v2Rank,
+            Integer v3Rank,
+            Integer rankDelta
+    ) {
+        return new ShortTermScoreBreakdown(
+                score.technicalScore(), score.goldenCrossScore(), score.volumeScore(),
+                score.turnoverScore(), score.closeStrengthScore(), score.marketHeatScore(),
+                score.valuationScore(), score.financialScore(), score.riskPenalty(),
+                score.finalScore(), score.stageAdjustment(), score.mainNetInflowRatio(),
+                score.largeOrderNetInflowRatio(), score.buyPressureScore(),
+                score.overheadPressureReliefScore(), score.technicalRankingScore(),
+                score.v2RankingScore(), score.chipContributionScore(), score.v3RankingScore(),
+                v2Rank, v3Rank, rankDelta, score.rankingScore()
+        );
+    }
+
+    private ShortTermCandidate copyWithScore(
+            ShortTermCandidate candidate,
+            ShortTermScoreBreakdown score
+    ) {
+        return new ShortTermCandidate(
+                candidate.rank(), candidate.symbol(), candidate.name(), candidate.market(), candidate.industry(),
+                candidate.latestPrice(), candidate.changePercent(), candidate.peTtm(), candidate.pbRatio(),
+                candidate.amount(), candidate.quoteFreshness(), candidate.valuationContext(),
+                candidate.phase(), candidate.phaseLabel(), candidate.action(), candidate.actionLabel(),
+                candidate.reason(), candidate.todayAdvice(), candidate.tailSignal(), score,
+                candidate.technical(), candidate.financial(), candidate.buyZoneLow(), candidate.buyZoneHigh(),
+                candidate.stopPrice(), candidate.strengths(), candidate.risks(), candidate.entryRules(),
+                candidate.exitRules(), candidate.evidenceCompleteness(), candidate.evidence(),
+                candidate.tradePlan(), candidate.chip()
+        );
+    }
+
     private ShortTermCandidate rerank(ShortTermCandidate candidate, int rank) {
         return new ShortTermCandidate(
                 rank,
@@ -2405,7 +2764,8 @@ public class ShortTermService {
                 candidate.exitRules(),
                 candidate.evidenceCompleteness(),
                 candidate.evidence(),
-                candidate.tradePlan()
+                candidate.tradePlan(),
+                candidate.chip()
         );
     }
 
@@ -2417,6 +2777,56 @@ public class ShortTermService {
             case "WAIT_CONFIRM" -> 2;
             default -> 1;
         };
+    }
+
+    private Comparator<ScoredShortTerm> shortTermRankingComparator() {
+        return chipSettings.activationMode() == ChipActivationMode.ACTIVE
+                ? shortTermV3RankingComparator()
+                : shortTermV2RankingComparator();
+    }
+
+    private Comparator<ScoredShortTerm> shortTermV2RankingComparator() {
+        Comparator<ScoredShortTerm> supplyDemandOrder = Comparator
+                .comparingInt((ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed()
+                .thenComparing(Comparator.comparing(
+                        (ScoredShortTerm item) -> hasFundFlow(item.candidate().score())
+                ).reversed())
+                .thenComparing(item -> item.candidate().score().v2RankingScore(),
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> eligibleGoldenCrossPriority(item.candidate())).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> rightSideMaturityPriority(item.candidate())).reversed());
+        Comparator<ScoredShortTerm> legacyOrder = Comparator
+                .comparingInt((ScoredShortTerm item) -> eligibleGoldenCrossPriority(item.candidate())).reversed()
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> rightSideMaturityPriority(item.candidate())).reversed())
+                .thenComparing(item -> item.candidate().score().technicalRankingScore(), Comparator.reverseOrder());
+        return Comparator
+                .comparingInt((ScoredShortTerm item) -> eligibilityGatePriority(item.candidate().action())).reversed()
+                .thenComparing((left, right) -> hasFundFlow(left.candidate().score())
+                        || hasFundFlow(right.candidate().score())
+                        ? supplyDemandOrder.compare(left, right)
+                        : legacyOrder.compare(left, right));
+    }
+
+    private Comparator<ScoredShortTerm> shortTermV3RankingComparator() {
+        return Comparator
+                .comparingInt((ScoredShortTerm item) -> eligibilityGatePriority(item.candidate().action())).reversed()
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed())
+                .thenComparing(item -> item.candidate().score().v3RankingScore(),
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> eligibleGoldenCrossPriority(item.candidate())).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> rightSideMaturityPriority(item.candidate())).reversed());
+    }
+
+    private boolean hasFundFlow(ShortTermScoreBreakdown score) {
+        return score != null && score.mainNetInflowRatio() != null;
     }
 
     private int eligibilityGatePriority(String action) {

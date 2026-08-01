@@ -50,7 +50,7 @@ class ShortTermScheduledSnapshotControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.tradeDate").value("2026-07-23"))
                 .andExpect(jsonPath("$.status").value("FINAL_READY"))
-                .andExpect(jsonPath("$.strategyVersion").value("short-term-right-side-v2"))
+                .andExpect(jsonPath("$.strategyVersion").value("short-term-right-side-v3-chip-verified"))
                 .andExpect(jsonPath("$.report.candidates[0].tradePlan.strategyLabel")
                         .value("隔夜超短波段"));
 

@@ -209,6 +209,12 @@ https://push2.eastmoney.com/api/qt/clist/get
 https://push2.eastmoney.com/api/qt/ulist.np/get
 https://push2.eastmoney.com/api/qt/stock/fflow/kline/get
 
+东方财富日 K 换手率（短线筹码本地复算）：
+https://push2his.eastmoney.com/api/qt/stock/kline/get
+
+Tushare `cyq_perf`（可选，仅认证最近完整交易日）：
+https://api.tushare.pro
+
 东方财富数据中心年报指标：
 https://datacenter-web.eastmoney.com/api/data/v1/get
 

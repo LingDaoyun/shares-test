@@ -18,7 +18,7 @@ import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
 import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCounterEvidenceTone, goldenCrossDisplayLabel, goldenCrossSpreadLabel, goldenCrossSpreadTrendLabel, goldenCrossTone, goldenCrossV2Context } from '../lib/shortTermGoldenCross'
-import type { OvernightBacktestReport, OvernightBacktestSummary, ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermReport, ShortTermScanJobStatus, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { ChipVerificationStatus, OvernightBacktestReport, OvernightBacktestSummary, ShortTermCandidate, ShortTermChipSnapshot, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermReport, ShortTermScanJobStatus, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -95,16 +95,16 @@ export function ShortTermPage() {
   )
   const overnightRules = useMemo(() => ({
     ...OVERNIGHT_DEFAULT_RULES,
-    minVolumeRatio: report?.ruleSet.minVolumeRatio ?? OVERNIGHT_DEFAULT_RULES.minVolumeRatio,
-    maxDistanceToMa20Percent: report?.ruleSet.maxDistanceToMa20Percent
+    minVolumeRatio: report?.ruleSet?.minVolumeRatio ?? OVERNIGHT_DEFAULT_RULES.minVolumeRatio,
+    maxDistanceToMa20Percent: report?.ruleSet?.maxDistanceToMa20Percent
       ?? OVERNIGHT_DEFAULT_RULES.maxDistanceToMa20Percent,
     trailingDrawdownPercent: report?.candidates
       .map((candidate) => candidate.tradePlan?.trailingDrawdownPercent)
       .find((value): value is number => value !== null && value !== undefined)
       ?? OVERNIGHT_DEFAULT_RULES.trailingDrawdownPercent
   }), [
-    report?.ruleSet.minVolumeRatio,
-    report?.ruleSet.maxDistanceToMa20Percent,
+    report?.ruleSet?.minVolumeRatio,
+    report?.ruleSet?.maxDistanceToMa20Percent,
     report?.candidates
   ])
   const overnightRequestKey = `${overnightSymbols}|${Object.entries(overnightRules)
@@ -398,16 +398,6 @@ export function ShortTermPage() {
               ) : null}
               <p className="mt-3 border-t border-line-soft pt-3 text-xs leading-relaxed text-ink-500">{report.quoteNote}</p>
             </Card>
-            <Card title="当前规则">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <Metric label="扫描/复核" value={`${report.ruleSet.scanLimit}/${report.ruleSet.klineLimit}`} />
-                <Metric label="成交额" value={formatAmount(report.ruleSet.minAmount)} />
-                <Metric label="量比下限" value={formatNumber(report.ruleSet.minVolumeRatio)} />
-                <Metric label="财报分" value={formatNumber(report.ruleSet.minFinancialScore)} />
-                <Metric label="PE 参考带" value={formatNumber(report.ruleSet.maxPe)} />
-                <Metric label="PB 参考带" value={formatNumber(report.ruleSet.maxPb)} />
-              </div>
-            </Card>
             <HotDirectionsCard directions={report.hotDirections} />
           </div>
 
@@ -574,6 +564,7 @@ function CandidateRow({
           {candidate.score.marketHeatScore >= 68 ? <Tag tone="brand">热度 {formatNumber(candidate.score.marketHeatScore)}</Tag> : null}
           <Tag tone="neutral">财报 {formatNumber(candidate.financial.qualityScore)}</Tag>
           <Tag tone={tailTone(candidate.tailSignal.status)}>尾盘：{candidate.tailSignal.statusLabel}</Tag>
+          <ChipSummaryTags chip={candidate.chip} />
           <Tag tone={candidate.quoteFreshness.blocksRealtimeDecision ? 'warning' : 'success'}>
             行情：{candidate.quoteFreshness.statusLabel}
           </Tag>
@@ -623,7 +614,7 @@ function CandidateDetail({
             <TradeReviewButton
               symbol={candidate.symbol}
               sourceModule="SHORT_TERM"
-              ruleVersion="short-term-right-side-v2"
+              ruleVersion="short-term-right-side-v3-chip-verified"
               recommendedAt={generatedAt}
               attestationToken={tradeCaptureToken}
             />
@@ -663,6 +654,9 @@ function CandidateDetail({
           <ScoreMetric label="四因子原始分" value={candidate.score.finalScore} />
           <ScoreMetric label="阶段校准" value={candidate.score.stageAdjustment ?? 0} />
           <ScoreMetric label="排序分" value={candidate.score.rankingScore ?? candidate.score.finalScore} />
+          <ScoreMetric label="V2 排序分" value={candidate.score.v2RankingScore} />
+          <ScoreMetric label="筹码排序贡献" value={candidate.score.chipContributionScore} />
+          <ScoreMetric label="V3 影子分" value={candidate.score.v3RankingScore} />
         </div>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line-soft pt-3 text-xs text-ink-500">
@@ -697,6 +691,8 @@ function CandidateDetail({
           <ScoreMetric label="财报语境" value={candidate.score.financialScore} />
           <ScoreMetric label="风险提示分（不计主分）" value={candidate.score.riskPenalty} />
         </div>
+
+        <ChipStructurePanel candidate={candidate} />
 
         <GoldenCrossDetail snapshot={candidate.technical.goldenCross} />
 
@@ -740,6 +736,86 @@ function CandidateDetail({
         </div>
     </div>
   )
+}
+
+function ChipSummaryTags({ chip }: { chip: ShortTermChipSnapshot | null | undefined }) {
+  if (!chip) return <Tag tone="neutral">筹码：历史未算</Tag>
+  return (
+    <>
+      <Tag tone={chipVerificationTone(chip.verificationStatus)}>
+        {chip.verificationStatus === 'VERIFIED' ? '筹码认证' : `筹码：${chip.verificationLabel}`}
+        {chip.contributionScore != null ? ` ${signedScore(chip.contributionScore)}` : ''}
+      </Tag>
+      {chip.distanceToAverageCostPercent != null ? (
+        <Tag tone="neutral">距成本 {formatSignedPercent(chip.distanceToAverageCostPercent)}</Tag>
+      ) : null}
+    </>
+  )
+}
+
+function ChipStructurePanel({ candidate }: { candidate: ShortTermCandidate }) {
+  const chip = candidate.chip
+  const chipDataGaps = chip?.dataGaps ?? []
+  return (
+    <section className="border-t border-line-soft pt-4" aria-label="筹码结构与外部认证">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-ink-900">筹码结构与外部认证</h3>
+        {chip ? (
+          <Tag tone={chipVerificationTone(chip.verificationStatus)}>{chip.verificationLabel}</Tag>
+        ) : null}
+      </div>
+      {!chip ? (
+        <p className="mt-3 border-l-2 border-line-soft pl-3 text-sm leading-relaxed text-ink-500">
+          历史版本未计算。该报告保留原排序，不用后验筹码数据改写当时结论。
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-3">
+            <Metric label="平均成本" value={formatPerSharePrice(chip.averageCost)} />
+            <Metric label="距平均成本" value={formatSignedPercent(chip.distanceToAverageCostPercent)} />
+            <Metric label="获利筹码" value={formatPercent(chip.winnerRatePercent)} />
+            <Metric label="上方筹码" value={formatPercent(chip.overheadChipRatioPercent)} />
+            <Metric label="70% 成本区间" value={`${formatPrice(chip.cost70Low)} - ${formatPrice(chip.cost70High)}`} />
+            <Metric label="70% 成本带宽" value={formatPercent(chip.cost70ConcentrationPercent)} />
+            <Metric label="前高参考" value={formatPerSharePrice(chip.priorHighPrice)} />
+            <Metric label="前高区残余筹码" value={formatPercent(chip.priorHighZoneResidualRatioPercent)} />
+            <Metric label="前高后累计换手" value={formatPercent(chip.turnoverSincePriorHighPercent)} />
+            <Metric label="筹码结构分" value={formatNumber(chip.chipStructureScore)} />
+            <Metric label="认证系数" value={formatNumber(chip.verificationCoefficient)} />
+            <Metric label="排序贡献" value={signedScore(chip.contributionScore)} />
+            <Metric
+              label="V2 / V3 排名"
+              value={candidate.score.v2Rank != null && candidate.score.v3Rank != null
+                ? `#${candidate.score.v2Rank} / #${candidate.score.v3Rank}`
+                : '影子顺位待补'}
+            />
+            <Metric label="本地 / 外部日期" value={`${chip.localTradeDate ?? '待补'} / ${chip.externalTradeDate ?? '待补'}`} />
+            <Metric label="计算口径" value={chip.calculationMode === 'INTRADAY_ESTIMATE' ? '盘中估算' : '完整日 K'} />
+          </div>
+          <p className="mt-3 text-xs leading-relaxed text-ink-500">
+            筹码是基于换手率与价格区间的成本分布估算，只参与同一动作层排序；认证不等于主力意图确认，也不会越过金叉、量能、风险和数据质量门禁。
+          </p>
+          {chipDataGaps.length ? (
+            <div className="mt-3 border-l-2 border-amber-300 pl-3 text-xs leading-relaxed text-amber-700">
+              {chipDataGaps.join('；')}
+            </div>
+          ) : null}
+        </>
+      )}
+    </section>
+  )
+}
+
+function chipVerificationTone(status: ChipVerificationStatus) {
+  if (status === 'VERIFIED') return 'success' as const
+  if (status === 'SINGLE_SOURCE') return 'sky' as const
+  if (status === 'CONFLICT' || status === 'STALE') return 'warning' as const
+  return 'neutral' as const
+}
+
+function signedScore(value: number | null | undefined) {
+  if (value === null || value === undefined) return '待补充'
+  return `${value > 0 ? '+' : ''}${Number(value).toFixed(2)}`
 }
 
 function GoldenCrossDetail({ snapshot }: { snapshot: ShortTermGoldenCrossSnapshot | null | undefined }) {
@@ -1045,8 +1121,9 @@ function Metric({ label, value, compact = false }: { label: string; value: React
   )
 }
 
-function ScoreMetric({ label, value }: { label: string; value: number }) {
-  const width = label.includes('风险') ? Math.max(0, Math.min(100, value * 2.5)) : Math.max(0, Math.min(100, value))
+function ScoreMetric({ label, value }: { label: string; value: number | null | undefined }) {
+  const safeValue = value ?? 0
+  const width = label.includes('风险') ? Math.max(0, Math.min(100, safeValue * 2.5)) : Math.max(0, Math.min(100, safeValue))
   return (
     <div className="rounded-lg border border-line-soft px-3 py-2">
       <div className="flex items-center justify-between gap-2">

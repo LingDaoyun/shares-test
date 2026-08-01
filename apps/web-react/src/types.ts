@@ -575,7 +575,64 @@ export interface ShortTermScoreBreakdown {
   riskPenalty: number
   finalScore: number
   stageAdjustment?: number
+  mainNetInflowRatio?: number | null
+  largeOrderNetInflowRatio?: number | null
+  buyPressureScore?: number | null
+  overheadPressureReliefScore?: number | null
+  technicalRankingScore?: number | null
+  v2RankingScore?: number | null
+  chipContributionScore?: number | null
+  v3RankingScore?: number | null
+  v2Rank?: number | null
+  v3Rank?: number | null
+  rankDelta?: number | null
   rankingScore?: number
+}
+
+export type ChipVerificationStatus =
+  | 'VERIFIED'
+  | 'SINGLE_SOURCE'
+  | 'CONFLICT'
+  | 'STALE'
+  | 'INSUFFICIENT'
+
+export interface ShortTermChipSnapshot {
+  dataQuality: 'VALID' | 'INSUFFICIENT'
+  calculationMode: 'COMPLETED_BAR' | 'INTRADAY_ESTIMATE'
+  localTradeDate: string | null
+  externalTradeDate: string | null
+  averageCost: number | null
+  cost5: number | null
+  cost15: number | null
+  cost50: number | null
+  cost85: number | null
+  cost95: number | null
+  winnerRatePercent: number | null
+  overheadChipRatioPercent: number | null
+  cost70Low: number | null
+  cost70High: number | null
+  cost70ConcentrationPercent: number | null
+  cost90Low: number | null
+  cost90High: number | null
+  cost90ConcentrationPercent: number | null
+  distanceToAverageCostPercent: number | null
+  priorHighPrice: number | null
+  priorHighZoneResidualRatioPercent: number | null
+  turnoverSincePriorHighPercent: number | null
+  costPositionScore: number | null
+  concentrationScore: number | null
+  overheadReliefScore: number | null
+  priorHighDigestionScore: number | null
+  chipStructureScore: number | null
+  verificationStatus: ChipVerificationStatus
+  verificationLabel: string
+  verificationCoefficient: number | null
+  contributionScore: number | null
+  averageCostDeviation: number | null
+  cost70BandOverlap: number | null
+  winnerRateDeviation: number | null
+  modelVersion: string
+  dataGaps: string[]
 }
 
 export interface ShortTermWeightProfile {
@@ -708,6 +765,7 @@ export interface ShortTermCandidate {
   evidenceCompleteness: EvidenceCompleteness
   evidence: ShortTermEvidence[]
   tradePlan: ShortTermTradePlan | null
+  chip?: ShortTermChipSnapshot | null
 }
 
 export interface ShortTermReport {

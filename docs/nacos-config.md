@@ -178,6 +178,46 @@ research:
 
 这两个配置缺失时后端会使用内置默认值。东财 push2/push2his 系列盘中可能触发连接级风控，系统已加入串行节流和重试；如果仍失败，会在候选证据里保留数据缺口，不会用空资金流强行打分。
 
+## 短线筹码结构与外部认证
+
+短线 V3 在 Java 内使用近 120 根日 K、换手率和 150 个价格桶复算成本分布。腾讯前复权日线仍作为价格主序列，东方财富按交易日补齐换手率；Tushare `cyq_perf` 只认证最近完整交易日，不替代本地计算，也不参与全局数据质量门禁。
+
+在现有 `ai-stock-api.yml` 的 `research` 下加入：
+
+```yaml
+research:
+  short-term:
+    chip:
+      enabled: true
+      lookback-bars: 120
+      price-buckets: 150
+      min-valid-bars: 80
+      min-turnover-coverage: 0.95
+      weight: 0.25
+      activation-mode: SHADOW
+      single-source-coefficient: 0.60
+      max-average-cost-deviation: 0.03
+      min-cost-band-overlap: 0.70
+      max-winner-rate-deviation: 0.10
+      tushare:
+        enabled: true
+        base-url: https://api.tushare.pro
+        token: ${TUSHARE_TOKEN:}
+        connect-timeout-ms: 1200
+        read-timeout-ms: 1800
+        max-concurrency: 4
+```
+
+`activation-mode` 有三档：
+
+```text
+OFF     不计算筹码排序贡献
+SHADOW  同时记录 V2/V3 分数和顺位差，但正式排序仍沿用 V2（默认）
+ACTIVE  在相同交易动作层内采用 V3 排序，不能改变动作建议或绕过风控门禁
+```
+
+没有 Tushare token、接口限流、认证冲突或数据过期时，只把该候选的认证系数降为零或单源系数，不会让整轮扫描进入 `DATA_BLOCKED`。真实 token 推荐通过容器环境变量 `TUSHARE_TOKEN` 注入；若直接写入本地 Nacos，也不要提交到 Git。
+
 公告证据会优先查询巨潮公告列表。当前版本会对可匹配证券内部编码的样本返回真实公告，并默认解析少量公告 PDF 的前几页，抽取风险事件、壁垒线索和兑现线索；无法匹配或接口失败时，研究视图会降级使用公司画像里的年报/公告证据，并在 `dataGaps` 中提示需要补齐巨潮、上交所、深交所、北交所公告源。在线解析参数要保守，完整 PDF 解析适合迁到批处理或文档库。
 
 DeepSeek、OpenAI 与 Kimi/Moonshot 都走 OpenAI 兼容协议，可以只改 Nacos 配置切换：

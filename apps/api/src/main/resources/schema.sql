@@ -44,12 +44,37 @@ CREATE TABLE IF NOT EXISTS market_kline_history (
   low_price NUMERIC(20, 6),
   volume NUMERIC(30, 4),
   amount NUMERIC(30, 4),
+  turnover_rate NUMERIC(12, 4),
   source_name VARCHAR(128) NOT NULL,
   observed_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
+ALTER TABLE market_kline_history
+  ADD COLUMN IF NOT EXISTS turnover_rate NUMERIC(12, 4);
+
 CREATE INDEX IF NOT EXISTS idx_kline_symbol_date
   ON market_kline_history(symbol, trade_date, observed_at);
+
+CREATE TABLE IF NOT EXISTS short_term_chip_verification (
+  verification_key VARCHAR(160) PRIMARY KEY,
+  symbol VARCHAR(12) NOT NULL,
+  trade_date DATE NOT NULL,
+  model_version VARCHAR(80) NOT NULL,
+  verification_status VARCHAR(24) NOT NULL,
+  verification_coefficient NUMERIC(8, 4) NOT NULL,
+  average_cost_deviation NUMERIC(12, 6),
+  cost_band_overlap NUMERIC(12, 6),
+  winner_rate_deviation NUMERIC(12, 6),
+  snapshot_json TEXT NOT NULL,
+  external_summary_json TEXT,
+  data_cutoff_at TIMESTAMP WITH TIME ZONE,
+  observed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  error_summary VARCHAR(500),
+  CONSTRAINT uq_short_term_chip_verification UNIQUE (symbol, trade_date, model_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chip_verification_symbol_date
+  ON short_term_chip_verification(symbol, trade_date, model_version);
 
 CREATE TABLE IF NOT EXISTS research_analysis_history (
   analysis_id VARCHAR(36) PRIMARY KEY,

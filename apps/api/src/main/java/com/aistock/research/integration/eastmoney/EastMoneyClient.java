@@ -439,6 +439,48 @@ public class EastMoneyClient {
         }
     }
 
+    public Map<String, EastMoneyFundFlowSnapshot> fetchFundFlowSnapshots(List<String> symbols) {
+        String url = fundFlowBatchUrl(symbols);
+        if (url == null) {
+            return Map.of();
+        }
+        try {
+            JsonNode diff = fetchQuoteRoot(url).path("data").path("diff");
+            return readFundFlowSnapshots(diff, Instant.now());
+        } catch (Exception exception) {
+            throw new IllegalStateException("东方财富批量资金流数据获取失败", exception);
+        }
+    }
+
+    String fundFlowBatchUrl(List<String> symbols) {
+        List<String> secIds = symbols == null ? List.of() : symbols.stream()
+                .map(this::secId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (secIds.isEmpty()) {
+            return null;
+        }
+        return configured(
+                properties == null ? null : properties.eastmoneyFundFlowUrl(),
+                LiveDataProperties.DEFAULT_EASTMONEY_FUND_FLOW_URL
+        )
+                + "?fltt=2"
+                + "&invt=2"
+                + "&secids=" + encodeQueryValue(String.join(",", secIds))
+                + "&fields=" + encodeQueryValue(FUND_FLOW_FIELDS);
+    }
+
+    Map<String, EastMoneyFundFlowSnapshot> readFundFlowSnapshots(JsonNode diff, Instant fetchedAt) {
+        Map<String, EastMoneyFundFlowSnapshot> snapshots = new LinkedHashMap<>();
+        for (JsonNode item : diffItems(diff)) {
+            readFundFlowSnapshot(item, null, fetchedAt, null)
+                    .filter(this::hasFundFlowValues)
+                    .ifPresent(snapshot -> snapshots.put(snapshot.symbol(), snapshot));
+        }
+        return Map.copyOf(snapshots);
+    }
+
     public List<EastMoneyFundFlowPoint> fetchFundFlowMinutes(String symbol, int limit) {
         String secId = secId(symbol);
         if (secId == null) {
@@ -646,6 +688,57 @@ public class EastMoneyClient {
         return series.rows();
     }
 
+    public List<EastMoneyKLine> enrichDailyKLineTurnover(
+            String symbol,
+            LocalDate begin,
+            LocalDate end,
+            List<EastMoneyKLine> canonicalRows
+    ) {
+        List<EastMoneyKLine> safeRows = canonicalRows == null ? List.of() : canonicalRows;
+        long covered = safeRows.stream().filter(row -> row.turnoverRate() != null).count();
+        if (!safeRows.isEmpty() && covered * 100L >= safeRows.size() * 95L) {
+            return safeRows;
+        }
+        try {
+            EastMoneyKLineFetch supplement = fetchEastMoneyDailyKLines(symbol, begin, end);
+            if (!supplement.complete() || supplement.rows().isEmpty()) {
+                return safeRows;
+            }
+            List<EastMoneyKLine> merged = mergeTurnoverRates(safeRows, supplement.rows());
+            recordKlineHistory(merged, "腾讯前复权日线+东方财富换手率");
+            return merged;
+        } catch (RuntimeException exception) {
+            logger.warn("东方财富换手率补齐失败，保留原 K 线并让筹码模型自行降级：{}", symbol, exception);
+            return safeRows;
+        }
+    }
+
+    static List<EastMoneyKLine> mergeTurnoverRates(
+            List<EastMoneyKLine> canonicalRows,
+            List<EastMoneyKLine> turnoverRows
+    ) {
+        List<EastMoneyKLine> safeCanonical = canonicalRows == null ? List.of() : canonicalRows;
+        List<EastMoneyKLine> safeTurnover = turnoverRows == null ? List.of() : turnoverRows;
+        if (safeCanonical.isEmpty()) {
+            return safeTurnover;
+        }
+        Map<LocalDate, BigDecimal> turnoverByDate = safeTurnover.stream()
+                .filter(row -> row != null && row.tradeDate() != null && row.turnoverRate() != null)
+                .collect(java.util.stream.Collectors.toMap(
+                        EastMoneyKLine::tradeDate,
+                        EastMoneyKLine::turnoverRate,
+                        (left, right) -> right
+                ));
+        return safeCanonical.stream()
+                .map(row -> row == null || row.turnoverRate() != null
+                        ? row
+                        : new EastMoneyKLine(
+                        row.symbol(), row.tradeDate(), row.open(), row.close(), row.high(), row.low(),
+                        row.volume(), row.amount(), turnoverByDate.get(row.tradeDate())
+                ))
+                .toList();
+    }
+
     public EastMoneyKLineSeries fetchDailyKLineSeries(String symbol, LocalDate begin, LocalDate end) {
         TencentKLineFetch tencent = null;
         Exception tencentFailure = null;
@@ -711,7 +804,7 @@ public class EastMoneyClient {
         String url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
                 + "?secid=" + secId
                 + "&fields1=f1,f2,f3,f4,f5,f6"
-                + "&fields2=f51,f52,f53,f54,f55,f56,f57"
+                + "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
                 + "&klt=101"
                 + "&fqt=1"
                 + "&beg=" + dateParam(begin)
@@ -1384,6 +1477,7 @@ public class EastMoneyClient {
         if (symbol == null) {
             return Optional.empty();
         }
+        Instant marketTimestamp = epochSecond(item, "f124");
         return Optional.of(new EastMoneyFundFlowSnapshot(
                 symbol,
                 text(item, "f14"),
@@ -1398,8 +1492,10 @@ public class EastMoneyClient {
                 decimal(item, "f81"),
                 decimal(item, "f87"),
                 "东方财富资金流",
-                sourceUrl,
-                fetchedAt
+                sourceUrl == null ? quoteUrl(symbol) : sourceUrl,
+                fetchedAt,
+                tradeDate(marketTimestamp),
+                marketTimestamp
         ));
     }
 
@@ -1431,6 +1527,7 @@ public class EastMoneyClient {
             return Optional.empty();
         }
         String tradeDate = normalize(fields[0]);
+        LocalDate parsedTradeDate = parseLocalDate(tradeDate);
         return Optional.of(new EastMoneyFundFlowSnapshot(
                 symbol,
                 null,
@@ -1446,8 +1543,18 @@ public class EastMoneyClient {
                 decimal(fields[7]),
                 tradeDate == null ? "东方财富资金流" : "东方财富资金流（日级最近交易日 " + tradeDate + "）",
                 sourceUrl,
-                fetchedAt
+                fetchedAt,
+                parsedTradeDate,
+                null
         ));
+    }
+
+    private LocalDate parseLocalDate(String value) {
+        try {
+            return value == null ? null : LocalDate.parse(value);
+        } catch (RuntimeException exception) {
+            return null;
+        }
     }
 
     private java.util.Optional<EastMoneyKLine> readKLine(String symbol, String rawLine) {
@@ -1467,7 +1574,8 @@ public class EastMoneyClient {
                     decimal(fields[3]),
                     decimal(fields[4]),
                     decimal(fields[5]),
-                    decimal(fields[6])
+                    decimal(fields[6]),
+                    fields.length > 10 ? decimal(fields[10]) : null
             ));
         } catch (Exception exception) {
             return java.util.Optional.empty();

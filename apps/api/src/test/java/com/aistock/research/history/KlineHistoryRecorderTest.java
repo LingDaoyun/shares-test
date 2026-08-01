@@ -58,6 +58,29 @@ class KlineHistoryRecorderTest {
         verify(repository, never()).saveAll(any());
     }
 
+    @Test
+    void persistsTurnoverRateWithArchivedBar() {
+        EastMoneyKLine row = new EastMoneyKLine(
+                "600036",
+                LocalDate.parse("2026-07-10"),
+                new BigDecimal("10.00"),
+                new BigDecimal("10.20"),
+                new BigDecimal("10.40"),
+                new BigDecimal("9.90"),
+                new BigDecimal("100000"),
+                new BigDecimal("1020000"),
+                new BigDecimal("3.42")
+        );
+
+        recorder.record(List.of(row), "东方财富前复权日线");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Iterable<KlineHistoryEntity>> captor = ArgumentCaptor.forClass(Iterable.class);
+        verify(repository).saveAll(captor.capture());
+        KlineHistoryEntity saved = captor.getValue().iterator().next();
+        assertThat(saved.getTurnoverRate()).isEqualByComparingTo("3.42");
+    }
+
     private EastMoneyKLine kline(String close) {
         return new EastMoneyKLine(
                 "600036",

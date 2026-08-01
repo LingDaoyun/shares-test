@@ -68,7 +68,7 @@ class ShortTermScanJobServiceTest {
             assertThat(finished.status()).isEqualTo("SUCCEEDED");
             assertThat(finished.resultStatus()).isEqualTo(
                     com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.DATA_BLOCKED);
-            assertThat(finished.strategyVersion()).isEqualTo("short-term-right-side-v2");
+            assertThat(finished.strategyVersion()).isEqualTo("short-term-right-side-v3-chip-verified");
             assertThat(finished.report()).isSameAs(report);
             assertThat(finished.message()).contains("不可执行");
             verify(shortTermService).report(
