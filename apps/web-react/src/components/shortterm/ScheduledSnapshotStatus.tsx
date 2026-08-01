@@ -11,6 +11,7 @@ interface ScheduledSnapshotStatusProps {
 
 const toneClasses: Record<ShortTermSnapshotStatus, string> = {
   FINAL_READY: 'border-emerald-200 bg-emerald-50/60 text-emerald-900',
+  CACHE_PREVIEW: 'border-sky-200 bg-sky-50/60 text-sky-900',
   PRESELECT_READY: 'border-line bg-white text-ink-800',
   RUNNING: 'border-line bg-white text-ink-800',
   NO_TRADE: 'border-amber-200 bg-amber-50/70 text-amber-900',
@@ -20,7 +21,7 @@ const toneClasses: Record<ShortTermSnapshotStatus, string> = {
 
 export function ScheduledSnapshotStatus({ snapshot, origin }: ScheduledSnapshotStatusProps) {
   const coverage = snapshot.report?.coverage
-  const label = statusLabel(snapshot.status, origin)
+  const label = statusLabel(snapshot, origin)
 
   return (
     <section className={`border px-4 py-3 ${toneClasses[snapshot.status]}`} aria-live="polite">
@@ -74,11 +75,14 @@ function StatusMetric({ label, value, icon }: { label: string; value: string; ic
   )
 }
 
-function statusLabel(status: ShortTermSnapshotStatus, origin: ReportOrigin) {
+function statusLabel(snapshot: ShortTermScheduledSnapshot, origin: ReportOrigin) {
+  const status = snapshot.status
   if (origin === 'MANUAL') {
     switch (status) {
       case 'FINAL_READY':
         return '手动最终结果已就绪'
+      case 'CACHE_PREVIEW':
+        return '手动缓存预览'
       case 'PRESELECT_READY':
         return '手动预选已就绪'
       case 'RUNNING':
@@ -91,9 +95,14 @@ function statusLabel(status: ShortTermSnapshotStatus, origin: ReportOrigin) {
         return '手动扫描失败'
     }
   }
+  if (isWaitingScheduledSnapshot(snapshot)) {
+    return '等待自动扫描'
+  }
   switch (status) {
     case 'FINAL_READY':
       return '14:55 前买入确认已就绪'
+    case 'CACHE_PREVIEW':
+      return '缓存行情预览'
     case 'PRESELECT_READY':
       return '自动预选已就绪'
     case 'RUNNING':
@@ -105,4 +114,8 @@ function statusLabel(status: ShortTermSnapshotStatus, origin: ReportOrigin) {
     case 'FAILED':
       return '自动任务失败'
   }
+}
+
+function isWaitingScheduledSnapshot(snapshot: ShortTermScheduledSnapshot) {
+  return snapshot.status === 'RUNNING' && snapshot.message.trim().startsWith('等待 ')
 }

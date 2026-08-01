@@ -6,12 +6,14 @@ import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import com.aistock.research.quality.RecommendationQuality;
 import com.aistock.research.trading.TradingAdvice;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -40,6 +42,8 @@ public class CycleTrialService {
     private static final int PEER_DISPLAY_LIMIT = 5;
     private static final int MIN_PEER_VALUATION_COUNT = 3;
     private static final int PEER_FETCH_TIMEOUT_SECONDS = 5;
+    private static final Duration DEFAULT_KLINE_SYMBOL_TIMEOUT = Duration.ofSeconds(8);
+    private static final Duration DEFAULT_KLINE_BATCH_TIMEOUT = Duration.ofSeconds(14);
     private static final BigDecimal SIGNIFICANT_DISCOUNT_PERCENT = new BigDecimal("20");
     private static final CycleTrialRuleSet DEFAULT_RULE_SET = new CycleTrialRuleSet(
             new BigDecimal("65"),
@@ -52,9 +56,22 @@ public class CycleTrialService {
     private static final String QUOTE_NOTE = "行情优先使用东方财富，失败或缺失时切换腾讯行情；资金流使用东方财富 push2，接口受盘中风控影响时会降级为缺口证据；周期票的日内信号变化很快，模块会把左侧试仓和右侧追涨分开处理。";
 
     private final EastMoneyClient eastMoneyClient;
+    private final long klineSymbolTimeoutMillis;
+    private final long klineBatchTimeoutMillis;
 
+    @Autowired
     public CycleTrialService(EastMoneyClient eastMoneyClient) {
+        this(eastMoneyClient, DEFAULT_KLINE_SYMBOL_TIMEOUT, DEFAULT_KLINE_BATCH_TIMEOUT);
+    }
+
+    CycleTrialService(
+            EastMoneyClient eastMoneyClient,
+            Duration klineSymbolTimeout,
+            Duration klineBatchTimeout
+    ) {
         this.eastMoneyClient = eastMoneyClient;
+        this.klineSymbolTimeoutMillis = Math.max(1, klineSymbolTimeout == null ? DEFAULT_KLINE_SYMBOL_TIMEOUT.toMillis() : klineSymbolTimeout.toMillis());
+        this.klineBatchTimeoutMillis = Math.max(this.klineSymbolTimeoutMillis, klineBatchTimeout == null ? DEFAULT_KLINE_BATCH_TIMEOUT.toMillis() : klineBatchTimeout.toMillis());
     }
 
     public CycleTrialReport report(
@@ -83,8 +100,7 @@ public class CycleTrialService {
                 .toList();
         List<String> symbols = reviewUniverse.stream().map(CycleSeed::symbol).toList();
         Map<String, CyclePeerValuationSnapshot> peerValuations = peerValuations(reviewUniverse, quotes);
-        Map<String, List<EastMoneyKLine>> klineMap = symbols.parallelStream()
-                .collect(Collectors.toMap(Function.identity(), this::fetchKLines));
+        Map<String, List<EastMoneyKLine>> klineMap = fetchKLineMap(symbols);
         safeLimit = Math.min(safeLimit, reviewUniverse.size());
         List<ScoredSeed> preliminary = reviewUniverse.stream()
                 .filter(seed -> passesRecommendationQuality(quotes.get(seed.symbol()), klineMap.getOrDefault(seed.symbol(), List.of())))
@@ -125,6 +141,7 @@ public class CycleTrialService {
                 QUOTE_NOTE,
                 List.of(
                         "核心资产看长期质量，周期票先看赔率：催化、低位、止损距离、量能验证。",
+                        "周期试仓专门寻找牧原这类基本盘没问题、但利润被猪价/商品价/供需周期暂时压制的股票；先小仓试错，不和长线核心资产混用。",
                         "左侧试仓允许小仓提前介入，但必须有近止损，不能把试仓当成重仓确认。",
                         "右侧启动要求站上关键均线并放量；如果单日涨幅过大，则只允许持仓继续或等回踩。",
                         "所有周期候选必须满足 8000 万以上成交额，并剔除长期横盘震荡且无趋势效率的标的。",
@@ -289,6 +306,11 @@ public class CycleTrialService {
                 || context.snapshot().rangePosition60().compareTo(new BigDecimal("45")) <= 0;
         boolean scoreEnoughForTrial = score.finalScore().compareTo(ruleSet.leftTrialScoreThreshold()) >= 0;
         boolean scoreEnoughForRight = score.finalScore().compareTo(ruleSet.rightAddScoreThreshold()) >= 0;
+        boolean supportBroken = breaksPriorLow(latestPrice, context.previousLow60());
+        boolean leftAsymmetryEnough = score.finalScore().compareTo(ruleSet.leftTrialScoreThreshold().subtract(new BigDecimal("6"))) >= 0
+                && score.priceLocationScore().compareTo(new BigDecimal("78")) >= 0
+                && score.valuationScore().compareTo(new BigDecimal("72")) >= 0;
+        boolean troughLossAsymmetryEnough = troughLossAsymmetryEnough(quote, score, ruleSet);
 
         if (rightStart && chaseRisk) {
             return new ActionDecision(
@@ -299,7 +321,16 @@ public class CycleTrialService {
                     "已经放量站上关键均线，但单日涨幅超过追涨阈值，新开仓不再舒服。"
             );
         }
-        if (seed.catalystScore() <= 50) {
+        if (supportBroken) {
+            return new ActionDecision(
+                    "SUPPORT_REVIEW",
+                    "前低破位",
+                    "SUPPORT_BROKEN",
+                    "破位等待",
+                    "价格已经跌破前一轮周期低点，左侧赔率需要重新定价，先等止跌承接。"
+            );
+        }
+        if (seed.catalystScore() <= 50 && !(nearLow && (leftAsymmetryEnough || troughLossAsymmetryEnough))) {
             return new ActionDecision(
                     "EVIDENCE_REVIEW",
                     "证据待补",
@@ -317,7 +348,7 @@ public class CycleTrialService {
                     "放量站上关键均线且涨幅未触发追高阈值，可以按计划小幅加仓。"
             );
         }
-        if (scoreEnoughForTrial && nearLow && (change == null || change.compareTo(ruleSet.maxChaseRisePercent()) < 0)) {
+        if ((scoreEnoughForTrial || leftAsymmetryEnough || troughLossAsymmetryEnough) && nearLow && (change == null || change.compareTo(ruleSet.maxChaseRisePercent()) < 0)) {
             return new ActionDecision(
                     "LEFT_TRIAL",
                     "左侧试仓",
@@ -344,6 +375,22 @@ public class CycleTrialService {
         );
     }
 
+    private boolean troughLossAsymmetryEnough(EastMoneyQuote quote, CycleTrialScoreBreakdown score, CycleTrialRuleSet ruleSet) {
+        if (quote == null || score == null) {
+            return false;
+        }
+        BigDecimal pe = firstPresent(quote.peTtm(), quote.peRatio());
+        BigDecimal pb = quote.pbRatio();
+        return pe != null
+                && pe.compareTo(BigDecimal.ZERO) <= 0
+                && pb != null
+                && pb.compareTo(BigDecimal.ZERO) > 0
+                && pb.compareTo(new BigDecimal("3.50")) <= 0
+                && score.finalScore().compareTo(ruleSet.leftTrialScoreThreshold().subtract(new BigDecimal("10"))) >= 0
+                && score.priceLocationScore().compareTo(new BigDecimal("80")) >= 0
+                && score.reversalScore().compareTo(new BigDecimal("55")) >= 0;
+    }
+
     private TradingAdvice todayAdvice(
             CycleSeed seed,
             EastMoneyQuote quote,
@@ -361,20 +408,22 @@ public class CycleTrialService {
             List<String> reasons = new ArrayList<>(List.of(
                     "周期催化分 " + score.catalystScore() + "，价格位置分 " + score.priceLocationScore() + "。",
                     "当前价 " + priceText + "，涨跌幅 " + changeText + "，尚未触发追涨阈值 " + ruleSet.maxChaseRisePercent() + "%。",
+                    "周期假设尚未完全兑现，但低位赔率和估值语境允许先用小仓换入场资格。",
                     seed.catalysts().get(0)
             ));
             addFundFlowReason(reasons, fundFlow);
             addPeerValuationReason(reasons, peerValuation);
             return new TradingAdvice(
-                    "ADD",
-                    "试仓",
+                    "LIGHT_TRIAL",
+                    "左侧试仓",
                     70,
-                    "适合左侧小仓试，不适合重仓确认。",
+                    "适合左侧小仓试，不适合重仓确认；这不是加仓信号。",
                     reasons,
                     List.of(
-                            "单票只用计划仓位的 10%-20%",
-                            "跌破试仓止损价必须退出，不补成重仓",
-                            "右侧确认后再考虑第二笔"
+                            "首笔只用计划仓位的 10%-15%，先换观察权，不抢重仓确定性",
+                            "若继续跌入更低估值区且产品价格/库存没有恶化，第二笔也只做计划仓位的 15%-25%",
+                            "周期证伪、跌破试仓止损价或现金流继续恶化时退出，不补成重仓",
+                            "右侧确认后再考虑第二笔或第三笔，不在左侧连续追买"
                     )
             );
         }
@@ -433,6 +482,26 @@ public class CycleTrialService {
                     List.of("等待更近的止损位", "等待量能或价格突破确认")
             );
         }
+        if ("SUPPORT_BROKEN".equals(decision.action())) {
+            List<String> reasons = new ArrayList<>(List.of(
+                    decision.reason(),
+                    "当前价 " + priceText + " 已低于前低防线，不能把破位等同于便宜。"
+            ));
+            addFundFlowReason(reasons, fundFlow);
+            addPeerValuationReason(reasons, peerValuation);
+            return new TradingAdvice(
+                    "WAIT",
+                    "破位等待",
+                    54,
+                    "左侧逻辑仍可跟踪，但前低被有效跌破前不追加试仓。",
+                    reasons,
+                    List.of(
+                            "等待重新站回前低或至少 2-3 日缩量企稳",
+                            "跌破前低后不要连续补仓",
+                            "重新核验产品价格、毛利率和现金流是否继续恶化"
+                    )
+            );
+        }
         List<String> reasons = new ArrayList<>(List.of(decision.reason()));
         addFundFlowReason(reasons, fundFlow);
         addPeerValuationReason(reasons, peerValuation);
@@ -451,6 +520,8 @@ public class CycleTrialService {
             return List.of(
                     "只能用计划仓位 10%-20% 试仓",
                     "价格接近 20/60 日低位，且止损距离小于 " + ruleSet.stopLossPercent() + "%",
+                    "必须复核产品价格、库存、产能和供需数据，确认周期底部不是单日情绪",
+                    "毛利率和经营现金流需要至少不再继续恶化，利润弹性才有传导基础",
                     "基本面催化必须能解释价格反弹，而不是只看分时拉升",
                     "右侧确认前不追加第二笔"
             );
@@ -470,7 +541,7 @@ public class CycleTrialService {
         return List.of(
                 "试仓后跌破止损价或继续弱于板块，退出而不是补仓",
                 "放量冲高回落并跌回 20 日线，降低仓位",
-                "周期品价格或公司月度/季度数据证伪，退出",
+                "产品价格、毛利率、经营现金流或公司月度/季度数据证伪，退出",
                 "单日急拉后次日高开滞涨，可分批兑现"
         );
     }
@@ -533,14 +604,14 @@ public class CycleTrialService {
 
     private TechnicalContext technicalContext(EastMoneyQuote quote, List<EastMoneyKLine> klines) {
         if (klines == null || klines.isEmpty()) {
-            return new TechnicalContext(new CycleTechnicalSnapshot(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null), null, null, false);
+            return new TechnicalContext(new CycleTechnicalSnapshot(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null), null, null, false, null);
         }
         List<EastMoneyKLine> sorted = klines.stream()
                 .filter(kline -> kline.close() != null)
                 .sorted(Comparator.comparing(EastMoneyKLine::tradeDate))
                 .toList();
         if (sorted.isEmpty()) {
-            return new TechnicalContext(new CycleTechnicalSnapshot(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null), null, null, false);
+            return new TechnicalContext(new CycleTechnicalSnapshot(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null), null, null, false, null);
         }
         EastMoneyKLine last = sorted.get(sorted.size() - 1);
         EastMoneyKLine previous = sorted.size() >= 2 ? sorted.get(sorted.size() - 2) : null;
@@ -550,6 +621,7 @@ public class CycleTrialService {
         BigDecimal ma20 = movingAverage(sorted, 20);
         BigDecimal ma60 = movingAverage(sorted, 60);
         List<EastMoneyKLine> previousRows = sorted.size() >= 2 ? sorted.subList(0, sorted.size() - 1) : sorted;
+        BigDecimal previousLow60 = low(previousRows, 60);
         BigDecimal previousHigh20 = high(previousRows, 20);
         BigDecimal previousHigh60 = high(previousRows, 60);
         BigDecimal low20 = low(sorted, 20);
@@ -579,7 +651,15 @@ public class CycleTrialService {
                 scale(distanceToMa20)
         );
         boolean higherThanPrevious = previous != null && price.compareTo(previous.close()) > 0;
-        return new TechnicalContext(snapshot, last, previous, higherThanPrevious);
+        return new TechnicalContext(snapshot, last, previous, higherThanPrevious, previousLow60);
+    }
+
+    private boolean breaksPriorLow(BigDecimal latestPrice, BigDecimal previousLow60) {
+        if (latestPrice == null || previousLow60 == null || previousLow60.compareTo(BigDecimal.ZERO) <= 0) {
+            return false;
+        }
+        BigDecimal tolerance = previousLow60.multiply(new BigDecimal("0.985"));
+        return latestPrice.compareTo(tolerance) < 0;
     }
 
     private BigDecimal priceLocationScore(CycleTechnicalSnapshot snapshot) {
@@ -1004,6 +1084,51 @@ public class CycleTrialService {
         return mergeQuotes(primaryQuotes, fallbackQuotes);
     }
 
+    private Map<String, List<EastMoneyKLine>> fetchKLineMap(List<String> symbols) {
+        if (symbols == null || symbols.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, CompletableFuture<List<EastMoneyKLine>>> futures = new LinkedHashMap<>();
+        for (String symbol : symbols) {
+            CompletableFuture<List<EastMoneyKLine>> future = CompletableFuture
+                    .supplyAsync(() -> fetchKLines(symbol))
+                    .completeOnTimeout(List.of(), klineSymbolTimeoutMillis, TimeUnit.MILLISECONDS)
+                    .exceptionally(exception -> {
+                        logger.warn("周期试仓池 K 线获取异常：{}，本次视为数据不足。原因：{}", symbol, rootMessage(exception));
+                        return List.of();
+                    });
+            futures.put(symbol, future);
+        }
+        CompletableFuture<Void> allFutures = CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0]));
+        try {
+            allFutures.get(klineBatchTimeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException exception) {
+            logger.warn(
+                    "周期试仓池 K 线批量获取超过 {} 秒预算，未完成股票本次视为数据不足。",
+                    BigDecimal.valueOf(klineBatchTimeoutMillis).divide(new BigDecimal("1000"), 1, RoundingMode.HALF_UP)
+            );
+        } catch (Exception exception) {
+            logger.warn("周期试仓池 K 线批量获取异常，未完成股票本次视为数据不足。原因：{}", rootMessage(exception));
+        }
+
+        Map<String, List<EastMoneyKLine>> result = new LinkedHashMap<>();
+        for (Map.Entry<String, CompletableFuture<List<EastMoneyKLine>>> entry : futures.entrySet()) {
+            CompletableFuture<List<EastMoneyKLine>> future = entry.getValue();
+            if (!future.isDone()) {
+                future.cancel(true);
+                result.put(entry.getKey(), List.of());
+                continue;
+            }
+            try {
+                result.put(entry.getKey(), future.getNow(List.of()));
+            } catch (RuntimeException exception) {
+                logger.warn("周期试仓池 K 线结果读取失败：{}，本次视为数据不足。原因：{}", entry.getKey(), rootMessage(exception));
+                result.put(entry.getKey(), List.of());
+            }
+        }
+        return result;
+    }
+
     private List<EastMoneyKLine> fetchKLines(String symbol) {
         try {
             LocalDate end = LocalDate.now();
@@ -1012,6 +1137,18 @@ public class CycleTrialService {
             logger.warn("周期试仓池 K 线获取失败：{}，原因：{}", symbol, exception.getMessage());
             return List.of();
         }
+    }
+
+    private String rootMessage(Throwable throwable) {
+        Throwable cursor = throwable;
+        while (cursor.getCause() != null) {
+            cursor = cursor.getCause();
+        }
+        String message = cursor.getMessage();
+        if (message == null || message.isBlank()) {
+            message = throwable.getMessage();
+        }
+        return message == null || message.isBlank() ? "未知错误" : message;
     }
 
     private Map<String, EastMoneyFundFlowSnapshot> fetchFundFlows(List<String> symbols) {
@@ -1349,7 +1486,8 @@ public class CycleTrialService {
             CycleTechnicalSnapshot snapshot,
             EastMoneyKLine last,
             EastMoneyKLine previous,
-            boolean higherThanPrevious
+            boolean higherThanPrevious,
+            BigDecimal previousLow60
     ) {
     }
 

@@ -26,6 +26,7 @@ const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'n
   RIGHT_START_WAIT_PULLBACK: 'warning',
   WATCH_CONFIRM: 'neutral',
   DATA_REVIEW: 'neutral',
+  SUPPORT_BROKEN: 'danger',
   AVOID: 'danger'
 }
 
@@ -106,7 +107,7 @@ export function CycleTrialPage() {
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
           <p className="text-xs leading-relaxed text-ink-500">
-            左侧只允许试仓；右侧只有放量站上关键位且未触发追涨上限，才允许加第二笔。
+            专门寻找牧原这类基本盘尚可但被行业周期压住的股票；左侧只允许试仓，右侧确认后才考虑第二笔。
           </p>
           <Button variant="secondary" onClick={() => setParams({ ...draft })}>应用阈值</Button>
         </div>
@@ -376,7 +377,9 @@ function TodayAdvicePanel({ advice }: { advice: CycleTrialCandidate['todayAdvice
 
 function adviceTone(action: string): 'success' | 'brand' | 'warning' | 'danger' | 'neutral' {
   if (action === 'ADD') return 'success'
+  if (action === 'LIGHT_TRIAL') return 'brand'
   if (action === 'HOLD') return 'brand'
+  if (action === 'WAIT_PULLBACK') return 'warning'
   if (action === 'BATCH_SELL') return 'warning'
   if (action === 'SELL_ALL') return 'danger'
   return 'neutral'

@@ -1,84 +1,187 @@
-# Task 4 Report: V2 Recommendation Ledger
+# Task 4 Implementation Report
 
-## Scope Delivered
+## Status
 
-- Appended the `v2_recommendation_ledger` table and the required symbol/time and strategy/time indexes to `apps/api/src/main/resources/schema.sql`.
-- Added `V2RecommendationLedgerEntity` with the required JPA field mappings and immutable read accessors.
-- Added `V2RecommendationLedgerRepository` with fingerprint lookup and deterministic latest-by-symbol lookup.
-- Added `V2RecommendationLedgerService`:
-  - serializes the complete `StrategySignal`, including its canonical replay payload;
-  - derives a SHA-256 recommendation fingerprint from strategy, version, symbol, decision time, and payload;
-  - reuses an existing record for the same fingerprint;
-  - derives a stable ledger id and persists the normalized ledger columns;
-  - returns the latest decision per symbol ordered by decision time and ledger id.
-- Added focused integration coverage for idempotent recording, replay-payload persistence, fingerprint length, and latest-decision lookup.
+DONE
+
+## Summary
+
+- Added `ShortTermCoverageSnapshot` and report metadata for exact market coverage, actual reviewed symbols, and point-in-time data cutoff.
+- Added `report(ShortTermScanRequest)` and `finalReport(ShortTermScanRequest, Set<String>)` over one shared report pipeline.
+- Final refresh still loads full-market quotes for coverage, sentiment, and hot directions, while K-line and financial review are restricted to the preselected set.
+- Replaced executable `14:57-15:00` semantics with the half-open `14:45-14:57` window.
+- Added a decision-time fence so cached future minute bars cannot enter scoring.
+- Preserved report metadata when the recommendation attestation layer adds capture tokens.
+- Kept old report constructors and old stored JSON explicitly coverage-unreliable.
 
 ## TDD Evidence
 
-1. Added `V2RecommendationLedgerServiceTest` before production code.
-2. Ran `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test` and observed the expected red failure: the three ledger production classes and repository were unresolved.
-3. Implemented only the schema/entity/repository/service specified in the task brief.
-4. Re-ran the focused test after implementation. It passed with 2 tests, 0 failures, 0 errors, and 0 skipped.
+RED:
 
-## Review And Verification
+```text
+mvn -pl apps/api -Dtest=ShortTermServiceTest test
+14 compilation failures for missing finalReport, coverage, reviewedSymbols,
+dataCutoffAt, and renamed tail fields.
+```
 
-- Reviewed the final scoped diff against the task brief.
-- Ran `git diff --check` successfully.
-- Re-ran `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test` successfully: 2 tests passed.
+```text
+mvn -pl apps/api -Dtest=RecommendationAttestationServiceTest#preservesShortTermCoverageAndCutoffWhenAddingAttestations test
+1 failure: attestation downgraded coverage to explicitly unreliable.
+```
 
-## Scope Protection
+```text
+mvn -pl apps/api -Dtest=ShortTermServiceTest#actionableTailNeverUsesMinuteAfterDecisionTime test
+1 failure: 14:50 decision incorrectly used the cached 14:52 minute.
+```
 
-- Did not modify the pre-existing user change in `docs/superpowers/plans/2026-07-10-soft-valuation-context-p01.md`.
-- No files outside the task-brief list were changed except this required task report.
+GREEN:
+
+```text
+mvn -pl apps/api -Dtest=ShortTermServiceTest,ShortTermGoldenCrossAnalyzerTest,ShortTermScanJobServiceTest,TradingClockServiceTest,RecommendationAttestationServiceTest test
+Tests run: 74, Failures: 0, Errors: 0, Skipped: 0
+```
+
+The same 74-test suite also passed from a detached clean worktree at commit `76c2681`.
+
+```text
+git diff --check
+PASS
+```
+
+## Scope
+
+No scheduler/orchestration, endpoint/frontend presentation, or trade-review behavior was implemented in this task.
 
 ## Concerns
 
 None.
 
-## Re-Review Fix: Canonical Ledger Payload JSON
+## Review Fix: Full-Market Coverage And Quote Point-In-Time
 
-- Configured the ledger serializer with deterministic object-property and map-entry ordering before deriving `payload_json` and the recommendation fingerprint.
-- Added a regression test that records two semantically identical signals whose `context` and replay-payload maps have opposite insertion orders; both return one ledger id and persist one row.
-- Strengthened replay-payload verification by parsing `payload_json` with `ObjectMapper` and asserting distinct `context` and `replayPayload` values, plus `sourceQuality` and `signalProvenance`.
+Commit: `ed50255 fix: enforce short-term final market coverage`
 
-## Re-Review Fix Verification
+### Changes
 
-- The new map-order regression failed before the serialization fix because the two recordings generated different ledger ids.
-- `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test` passed after the fix: 4 tests, 0 failures, 0 errors, 0 skipped.
-- `git diff --check` passed with no trailing-whitespace errors.
+- `finalReport` now requests the source-reported full A-share universe independently of the manual `scanLimit`.
+- `AshareQuoteSnapshot.expectedCount` now retains the source-reported universe total. A 100-row request against a reported 5000-row universe remains `100/5000`, incomplete, and execution-unreliable.
+- Missing or inconsistent source totals produce an unknown expected universe and can never become execution-reliable.
+- Remote row caps continue pagination with symbol deduplication; final execution also requires the source snapshot to be complete, so 90% is necessary but not sufficient.
+- Final reports deduplicate quotes and require a real market timestamp on the decision market date at or before `decisionAt` before any prefilter, sentiment, hot-direction, scoring, or expensive review step.
+- Missing, future, and cross-date market timestamps block execution reliability.
+- `fetchedAt` remains provenance only. `dataCutoffAt` is derived from eligible market timestamps and actionable minute evidence, never from fetch time.
+- Manual reports retain their explicit `scanLimit` research behavior, while their coverage metadata cannot claim full-market execution reliability unless the full reported universe was actually requested.
 
-## Review Fix: Concurrent Ledger Recording
+### Review TDD Evidence
 
-- Changed `V2RecommendationLedgerService.record` to perform creation in a `REQUIRES_NEW` transaction with `saveAndFlush`.
-- When the database rejects a duplicate ledger fingerprint/identifier, the service now re-reads and returns the committed ledger entry instead of surfacing the race failure.
-- Added an eight-caller `CountDownLatch` concurrency test. Every future completes with the same ledger id and the repository retains exactly one row.
-- Extended replay-payload assertions to cover the canonical Task 1 context value (`valuation=pb-percentile`), `sourceQuality=VERIFIED`, and `signalProvenance=RULE_ENGINE`.
+RED:
 
-## Review Fix Verification
+```text
+ShortTermServiceTest
+Tests run: 50, Failures: 3
+- final report requested 100 instead of the full reported universe
+- 14:52 quote entered a 14:50 final report
+- missing market timestamp entered review and cutoff
 
-- The new concurrent test failed against the pre-fix service with the expected `DataIntegrityViolationException` from the unique ledger key.
-- After the isolated-insert recovery fix, `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test` passed: 3 tests, 0 failures, 0 errors, 0 skipped.
-- `git diff --check` passed.
+EastMoneyClientTest#snapshotKeepsSourceReportedUniverseWhenRequestIsOnlyASample
+expected expectedCount 5000 but was 100
+```
 
-## Review Fix: Suppress Expected Same-Instance Race Noise
+GREEN:
 
-- Added a ref-counted per-fingerprint `ReentrantLock` in `V2RecommendationLedgerService` around the existing create transaction, so concurrent callers in the same service instance re-check and create one ledger serially.
-- Kept the `DataIntegrityViolationException` lookup recovery and database unique constraint as cross-process safety nets.
-- Preserved the eight-caller concurrency test assertions: all callers return one ledger id and `repository.count()` remains 1.
+```text
+Current worktree focused suite:
+Tests run: 95, Failures: 0, Errors: 0, Skipped: 0
 
-## Review Fix Verification
+Detached clean worktree containing only the focused commit:
+Tests run: 95, Failures: 0, Errors: 0, Skipped: 0
 
-- Ran `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test`: 3 tests passed, 0 failures, 0 errors, 0 skipped; output contained no SQL unique-key, constraint, duplicate, or integrity-violation diagnostics.
-- Ran `git diff --check` successfully.
-- The only remaining warning is the existing Nacos notice that `ai-stock-api-local.yml` is empty.
+git diff --cached --check
+PASS
+```
 
-## Review Fix: Canonical Numeric Fingerprinting
+The focused suite included `ShortTermServiceTest`, `ShortTermGoldenCrossAnalyzerTest`,
+`ShortTermScanJobServiceTest`, `TradingClockServiceTest`,
+`RecommendationAttestationServiceTest`, and `EastMoneyClientTest`.
 
-- Canonicalized every `BigDecimal` in the serialized signal payload tree recursively by removing insignificant trailing zeros and emitting a deterministic plain decimal representation.
-- Applied the persisted ledger scales to the top-level signal values before fingerprinting: `rankScore`, `dataConfidence`, `historicalHitRate`, and `riskReward` use scale 2; optional `positionLimit` uses scale 4.
-- Added a regression that records two signals differing only by BigDecimal lexical scale, including a nested replay-payload decimal. Both calls return the same ledger id, persist one row, and retain identical deterministic `payload_json`.
+## Final Review Fix: Per-Page Universe Metadata
 
-## Final Verification
+Commit: `4ec477e fix: reject inconsistent quote page totals`
 
-- `mvn -pl apps/api -Dtest=V2RecommendationLedgerServiceTest test` passed: 5 tests, 0 failures, 0 errors, 0 skipped.
-- `git diff --check` passed with no whitespace errors.
+### Exact Pagination Rule
+
+- The first non-empty page must provide a positive `totalCount`; that value becomes the authoritative source universe.
+- Every later non-empty page must also provide a positive `totalCount` equal to the first authoritative value.
+- A non-empty page with zero, negative, missing, or inconsistent `totalCount` permanently invalidates metadata consistency. The snapshot then exposes `expectedCount=0`, `complete=false`, and cannot become execution-reliable even if the unique quote count reaches the first reported total.
+- An empty page is treated as the provider's normal page-after-end sentinel. Its `totalCount` is not authoritative and is not required. If it arrives before the authoritative universe is fully fetched, the original expected count is retained but `complete=false` because rows are missing.
+
+### TDD Evidence
+
+RED:
+
+```text
+EastMoneyClientTest focused pagination cases:
+Tests run: 3, Failures: 1
+
+snapshotRejectsZeroReportedTotalOnLaterNonEmptyPage
+expected expectedCount 0 but was 2
+```
+
+GREEN:
+
+```text
+EastMoneyClientTest:
+Tests run: 17, Failures: 0, Errors: 0, Skipped: 0
+
+Task 4 focused suite, current worktree:
+Tests run: 97, Failures: 0, Errors: 0, Skipped: 0
+
+Task 4 focused suite, detached clean worktree:
+Tests run: 97, Failures: 0, Errors: 0, Skipped: 0
+
+git diff --check
+PASS
+```
+
+No Task 5 scheduler/persistence orchestration, frontend, or trade-review code was changed.
+
+## Final Point-In-Time Fix: Manual And Final Reports
+
+Commit: `1fa0158 fix: enforce manual quote point-in-time fence`
+
+### Changes
+
+- Manual `report` and `finalReport` now enter the same point-in-time quote universe before prefiltering, market sentiment, hot-direction aggregation, K-line selection, financial review, candidate scoring, and ranking.
+- A quote can enter analysis only when it has a real `marketTimestamp`, the timestamp belongs to the decision market date, and it is not later than authoritative `decisionAt`.
+- Missing, future, and cross-date quotes remain visible only through reduced coverage/missing-row metadata. They cannot become research candidates or change valid candidates' scores.
+- Coverage below the execution threshold still forces `MARKET_RISK_WAIT` and a `WAIT` daily action.
+- Existing minute-fence and closed-market tests now use quote timestamps that are valid for their own decision date/time; their original behavioral assertions remain unchanged.
+- Full-market `finalReport` request and completeness semantics from the earlier review fixes are unchanged.
+
+### TDD Evidence
+
+RED:
+
+```text
+ShortTermServiceTest manual point-in-time cases:
+Tests run: 2, Failures: 2
+
+Adding a future or missing-timestamp robot quote changed:
+- hot-direction sample count from 1 to 2
+- robot heat score from 68.95 to 95.56
+- leaders and weighted market evidence
+```
+
+GREEN:
+
+```text
+Task 4 focused suite, current worktree:
+Tests run: 99, Failures: 0, Errors: 0, Skipped: 0
+
+Task 4 focused suite, detached clean worktree:
+Tests run: 99, Failures: 0, Errors: 0, Skipped: 0
+
+git diff --check
+PASS
+```
+
+No Task 5 scheduler/persistence orchestration, frontend, or trade-review code was changed.

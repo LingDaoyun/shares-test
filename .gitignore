@@ -10,6 +10,7 @@ target/
 # Node
 node_modules/
 dist/
+tmp/
 .vite/
 *.tsbuildinfo
 

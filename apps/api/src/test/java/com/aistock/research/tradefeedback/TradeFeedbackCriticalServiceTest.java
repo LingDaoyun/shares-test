@@ -33,12 +33,14 @@ class TradeFeedbackCriticalServiceTest {
     private final TradeCaseRepository cases = mock(TradeCaseRepository.class);
     private final TradeFillRepository fills = mock(TradeFillRepository.class);
     private final TradeFillRevisionRepository revisions = mock(TradeFillRevisionRepository.class);
+    private final TradeOutcomeRepository outcomes = mock(TradeOutcomeRepository.class);
     private final RecommendationAttestationService attestations = mock(RecommendationAttestationService.class);
     private final PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
     private final TradeFeedbackService service = new TradeFeedbackService(
             cases,
             fills,
             revisions,
+            outcomes,
             new TradeFillProjector(),
             attestations,
             new TradeLedgerCalculator(),

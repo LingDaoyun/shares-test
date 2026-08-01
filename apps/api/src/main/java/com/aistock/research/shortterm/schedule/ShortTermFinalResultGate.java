@@ -33,6 +33,16 @@ public class ShortTermFinalResultGate {
 
     public Result evaluateManual(ShortTermReport report, Instant decisionCompletedAt) {
         LocalDate tradeDate = tradingClock.currentMarketDate();
+        if (isClosedMarketCachePreview(tradeDate, report, decisionCompletedAt)) {
+            String message = report.candidates() == null || report.candidates().isEmpty()
+                    ? "缓存行情预览已完成，当前无合格候选；休市数据不作为今日买点"
+                    : "缓存行情预览已完成，已生成策略候选；休市数据不作为今日买点";
+            return new Result(
+                    ShortTermSnapshotStatus.CACHE_PREVIEW,
+                    message,
+                    List.of("STATIC_CACHE_PREVIEW")
+            );
+        }
         Optional<Failure> failure = validate(
                 tradeDate, report, decisionCompletedAt, decisionCompletedAt, false, true);
         if (failure.isPresent()) {
@@ -133,6 +143,31 @@ public class ShortTermFinalResultGate {
             return Optional.of(new Failure("QUOTE_STALE", "尾盘行情已经过期"));
         }
         return Optional.empty();
+    }
+
+    private boolean isClosedMarketCachePreview(
+            LocalDate tradeDate,
+            ShortTermReport report,
+            Instant decisionCompletedAt
+    ) {
+        if (tradeDate == null || report == null || decisionCompletedAt == null
+                || !marketDate(decisionCompletedAt).equals(tradeDate)
+                || !tradingClock.isMarketClosedDay(tradeDate)) {
+            return false;
+        }
+        ShortTermCoverageSnapshot coverage = report.coverage();
+        if (coverage == null || !coverage.executionReliable()
+                || coverage.coverageRatio() == null
+                || coverage.coverageRatio().compareTo(MINIMUM_COVERAGE) < 0
+                || coverage.fetchedAt() == null
+                || coverage.fetchedAt().isAfter(decisionCompletedAt)) {
+            return false;
+        }
+        if (Duration.between(coverage.fetchedAt(), decisionCompletedAt).compareTo(settings.freshness()) > 0) {
+            return false;
+        }
+        Instant cutoff = report.dataCutoffAt();
+        return cutoff != null && !cutoff.isAfter(decisionCompletedAt);
     }
 
     private LocalDate marketDate(Instant instant) {

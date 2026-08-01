@@ -81,15 +81,17 @@ describe('MarketScanPage long-term assessment', () => {
     expect(text).toContain('季度轻审计')
   })
 
-  it('defaults long-term value scanning to eight candidates', async () => {
+  it('defaults long-term value scanning to twelve quality undervaluation candidates', async () => {
     await act(async () => {
       root.render(<MarketScanPage />)
       await Promise.resolve()
       await Promise.resolve()
     })
 
-    expect(mockedFetchMarketScanReport).toHaveBeenCalledWith(expect.objectContaining({ limit: 8 }))
-    expect(document.body.textContent).toContain('默认输出八只候选')
+    expect(mockedFetchMarketScanReport).toHaveBeenCalledWith(expect.objectContaining({ limit: 12 }))
+    expect(document.body.textContent).toContain('默认输出十二只候选')
+    expect(document.body.textContent).toContain('低估且基本面较好的股票')
+    expect(document.body.textContent).not.toContain('排除样本')
   })
 
   it('loads industry policy and cycle context when a candidate is opened', async () => {

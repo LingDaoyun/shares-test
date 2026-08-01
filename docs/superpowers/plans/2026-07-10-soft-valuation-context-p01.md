@@ -39,7 +39,7 @@
 - Produces: `ValuationContext.score(): BigDecimal`, `state(): ValuationContextState`, and `applicableModel(): ValuationModel` for Tasks 2-4.
 - Does not fetch data and has no Spring dependency.
 
-- [ ] **Step 1: Write the failing calculator tests**
+- [x] **Step 1: Write the failing calculator tests**
 
 ```java
 package com.aistock.research.valuation;
@@ -96,13 +96,13 @@ class ValuationContextCalculatorTest {
 }
 ```
 
-- [ ] **Step 2: Run the tests and observe RED**
+- [x] **Step 2: Run the tests and observe RED**
 
 Run: `mvn -pl apps/api -Dtest=ValuationContextCalculatorTest test`
 
 Expected: test compilation fails because the four valuation-context types do not exist.
 
-- [ ] **Step 3: Add the enums and immutable response contract**
+- [x] **Step 3: Add the enums and immutable response contract**
 
 ```java
 package com.aistock.research.valuation;
@@ -150,7 +150,7 @@ public record ValuationContext(
 }
 ```
 
-- [ ] **Step 4: Implement deterministic soft-band scoring**
+- [x] **Step 4: Implement deterministic soft-band scoring**
 
 Create `ValuationContextCalculator` with these exact public semantics:
 
@@ -304,7 +304,7 @@ public final class ValuationContextCalculator {
 }
 ```
 
-- [ ] **Step 5: Run the focused tests and observe GREEN**
+- [x] **Step 5: Run the focused tests and observe GREEN**
 
 Run: `mvn -pl apps/api -Dtest=ValuationContextCalculatorTest test`
 
@@ -323,7 +323,7 @@ Expected: `Tests run: 3, Failures: 0, Errors: 0`.
 - Produces: `UniversalScreenCandidate.valuationContext(): ValuationContext` for the market adapter.
 - Preserves: `UniversalScreenRequest.maxPe/maxPb` and `UniversalScreenRuleSet.maxPe/maxPb` as reference bands.
 
-- [ ] **Step 1: Replace the old positive-PE eligibility regression with soft-context tests**
+- [x] **Step 1: Replace the old positive-PE eligibility regression with soft-context tests**
 
 Replace `valueModeRequiresPositiveProfitProxyButKeepsSidewaysCompaniesForResearch` and add the reference-band regression:
 
@@ -383,13 +383,13 @@ void qualityProxyDoesNotDoubleCountPeAndPb() {
 
 Add imports for `ValuationContextState` and `ValuationModel`.
 
-- [ ] **Step 2: Run the focused universal tests and observe RED**
+- [x] **Step 2: Run the focused universal tests and observe RED**
 
 Run: `mvn -pl apps/api -Dtest=UniversalAshareScreenerTest test`
 
 Expected: the negative-PE stock is excluded by `MODE_ELIGIBILITY`, context accessors do not exist, and the quality scores differ.
 
-- [ ] **Step 3: Preserve signed valuation values during quote merge**
+- [x] **Step 3: Preserve signed valuation values during quote merge**
 
 In `mergeQuote`, use a varargs first-non-null helper for valuation fields:
 
@@ -412,7 +412,7 @@ private BigDecimal firstNonNull(BigDecimal... values) {
 
 Keep `firstPositive` for price and amount only.
 
-- [ ] **Step 4: Add `ValuationContext` to `UniversalScreenCandidate` and reranking**
+- [x] **Step 4: Add `ValuationContext` to `UniversalScreenCandidate` and reranking**
 
 Insert this field after `amount`:
 
@@ -422,7 +422,7 @@ ValuationContext valuationContext,
 
 Import `com.aistock.research.valuation.ValuationContext` and copy the field in `rerank`.
 
-- [ ] **Step 5: Remove positive PE from VALUE eligibility**
+- [x] **Step 5: Remove positive PE from VALUE eligibility**
 
 Change the enum declaration to:
 
@@ -440,7 +440,7 @@ public enum UniversalScreenMode {
 
 Delete `positiveProfitProxyRequired()` and remove the `profitProblem` call from `modeEligibilityProblem`. Keep cycle-industry, liquidity and sideways behavior unchanged.
 
-- [ ] **Step 6: Calculate valuation once and stop double counting it**
+- [x] **Step 6: Calculate valuation once and stop double counting it**
 
 Add a field:
 
@@ -488,7 +488,7 @@ private BigDecimal riskScore(EastMoneyQuote quote) {
 }
 ```
 
-- [ ] **Step 7: Make VALUE decisions context-aware without a valuation cliff**
+- [x] **Step 7: Make VALUE decisions context-aware without a valuation cliff**
 
 Before score-based VALUE decisions, add:
 
@@ -519,7 +519,7 @@ Update the VALUE quote note to:
 长线价值模式使用实时行情复核，PE/PB 仅作软估值语境；负 PE 可进入周期或反转研究，买入前仍需点时财务和风险证据。
 ```
 
-- [ ] **Step 8: Run focused tests and observe GREEN**
+- [x] **Step 8: Run focused tests and observe GREEN**
 
 Run: `mvn -pl apps/api -Dtest=ValuationContextCalculatorTest,UniversalAshareScreenerTest test`
 
@@ -539,7 +539,7 @@ Expected: all calculator and universal-screen tests pass.
 - Produces: `ShortTermCandidate.valuationContext(): ValuationContext`.
 - Produces: `ShortTermReport.weightProfile(): ShortTermWeightProfile` for transparent UI display.
 
-- [ ] **Step 1: Write the failing extreme-valuation and weight tests**
+- [x] **Step 1: Write the failing extreme-valuation and weight tests**
 
 ```java
 @Test
@@ -577,13 +577,13 @@ void shouldExposeApprovedSoftValuationWeights() {
 
 Add the `ValuationContextState` import.
 
-- [ ] **Step 2: Run the tests and observe RED**
+- [x] **Step 2: Run the tests and observe RED**
 
 Run: `mvn -pl apps/api -Dtest=ShortTermServiceTest#shouldKeepHotRightSideCandidateEvenWhenPeAndPbExceedOldExtremeGate+shouldExposeApprovedSoftValuationWeights test`
 
 Expected: `600020` is excluded as `VALUATION_EXTREME`, and the new accessors do not exist.
 
-- [ ] **Step 3: Add the immutable weight profile**
+- [x] **Step 3: Add the immutable weight profile**
 
 ```java
 package com.aistock.research.shortterm;
@@ -622,7 +622,7 @@ private static final ShortTermWeightProfile WEIGHT_PROFILE = new ShortTermWeight
 
 Add `ShortTermWeightProfile weightProfile` after `ruleSet` in `ShortTermReport` and pass `WEIGHT_PROFILE` from `report(...)`.
 
-- [ ] **Step 4: Attach valuation context to every short-term candidate**
+- [x] **Step 4: Attach valuation context to every short-term candidate**
 
 Add `ValuationContext valuationContext` after `amount` in `ShortTermCandidate` and copy it in `enrichTailSignal` and `rerank`.
 
@@ -651,7 +651,7 @@ BigDecimal valuation = valuationContextCalculator.evaluate(
 ).score();
 ```
 
-- [ ] **Step 5: Remove the valuation exclusion and apply approved weights**
+- [x] **Step 5: Remove the valuation exclusion and apply approved weights**
 
 Delete the `peTooHigh && pbTooHigh` block from `preFilterExclusion` and remove the unused `EXTREME_VALUATION_MULTIPLE` constant if no remaining caller uses it.
 
@@ -681,7 +681,7 @@ BigDecimal finalScore = clamp(
 
 Do not add valuation to `riskPenalty`; the context score already supplies its full 5% contribution.
 
-- [ ] **Step 6: Replace hard-threshold explanations**
+- [x] **Step 6: Replace hard-threshold explanations**
 
 Update methodology and advice strings so they say:
 
@@ -693,7 +693,7 @@ Low PE/PB cannot create a buy signal without structure, volume, financial qualit
 
 Append `valuationContext.warnings()` to candidate risks. Add one valuation evidence row using `valuationContext.evidence()` and the quote URL. Remove text that says the first layer performs an extreme-valuation filter.
 
-- [ ] **Step 7: Run all short-term tests and observe GREEN**
+- [x] **Step 7: Run all short-term tests and observe GREEN**
 
 Run: `mvn -pl apps/api -Dtest=ShortTermServiceTest,ShortTermScanJobServiceTest test`
 
@@ -715,7 +715,7 @@ Expected: all short-term service and job tests pass, including the new extreme-v
 - Produces: API JSON fields `valuationContext` on market/short candidates and `weightProfile` on short reports.
 - Keeps query parameter names `maxPe` and `maxPb` unchanged.
 
-- [ ] **Step 1: Write the failing market-adapter regression**
+- [x] **Step 1: Write the failing market-adapter regression**
 
 Replace `shouldExposeDataGapsWhenValuationEvidenceIsMissing` with:
 
@@ -737,13 +737,13 @@ void shouldKeepMissingValuationInResearchWithBuyGateClosed() {
 }
 ```
 
-- [ ] **Step 2: Run the test and observe RED**
+- [x] **Step 2: Run the test and observe RED**
 
 Run: `mvn -pl apps/api -Dtest=MarketScanServiceTest#shouldKeepMissingValuationInResearchWithBuyGateClosed test`
 
 Expected: the stock remains excluded and `MarketScanCandidate` has no valuation context.
 
-- [ ] **Step 3: Map the context through the market adapter**
+- [x] **Step 3: Map the context through the market adapter**
 
 Add `ValuationContext valuationContext` after `amount` in `MarketScanCandidate`, import the type, and pass `candidate.valuationContext()` in `toMarketCandidate`.
 
@@ -755,13 +755,13 @@ boolean hasValuationEvidence = candidate.valuationContext().state() != Valuation
 
 Use `hasValuationEvidence` instead of checking only whether both raw ratios are non-null. Missing context must close the final buy gate without removing the research candidate.
 
-- [ ] **Step 4: Run market tests and observe GREEN**
+- [x] **Step 4: Run market tests and observe GREEN**
 
 Run: `mvn -pl apps/api -Dtest=MarketScanServiceTest test`
 
 Expected: all market adapter tests pass.
 
-- [ ] **Step 5: Add frontend contracts and labels**
+- [x] **Step 5: Add frontend contracts and labels**
 
 Add to `types.ts`:
 
@@ -815,7 +815,7 @@ export function formatValuationState(state: ValuationContextState) {
 }
 ```
 
-- [ ] **Step 6: Change page semantics without changing API parameter names**
+- [x] **Step 6: Change page semantics without changing API parameter names**
 
 On both pages:
 
@@ -827,7 +827,7 @@ On both pages:
 - In short-term details, label the score as `估值语境 5%`, and display the final five weights from `report.weightProfile` in one compact unframed row.
 - Do not add a nested card or a second competing recommendation label.
 
-- [ ] **Step 7: Build the frontend**
+- [x] **Step 7: Build the frontend**
 
 Run from `apps/web-react`: `npm run build`
 
@@ -842,19 +842,19 @@ Expected: TypeScript and Vite finish with exit code 0.
 - Consumes all P0.1 changes.
 - Produces fresh test, Docker and live-data evidence before completion claims.
 
-- [ ] **Step 1: Run the complete backend suite**
+- [x] **Step 1: Run the complete backend suite**
 
 Run: `mvn test`
 
 Expected: all tests pass with `Failures: 0, Errors: 0`.
 
-- [ ] **Step 2: Package the current API jar**
+- [x] **Step 2: Package the current API jar**
 
 Run: `mvn -pl apps/api package -DskipTests`
 
 Expected: `BUILD SUCCESS` and a refreshed `apps/api/target/ai-stock-api-0.1.0-SNAPSHOT.jar`.
 
-- [ ] **Step 3: Rebuild and start Docker services**
+- [x] **Step 3: Rebuild and start Docker services**
 
 Run: `docker compose up -d --build api web`
 
@@ -864,7 +864,7 @@ Run: `docker compose ps`
 
 Expected: `ai-stock-api` and `ai-stock-web` both report `healthy`.
 
-- [ ] **Step 4: Run a live VALUE scan**
+- [x] **Step 4: Run a live VALUE scan**
 
 Run:
 
@@ -879,7 +879,7 @@ Expected:
 - missing/distorted context produces research or wait semantics, not silent exclusion;
 - `todayAdvice` remains evidence-gated.
 
-- [ ] **Step 5: Run a live short-term scan job**
+- [x] **Step 5: Run a live short-term scan job**
 
 Run:
 
@@ -898,7 +898,7 @@ Expected:
 - every candidate exposes valuation state and warnings;
 - liquidity, unstable-industry, chase and sideways rules remain active.
 
-- [ ] **Step 6: Verify the React pages in the in-app browser**
+- [x] **Step 6: Verify the React pages in the in-app browser**
 
 Open `http://127.0.0.1:5176/`, then inspect the full-market and short-term pages.
 
@@ -910,12 +910,12 @@ Expected:
 - no overlapping controls, clipped text or duplicate advice labels;
 - browser console contains no application errors.
 
-- [ ] **Step 7: Audit for forbidden symbol-specific logic**
+- [x] **Step 7: Audit for forbidden symbol-specific logic**
 
 Run: `rg -n '002714|牧原' apps/api/src/main apps/web-react/src`
 
 Expected: no new whitelist, bonus or hard-coded recommendation appears. Existing unrelated display data, if any, must not participate in scoring.
 
-- [ ] **Step 8: Record the phase boundary**
+- [x] **Step 8: Record the phase boundary**
 
 Report that P0.1 is complete only after Steps 1-7 pass. State explicitly that point-in-time persistence, normalized 5-10 year cycle earnings and rolling out-of-sample weight validation remain P1/P2/P4 work and are not fabricated by this patch.

@@ -69,6 +69,30 @@ class MispricingServiceTest {
     }
 
     @Test
+    void shouldExplainFourGateMispricingReviewBeforeAnyBuyAction() {
+        eastMoneyClient.quotes = List.of(
+                quoteWithIndustry("600036", "招商银行", "银行", "5.90", "0.80", "-0.50")
+        );
+
+        MispricingReport report = service.report(3, new BigDecimal("82"), null, null, null);
+
+        MispricedAsset cmb = find(report, "600036");
+        assertThat(cmb.action()).isEqualTo("EVIDENCE_REVIEW");
+        assertThat(cmb.evidence())
+                .anySatisfy(evidence -> assertThat(evidence.summary()).contains("热门退潮", "质量", "估值", "弱势日", "流动性"));
+        assertThat(cmb.entryRules())
+                .anySatisfy(rule -> assertThat(rule).contains("热门退潮", "弱势日"))
+                .anySatisfy(rule -> assertThat(rule).contains("流动性"))
+                .anySatisfy(rule -> assertThat(rule).contains("Agent", "财报"));
+        assertThat(cmb.todayAdvice().riskControls())
+                .anySatisfy(control -> assertThat(control).contains("弱势日"))
+                .anySatisfy(control -> assertThat(control).contains("流动性"))
+                .anySatisfy(control -> assertThat(control).contains("Agent", "财报"));
+        assertThat(cmb.review().blockers())
+                .anySatisfy(blocker -> assertThat(blocker).contains("四门", "缺一不可"));
+    }
+
+    @Test
     void shouldWaitWhenHotThemeIsNotOverheated() {
         eastMoneyClient.quotes = List.of(
                 quote("000333", "美的集团", "13.10", "2.20"),

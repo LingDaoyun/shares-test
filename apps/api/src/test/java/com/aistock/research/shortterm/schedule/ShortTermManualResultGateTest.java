@@ -201,6 +201,55 @@ class ShortTermManualResultGateTest {
         assertThat(result.blockedReasons()).isEmpty();
     }
 
+    @Test
+    void allowsManualCachePreviewOnClosedMarketDayWithoutCallingItExecutable() {
+        LocalDate closedDate = LocalDate.parse("2026-08-01");
+        Instant priorTradeCutoff = Instant.parse("2026-07-31T07:00:00Z");
+        Instant fetchedAt = Instant.parse("2026-08-01T02:10:00Z");
+        Instant completedAt = Instant.parse("2026-08-01T02:10:20Z");
+
+        ShortTermAutomationSettings settings = mock(ShortTermAutomationSettings.class);
+        when(settings.finalDeadline()).thenReturn(LocalTime.parse("14:53:59"));
+        when(settings.freshness()).thenReturn(Duration.ofMinutes(3));
+        TradingClockService tradingClock = mock(TradingClockService.class);
+        when(tradingClock.currentMarketDate()).thenReturn(closedDate);
+        when(tradingClock.isMarketClosedDay(closedDate)).thenReturn(true);
+        ShortTermFinalResultGate closedDayGate = new ShortTermFinalResultGate(settings, tradingClock);
+
+        ShortTermReport report = report(
+                priorTradeCutoff,
+                false,
+                new BigDecimal("1.00"),
+                true,
+                List.of(mock(com.aistock.research.shortterm.ShortTermCandidate.class))
+        );
+        when(report.tradingSession()).thenReturn(new TradingSessionSnapshot(
+                "CLOSED",
+                "休市",
+                false,
+                false,
+                true,
+                "休市",
+                List.of("休市行情只用于策略预览。"),
+                List.of("缓存行情不能作为当日买点。")
+        ));
+        when(report.coverage()).thenReturn(new ShortTermCoverageSnapshot(
+                5884,
+                5884,
+                0,
+                new BigDecimal("1.00"),
+                true,
+                "东方财富缓存行情",
+                fetchedAt
+        ));
+
+        ShortTermFinalResultGate.Result result = closedDayGate.evaluateManual(report, completedAt);
+
+        assertThat(result.status().name()).isEqualTo("CACHE_PREVIEW");
+        assertThat(result.message()).isEqualTo("缓存行情预览已完成，已生成策略候选；休市数据不作为今日买点");
+        assertThat(result.blockedReasons()).containsExactly("STATIC_CACHE_PREVIEW");
+    }
+
     private ShortTermReport report(
             Instant cutoff,
             boolean closingDecisionWindow,

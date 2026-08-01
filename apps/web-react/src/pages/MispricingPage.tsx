@@ -352,7 +352,9 @@ function reviewTone(status: string): 'brand' | 'success' | 'warning' | 'danger' 
 
 function adviceTone(action: string): 'success' | 'brand' | 'warning' | 'danger' | 'neutral' {
   if (action === 'ADD') return 'success'
+  if (action === 'LIGHT_TRIAL') return 'brand'
   if (action === 'HOLD') return 'brand'
+  if (action === 'WAIT_PULLBACK') return 'warning'
   if (action === 'BATCH_SELL') return 'warning'
   if (action === 'SELL_ALL') return 'danger'
   return 'neutral'

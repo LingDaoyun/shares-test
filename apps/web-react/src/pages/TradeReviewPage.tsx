@@ -3,6 +3,7 @@ import { Edit3, Plus, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react'
 import {
   addTradeFill,
   cancelTradeCase,
+  deleteTradeCase,
   deleteTradeFill,
   refreshTradeCase,
   updateTradeFill
@@ -69,6 +70,7 @@ export function TradeReviewPage() {
   const refreshCases = useTradeFeedbackStore((state) => state.refreshCases)
   const getCase = useTradeFeedbackStore((state) => state.getCase)
   const upsertCase = useTradeFeedbackStore((state) => state.upsertCase)
+  const removeCase = useTradeFeedbackStore((state) => state.removeCase)
   const [filter, setFilter] = useState<StatusFilter>('ALL')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [listError, setListError] = useState('')
@@ -168,6 +170,28 @@ export function TradeReviewPage() {
     setSelectedId(caseId)
   }, [])
 
+  const removeReviewCase = useCallback(async (tradeCase: TradeCase) => {
+    if (activeMutationIdRef.current !== null || !canDeleteReviewCase(tradeCase)) return
+    if (!window.confirm(`确认删除 ${tradeCase.symbol} ${tradeCase.companyName} 的复盘关注？仅未成交计划或已取消关注可以删除。`)) return
+    clearDetailError(tradeCase.caseId)
+    const result = await runSelectedMutation(tradeCase.caseId, 'delete', () => deleteTradeCase(tradeCase.caseId))
+    if (!result) return
+    if ('error' in result) {
+      const message = extractTradeMutationError(result.error)
+      if (selectedIdRef.current === tradeCase.caseId) {
+        setDetailErrors((current) => ({ ...current, [tradeCase.caseId]: message }))
+      }
+      toast.error(`删除关注失败：${message}`)
+      return
+    }
+    removeCase(tradeCase.caseId)
+    if (selectedIdRef.current === tradeCase.caseId) {
+      selectedIdRef.current = null
+      setSelectedId(null)
+    }
+    toast.success('复盘关注已删除')
+  }, [clearDetailError, removeCase, runSelectedMutation])
+
   const columns = useMemo<Column<TradeCase>[]>(() => [
     {
       key: 'identity',
@@ -226,8 +250,26 @@ export function TradeReviewPage() {
       title: horizon,
       align: 'right',
       render: (tradeCase) => <OutcomeCell outcome={getRecommendationOutcome(tradeCase, horizon)} />
-    }))
-  ], [selectCase, selectedId])
+    })),
+    {
+      key: 'actions',
+      title: '操作',
+      align: 'right',
+      width: '68px',
+      render: (tradeCase) => (
+        <IconButton
+          label={`删除关注 ${tradeCase.symbol}`}
+          disabled={mutation !== null || !canDeleteReviewCase(tradeCase)}
+          danger
+          onClick={(event) => {
+            event.stopPropagation()
+            void removeReviewCase(tradeCase)
+          }}
+          icon={<Trash2 className="h-4 w-4" />}
+        />
+      )
+    }
+  ], [mutation, removeReviewCase, selectCase, selectedId])
 
   const refreshList = async () => {
     setListError('')
@@ -335,6 +377,7 @@ export function TradeReviewPage() {
               columns={columns}
               data={filteredCases}
               rowKey={(tradeCase) => tradeCase.caseId}
+              tableClassName="trade-review-table"
               isSelected={(tradeCase) => tradeCase.caseId === selectedId}
               onRowClick={(tradeCase) => selectCase(tradeCase.caseId)}
               emptyText={filter === 'ALL' ? '暂无复盘单' : '当前状态下暂无复盘单'}
@@ -866,6 +909,11 @@ function IconButton({ label, icon, danger = false, loading = false, ...props }: 
       {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : icon}
     </button>
   )
+}
+
+function canDeleteReviewCase(tradeCase: TradeCase) {
+  return (tradeCase.status === 'PLANNED' || tradeCase.status === 'CANCELLED')
+    && tradeCase.ledger.positionQuantity === 0
 }
 
 function isTradeCaseDetail(tradeCase: TradeCase | undefined): tradeCase is TradeCaseDetail {

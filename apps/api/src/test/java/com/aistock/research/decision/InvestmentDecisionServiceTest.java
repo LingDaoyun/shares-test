@@ -92,6 +92,33 @@ class InvestmentDecisionServiceTest {
         assertThat(report.buyPreconditions()).anyMatch(item -> item.contains("人工复读"));
     }
 
+    @Test
+    void shouldDowngradeCyclicalEvidenceGapToLeftTrialCheckInsteadOfNoBuy() {
+        CompanyProfile company = cycleCompany();
+        CompanyResearchView research = research(company, "72");
+        AgentConsensusReport consensus = consensus(company, "78", 3, 2, 0, 0);
+        EvidenceReviewReport review = review(company, consensus, List.of(
+                notFoundItem("主营收入按产品/行业拆分"),
+                notFoundItem("政策资金、招投标或订单兑现证据"),
+                notFoundItem("专利/客户认证/产能项目原文")
+        ), 1, 0, 3, 0);
+        when(companyService.getCompany("002772")).thenReturn(company);
+        when(companyResearchService.analyze(company)).thenReturn(research);
+        when(evidenceReviewService.review("002772")).thenReturn(review);
+        when(financialHistoryService.history("002772", 10)).thenReturn(financialHistory(company, 10, "76"));
+        when(valuationHistoryService.history("002772", 10)).thenReturn(valuationHistory(company, "0.20", "0.25"));
+
+        InvestmentDecisionReport report = service.evaluate("002772");
+
+        assertThat(report.actionStage()).isEqualTo("CYCLE_LEFT_TRIAL_CHECK");
+        assertThat(report.actionLabel()).isEqualTo("左侧试仓核验");
+        assertThat(report.actionReason()).contains("小仓", "周期");
+        assertThat(report.gates()).anySatisfy(gate -> {
+            assertThat(gate.gateCode()).isEqualTo("EVIDENCE_REVIEW");
+            assertThat(gate.status()).isEqualTo("BLOCK");
+        });
+    }
+
     private EvidenceReviewItem blockedItem() {
         return new EvidenceReviewItem(
                 "VALUATION_DISCIPLINARIAN",
@@ -216,6 +243,25 @@ class InvestmentDecisionServiceTest {
                 86,
                 "评分依据已被公告线索支持",
                 "纳入持有期跟踪"
+        );
+    }
+
+    private EvidenceReviewItem notFoundItem(String requirement) {
+        return new EvidenceReviewItem(
+                "POLICY_STRATEGIST",
+                "政策策略 Agent",
+                requirement,
+                "MISSING",
+                "未找到",
+                "NOT_FOUND",
+                "未命中",
+                "在线证据源",
+                "公告/年报证据",
+                "已搜索但未命中该项评分依据。",
+                null,
+                0,
+                "该评分依据当前不存在或待补证",
+                "扩大公告关键词和时间范围"
         );
     }
 
@@ -385,6 +431,33 @@ class InvestmentDecisionServiceTest {
                 "2025年 年报",
                 true,
                 List.of("水电核心资产", "稳定现金流"),
+                List.of(),
+                Map.of("st_flag", BigDecimal.ZERO),
+                List.of()
+        );
+    }
+
+    private CompanyProfile cycleCompany() {
+        return new CompanyProfile(
+                "002772",
+                "众兴菌业",
+                "深交所",
+                "种植业",
+                "NEW_QUALITY_PRODUCTIVITY",
+                new BigDecimal("48.00"),
+                new BigDecimal("11.78"),
+                new BigDecimal("-10.01"),
+                new BigDecimal("9.82"),
+                new BigDecimal("1.25"),
+                new BigDecimal("4.93"),
+                new BigDecimal("216420000"),
+                "https://quote.example.com/002772",
+                "测试源",
+                "2026-07-16T09:00:00Z",
+                "2025-12-31",
+                "2025年 年报",
+                true,
+                List.of("食用菌工厂化生产", "周期低位现金流观察"),
                 List.of(),
                 Map.of("st_flag", BigDecimal.ZERO),
                 List.of()

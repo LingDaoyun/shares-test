@@ -32,6 +32,19 @@ class ShortTermMomentumQualityEvaluatorTest {
     }
 
     @Test
+    void treatsLowerTurnoverAsPreferredForVeryLargeAmountStocks() {
+        ShortTermMomentumQuality result = evaluator.evaluate(
+                quote("1.60", "12.00", "3600000000"),
+                completedRows(),
+                new BigDecimal("12.00"),
+                true
+        );
+
+        assertThat(result.turnoverBand()).isEqualTo("PREFERRED");
+        assertThat(result.turnoverScore()).isGreaterThanOrEqualTo(new BigDecimal("85"));
+    }
+
+    @Test
     void calculatesUpperShadowMedianAndCloseLocationFromTheLatestThreeBullishCandles() {
         ShortTermMomentumQuality result = evaluate("3.00", List.of(
                 row("2026-07-24", "10.00", "10.80", "11.00", "9.90"),
@@ -144,6 +157,10 @@ class ShortTermMomentumQualityEvaluatorTest {
     }
 
     private EastMoneyQuote quote(String turnoverRate, String latestPrice) {
+        return quote(turnoverRate, latestPrice, "240000000");
+    }
+
+    private EastMoneyQuote quote(String turnoverRate, String latestPrice, String amount) {
         Instant timestamp = Instant.parse("2026-07-29T06:50:00Z");
         return new EastMoneyQuote(
                 "600001",
@@ -154,7 +171,7 @@ class ShortTermMomentumQualityEvaluatorTest {
                 new BigDecimal("1.80"),
                 new BigDecimal(turnoverRate),
                 new BigDecimal("200000"),
-                new BigDecimal("240000000"),
+                new BigDecimal(amount),
                 new BigDecimal("18"),
                 new BigDecimal("1.8"),
                 new BigDecimal("18"),

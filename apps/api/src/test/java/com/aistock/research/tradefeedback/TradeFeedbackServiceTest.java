@@ -32,12 +32,14 @@ class TradeFeedbackServiceTest {
     private final TradeCaseRepository cases = mock(TradeCaseRepository.class);
     private final TradeFillRepository fills = mock(TradeFillRepository.class);
     private final TradeFillRevisionRepository revisions = mock(TradeFillRevisionRepository.class);
+    private final TradeOutcomeRepository outcomes = mock(TradeOutcomeRepository.class);
     private final RecommendationAttestationService attestations = mock(RecommendationAttestationService.class);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final TradeFeedbackService service = new TradeFeedbackService(
             cases,
             fills,
             revisions,
+            outcomes,
             new TradeFillProjector(),
             attestations,
             new TradeLedgerCalculator(),
@@ -253,6 +255,50 @@ class TradeFeedbackServiceTest {
     }
 
     @Test
+    void deletesOnlyAPlannedOrCancelledCaseWithoutAnyTradeAuditTrail() {
+        TradeCaseEntity tradeCase = plannedCase("PLANNED");
+        when(cases.findByIdForUpdate(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
+        when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(tradeCase.getCaseId())).thenReturn(List.of());
+        when(revisions.existsByCaseId(tradeCase.getCaseId())).thenReturn(false);
+
+        service.deleteCase(tradeCase.getCaseId());
+
+        verify(outcomes).deleteByCaseId(tradeCase.getCaseId());
+        verify(cases).delete(tradeCase);
+
+        TradeCaseEntity cancelled = plannedCase("case-cancelled", "CANCELLED");
+        when(cases.findByIdForUpdate(cancelled.getCaseId())).thenReturn(Optional.of(cancelled));
+        when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(cancelled.getCaseId())).thenReturn(List.of());
+        when(revisions.existsByCaseId(cancelled.getCaseId())).thenReturn(false);
+
+        service.deleteCase(cancelled.getCaseId());
+
+        verify(outcomes).deleteByCaseId(cancelled.getCaseId());
+        verify(cases).delete(cancelled);
+    }
+
+    @Test
+    void rejectsDeletingCasesWithPositionsOrHistoricalFillRevisions() {
+        TradeCaseEntity holding = plannedCase("HOLDING");
+        when(cases.findByIdForUpdate(holding.getCaseId())).thenReturn(Optional.of(holding));
+
+        assertThatThrownBy(() -> service.deleteCase(holding.getCaseId()))
+                .isInstanceOf(TradeFeedbackConflictException.class)
+                .hasMessageContaining("只有尚未成交的计划或已取消关注可以删除");
+
+        TradeCaseEntity planned = plannedCase("PLANNED");
+        when(cases.findByIdForUpdate(planned.getCaseId())).thenReturn(Optional.of(planned));
+        when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(planned.getCaseId())).thenReturn(List.of());
+        when(revisions.existsByCaseId(planned.getCaseId())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.deleteCase(planned.getCaseId()))
+                .isInstanceOf(TradeFeedbackConflictException.class)
+                .hasMessageContaining("已有成交记录");
+
+        verify(cases, never()).delete(any(TradeCaseEntity.class));
+    }
+
+    @Test
     void locksTheParentCaseBeforeReadingFillsForAMutation() {
         TradeCaseEntity tradeCase = plannedCase("PLANNED");
         when(cases.findByIdForUpdate(tradeCase.getCaseId())).thenReturn(Optional.of(tradeCase));
@@ -283,8 +329,12 @@ class TradeFeedbackServiceTest {
     }
 
     private TradeCaseEntity plannedCase(String status) {
+        return plannedCase("case-1", status);
+    }
+
+    private TradeCaseEntity plannedCase(String caseId, String status) {
         TradeCaseEntity tradeCase = TradeCaseEntity.planned(
-                "case-1", "fingerprint", "decision-1", "002714", "牧原股份", "MISPRICING",
+                caseId, "fingerprint-" + caseId, "decision-1", "002714", "牧原股份", "MISPRICING",
                 "分批建仓", new BigDecimal("78"), "mispricing-v2", new BigDecimal("36.20"),
                 Instant.parse("2026-07-13T01:00:00Z"), "{}", Instant.parse("2026-07-12T01:00:00Z"));
         tradeCase.updateStatus(status, Instant.parse("2026-07-12T01:00:00Z"));

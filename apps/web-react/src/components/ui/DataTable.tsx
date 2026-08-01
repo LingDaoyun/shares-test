@@ -15,6 +15,7 @@ interface DataTableProps<T> {
   columns: Column<T>[]
   data: T[]
   rowKey: (row: T, index: number) => string
+  tableClassName?: string
   /** 选中行判定，命中时加高亮 */
   isSelected?: (row: T) => boolean
   onRowClick?: (row: T) => void
@@ -31,6 +32,7 @@ export function DataTable<T>({
   columns,
   data,
   rowKey,
+  tableClassName = '',
   isSelected,
   onRowClick,
   emptyText
@@ -40,7 +42,7 @@ export function DataTable<T>({
   }
   return (
     <div className="overflow-x-auto">
-      <table className="data-table">
+      <table className={`data-table ${tableClassName}`}>
         <thead>
           <tr>
             {columns.map((col) => (

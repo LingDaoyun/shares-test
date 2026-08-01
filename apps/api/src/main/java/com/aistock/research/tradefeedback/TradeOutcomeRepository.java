@@ -37,4 +37,6 @@ public interface TradeOutcomeRepository extends JpaRepository<TradeOutcomeEntity
     List<TradeOutcomeEntity> findByCaseIdInOrderByCaseIdAscBaselineTypeAscHorizonAsc(Collection<String> caseIds);
 
     Optional<TradeOutcomeEntity> findByCaseIdAndBaselineTypeAndHorizon(String caseId, String baselineType, String horizon);
+
+    void deleteByCaseId(String caseId);
 }

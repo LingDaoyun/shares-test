@@ -297,6 +297,14 @@ public class InvestmentDecisionService {
         if (failCount > 0) {
             return new Decision("RISK_BLOCKED", "风险阻断", score, "硬风险未处理前，只能做排雷复核。");
         }
+        if (blockCount > 0 && eligibleForCycleLeftTrial(research, consensus, review, gates)) {
+            return new Decision(
+                    "CYCLE_LEFT_TRIAL_CHECK",
+                    "左侧试仓核验",
+                    score,
+                    "周期票证据尚未完整，但行业低迷、估值和多年财务序列给出赔率，可以进入小仓试仓核验；这不是重仓买入或加仓信号。"
+            );
+        }
         if (blockCount > 0) {
             return new Decision("EVIDENCE_ONLY", "只观察不买入", score, "关键证据或估值门禁未通过，先补证再升级。");
         }
@@ -310,6 +318,74 @@ public class InvestmentDecisionService {
             return new Decision("LONG_WATCH", "长线观察", score, "具备持续跟踪价值，但还没到动作核验阶段。");
         }
         return new Decision("SAMPLE_TRACKING", "样本跟踪", score, "结论较弱，保留为样本，不进入核心观察。");
+    }
+
+    private boolean eligibleForCycleLeftTrial(
+            CompanyResearchView research,
+            AgentConsensusReport consensus,
+            EvidenceReviewReport review,
+            List<InvestmentDecisionGate> gates
+    ) {
+        CompanyProfile company = research.company();
+        if (!isCycleIndustry(company.industry()) || !company.liveData()) {
+            return false;
+        }
+        if (!RecommendationQuality.hasSufficientLiquidity(company.amount())) {
+            return false;
+        }
+        if (review.blockedCount() > 0 || consensus.vetoCount() > 0) {
+            return false;
+        }
+        boolean onlyEvidenceBlock = gates.stream()
+                .filter(gate -> "BLOCK".equals(gate.status()))
+                .allMatch(gate -> "EVIDENCE_REVIEW".equals(gate.gateCode()));
+        if (!onlyEvidenceBlock) {
+            return false;
+        }
+        boolean financialUsable = gates.stream()
+                .anyMatch(gate -> "FINANCIAL_QUALITY".equals(gate.gateCode())
+                        && ("PASS".equals(gate.status()) || "WATCH".equals(gate.status())));
+        boolean valuationUsable = gates.stream()
+                .anyMatch(gate -> "VALUATION_DISCIPLINE".equals(gate.gateCode())
+                        && ("PASS".equals(gate.status()) || "WATCH".equals(gate.status())));
+        boolean cheapEnough = cheapCycleValuation(company) || gates.stream()
+                .anyMatch(gate -> "VALUATION_DISCIPLINE".equals(gate.gateCode()) && "PASS".equals(gate.status()));
+        boolean riskAllowsReview = gates.stream()
+                .noneMatch(gate -> "RISK_VETO".equals(gate.gateCode())
+                        && ("FAIL".equals(gate.status()) || "BLOCK".equals(gate.status())));
+        return financialUsable
+                && valuationUsable
+                && cheapEnough
+                && riskAllowsReview
+                && review.notFoundCount() > 0
+                && review.blockedCount() == 0;
+    }
+
+    private boolean cheapCycleValuation(CompanyProfile company) {
+        BigDecimal pe = company.peTtm();
+        BigDecimal pb = company.pbRatio();
+        boolean lowPe = pe != null && pe.compareTo(BigDecimal.ZERO) > 0 && pe.compareTo(new BigDecimal("18")) <= 0;
+        boolean lowPb = pb != null && pb.compareTo(BigDecimal.ZERO) > 0 && pb.compareTo(new BigDecimal("1.8")) <= 0;
+        return lowPe || lowPb;
+    }
+
+    private boolean isCycleIndustry(String industry) {
+        if (industry == null || industry.isBlank()) {
+            return false;
+        }
+        return containsAny(industry,
+                "农业", "农牧", "养殖", "种植", "林业", "渔业", "饲料", "食品加工",
+                "煤炭", "石油", "油气", "天然气", "有色", "钢铁", "化工", "化纤",
+                "水泥", "建材", "玻璃", "造纸", "航运", "港口", "电力", "电池", "光伏");
+    }
+
+    private boolean containsAny(String value, String... needles) {
+        for (String needle : needles) {
+            if (value.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private BigDecimal decisionScore(

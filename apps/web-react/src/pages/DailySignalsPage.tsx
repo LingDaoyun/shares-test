@@ -8,8 +8,9 @@ import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Loader } from '../components/ui/Loader'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
+import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { changeClass, extractErrorMessage, formatDateTime, formatNumber } from '../lib/format'
-import type { DailyDecisionSignal, DailySignalReport, StrategyPlaybook } from '../types'
+import type { DailyDecisionSignal, DailySignalReport, StrategyPlaybook, V2StrategyBundleParams } from '../types'
 
 const DEFAULT_PARAMS: Required<DailySignalParams> = {
   limit: 18,
@@ -57,7 +58,7 @@ export function DailySignalsPage() {
       <SectionBanner
         eyebrow="DAILY SIGNALS"
         title="每日决策信号"
-        description="融合 daily_stock_analysis 的决策信号、策略包和每日市场上下文思想，把科技追踪池与错杀估值池沉淀成当天可复核的操作清单。"
+        description="融合 daily_stock_analysis 的决策信号、策略包和每日市场上下文思想，把热门追踪池与错杀估值池沉淀成当天可复核的操作清单。"
         extra={
           <Button
             variant="primary"
@@ -229,6 +230,13 @@ function SignalCard({
           <p className="mt-2 text-sm leading-relaxed text-ink-700">{signal.todayAdvice.summary}</p>
         </div>
 
+        <V2StrategyBundlePanel
+          symbol={signal.symbol}
+          companyName={signal.name}
+          focus="daily"
+          factorContext={dailyFactorContext(signal)}
+        />
+
         <div className="flex flex-wrap gap-2">
           {signal.strategyTags.map((tag) => <Tag key={tag} tone="sky">{strategyLabel(tag)}</Tag>)}
         </div>
@@ -278,6 +286,33 @@ function StrategyCard({ strategy }: { strategy: StrategyPlaybook }) {
       </div>
     </div>
   )
+}
+
+function dailyFactorContext(signal: DailyDecisionSignal): Omit<V2StrategyBundleParams, 'symbol' | 'companyName'> {
+  const score = signal.score ?? signal.confidence
+  const buyLike = signal.action === 'add' || signal.action === 'trial'
+  const defensive = signal.action === 'reduce' || signal.action === 'sell'
+  return {
+    industry: signal.marketPhase,
+    valuationDiscountScore: score,
+    qualityScore: signal.confidence,
+    moatScore: signal.confidence,
+    profitabilityScore: signal.confidence,
+    cashFlowScore: signal.confidence,
+    cyclePositionScore: signal.horizon.includes('周期') ? score : signal.confidence,
+    cycleRecoveryScore: buyLike ? score : Math.max(35, signal.confidence - 15),
+    industryLeaderScore: signal.confidence,
+    policyCatalystScore: buyLike ? Math.max(score, 72) : score,
+    liquidityScore: 72,
+    hotDirection: signal.sourceLabel,
+    marketHotScore: buyLike ? Math.max(score, 72) : score,
+    rightSideStructureScore: buyLike ? score : Math.max(35, score - 20),
+    supplyAbsorptionScore: buyLike ? signal.confidence : Math.max(30, signal.confidence - 20),
+    volumeBreakoutScore: score,
+    shrinkRiseScore: signal.confidence,
+    fundamentalFloorScore: signal.confidence,
+    crowdingRiskScore: defensive ? 78 : buyLike ? 35 : 55
+  }
 }
 
 function NumberField({
@@ -338,6 +373,7 @@ function ListBlock({
 
 function actionTone(action: string): 'success' | 'brand' | 'warning' | 'danger' | 'neutral' | 'sky' {
   if (action === 'add') return 'success'
+  if (action === 'trial') return 'brand'
   if (action === 'hold') return 'brand'
   if (action === 'reduce') return 'warning'
   if (action === 'sell') return 'danger'
@@ -346,6 +382,7 @@ function actionTone(action: string): 'success' | 'brand' | 'warning' | 'danger' 
 
 function actionLabel(action: string) {
   if (action === 'add') return '加仓'
+  if (action === 'trial') return '试仓'
   if (action === 'hold') return '持有'
   if (action === 'reduce') return '分批卖出'
   if (action === 'sell') return '全仓卖出'

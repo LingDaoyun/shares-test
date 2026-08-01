@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -31,18 +32,6 @@ class ShortTermScanJobServiceTest {
         ShortTermService shortTermService = mock(ShortTermService.class);
         ResearchHistoryService researchHistoryService = mock(ResearchHistoryService.class);
         ShortTermReport report = sampleReport();
-        when(shortTermService.report(
-                eq(3),
-                eq(120),
-                eq(20),
-                eq(new BigDecimal("100000000")),
-                eq(new BigDecimal("35")),
-                eq(new BigDecimal("4")),
-                eq(new BigDecimal("1.20")),
-                eq(new BigDecimal("3.50")),
-                eq(new BigDecimal("7.00")),
-                eq(new BigDecimal("60"))
-        )).thenReturn(report);
         ShortTermScanJobService service = service(shortTermService, researchHistoryService);
 
         try {
@@ -56,8 +45,10 @@ class ShortTermScanJobServiceTest {
                     new BigDecimal("1.20"),
                     new BigDecimal("3.50"),
                     new BigDecimal("7.00"),
-                    new BigDecimal("60")
+                    new BigDecimal("60"),
+                    true
             );
+            when(shortTermService.report(eq(request))).thenReturn(report);
             ShortTermScanJobStatus started = service.start(request);
 
             assertThat(started.status()).isEqualTo("RUNNING");
@@ -71,18 +62,7 @@ class ShortTermScanJobServiceTest {
             assertThat(finished.strategyVersion()).isEqualTo("short-term-right-side-v3-chip-verified");
             assertThat(finished.report()).isSameAs(report);
             assertThat(finished.message()).contains("不可执行");
-            verify(shortTermService).report(
-                    eq(3),
-                    eq(120),
-                    eq(20),
-                    eq(new BigDecimal("100000000")),
-                    eq(new BigDecimal("35")),
-                    eq(new BigDecimal("4")),
-                    eq(new BigDecimal("1.20")),
-                    eq(new BigDecimal("3.50")),
-                    eq(new BigDecimal("7.00")),
-                    eq(new BigDecimal("60"))
-            );
+            verify(shortTermService).report(eq(request));
             verify(researchHistoryService).recordShortTermReport(report);
         } finally {
             service.shutdown();
@@ -92,7 +72,7 @@ class ShortTermScanJobServiceTest {
     @Test
     void shouldExposeFailedStatusWhenRealtimeScanFails() throws Exception {
         ShortTermService shortTermService = mock(ShortTermService.class);
-        when(shortTermService.report(null, null, null, null, null, null, null, null, null, null))
+        when(shortTermService.report(eq(ShortTermScanRequest.empty())))
                 .thenThrow(new IllegalStateException("短线右侧实时行情加载失败"));
         ShortTermScanJobService service = service(shortTermService, null);
 
@@ -115,7 +95,7 @@ class ShortTermScanJobServiceTest {
         ShortTermService shortTermService = mock(ShortTermService.class);
         CountDownLatch release = new CountDownLatch(1);
         CountDownLatch running = new CountDownLatch(2);
-        when(shortTermService.report(null, null, null, null, null, null, null, null, null, null))
+        when(shortTermService.report(eq(ShortTermScanRequest.empty())))
                 .thenAnswer(invocation -> {
                     running.countDown();
                     release.await(10, TimeUnit.SECONDS);
@@ -138,6 +118,30 @@ class ShortTermScanJobServiceTest {
         }
     }
 
+    @Test
+    void shouldFailRunningScanWhenItExceedsTimeout() throws Exception {
+        ShortTermService shortTermService = mock(ShortTermService.class);
+        CountDownLatch release = new CountDownLatch(1);
+        when(shortTermService.report(eq(ShortTermScanRequest.empty())))
+                .thenAnswer(invocation -> {
+                    release.await(10, TimeUnit.SECONDS);
+                    return sampleReport();
+                });
+        ShortTermScanJobService service = service(shortTermService, null, Duration.ofMillis(50));
+
+        try {
+            ShortTermScanJobStatus started = service.start(ShortTermScanRequest.empty());
+            ShortTermScanJobStatus finished = awaitFinished(service, started.jobId());
+
+            assertThat(finished.status()).isEqualTo("FAILED");
+            assertThat(finished.resultStatus()).isEqualTo(ShortTermSnapshotStatus.FAILED);
+            assertThat(finished.message()).contains("超时");
+        } finally {
+            release.countDown();
+            service.shutdown();
+        }
+    }
+
     private ShortTermScanJobStatus awaitFinished(ShortTermScanJobService service, String jobId) throws InterruptedException {
         for (int index = 0; index < 40; index++) {
             ShortTermScanJobStatus status = service.get(jobId);
@@ -153,6 +157,14 @@ class ShortTermScanJobServiceTest {
             ShortTermService shortTermService,
             ResearchHistoryService researchHistoryService
     ) {
+        return service(shortTermService, researchHistoryService, Duration.ofMinutes(5));
+    }
+
+    private ShortTermScanJobService service(
+            ShortTermService shortTermService,
+            ResearchHistoryService researchHistoryService,
+            Duration timeout
+    ) {
         Instant now = Instant.parse("2026-07-23T06:52:00Z");
         TradingClockService tradingClock = mock(TradingClockService.class);
         when(tradingClock.currentMarketDate()).thenReturn(LocalDate.parse("2026-07-23"));
@@ -167,7 +179,8 @@ class ShortTermScanJobServiceTest {
                 researchHistoryService,
                 tradingClock,
                 gate,
-                Clock.fixed(now, ZoneOffset.UTC)
+                Clock.fixed(now, ZoneOffset.UTC),
+                timeout
         );
     }
 

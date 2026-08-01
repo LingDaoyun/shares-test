@@ -38,7 +38,7 @@ import java.util.stream.IntStream;
 public class UniversalAshareScreener {
 
     private static final int DEFAULT_LIMIT = 3;
-    private static final int DEFAULT_VALUE_LIMIT = 8;
+    private static final int DEFAULT_VALUE_LIMIT = 12;
     private static final int DEFAULT_SCAN_LIMIT = 6000;
     private static final int MAX_LIMIT = 80;
     private static final int MAX_SCAN_LIMIT = 6000;

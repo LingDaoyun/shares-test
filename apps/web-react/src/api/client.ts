@@ -11,6 +11,7 @@ import type {
   LongTermCandidateContext,
   MarketScanReport,
   MispricingReport,
+  PolicyTheme,
   RecommendationEvidenceBundle,
   ShortTermReport,
   ShortTermScheduledSnapshot,
@@ -69,6 +70,10 @@ export function updatePolicySources(request: PolicySourceConfig[]) {
   return http.put<PolicySourceConfig[]>('/runtime-config/policy-sources', request).then((res) => res.data)
 }
 
+export function fetchPolicyThemes() {
+  return http.get<PolicyTheme[]>('/policy/themes').then((res) => res.data)
+}
+
 export interface TechTrackingParams {
   limit?: number
   coreMaxPe?: number
@@ -114,6 +119,7 @@ export interface ShortTermParams {
   maxEntryRise?: number
   maxDistanceToMa20?: number
   minFinancialScore?: number
+  allowStaticCachePreview?: boolean
 }
 
 export function fetchShortTermReport(params: ShortTermParams = {}) {
@@ -271,6 +277,10 @@ export function deleteTradeFill(caseId: string, fillId: string) {
   return http
     .delete<TradeCaseDetail>(`/trade-cases/${encodeURIComponent(caseId)}/fills/${encodeURIComponent(fillId)}`)
     .then((res) => res.data)
+}
+
+export function deleteTradeCase(caseId: string) {
+  return http.delete<void>(`/trade-cases/${encodeURIComponent(caseId)}`).then((res) => res.data)
 }
 
 export function cancelTradeCase(caseId: string) {

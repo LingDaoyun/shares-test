@@ -21,7 +21,10 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -32,6 +35,7 @@ public class ShortTermScanJobService {
 
     private static final Logger logger = LoggerFactory.getLogger(ShortTermScanJobService.class);
     private static final Duration FINISHED_JOB_RETENTION = Duration.ofMinutes(30);
+    private static final Duration DEFAULT_SCAN_TIMEOUT = Duration.ofMinutes(5);
     private static final int MAX_JOB_COUNT = 80;
     private static final int WORKER_COUNT = 2;
     private static final int QUEUE_CAPACITY = 4;
@@ -41,9 +45,11 @@ public class ShortTermScanJobService {
     private final TradingClockService tradingClockService;
     private final ShortTermFinalResultGate finalResultGate;
     private final Clock clock;
+    private final Duration scanTimeout;
     private final ConcurrentMap<String, MutableJob> jobs = new ConcurrentHashMap<>();
     private final AtomicInteger threadSequence = new AtomicInteger();
     private final ExecutorService executorService;
+    private final ScheduledExecutorService timeoutExecutorService;
 
     @Autowired
     public ShortTermScanJobService(
@@ -54,7 +60,8 @@ public class ShortTermScanJobService {
     ) {
         this(
                 shortTermService, researchHistoryService, tradingClockService, finalResultGate,
-                Clock.system(TradingClockService.CHINA_MARKET_ZONE));
+                Clock.system(TradingClockService.CHINA_MARKET_ZONE),
+                DEFAULT_SCAN_TIMEOUT);
     }
 
     ShortTermScanJobService(
@@ -64,11 +71,25 @@ public class ShortTermScanJobService {
             ShortTermFinalResultGate finalResultGate,
             Clock clock
     ) {
+        this(shortTermService, researchHistoryService, tradingClockService, finalResultGate, clock, DEFAULT_SCAN_TIMEOUT);
+    }
+
+    ShortTermScanJobService(
+            ShortTermService shortTermService,
+            ResearchHistoryService researchHistoryService,
+            TradingClockService tradingClockService,
+            ShortTermFinalResultGate finalResultGate,
+            Clock clock,
+            Duration scanTimeout
+    ) {
         this.shortTermService = shortTermService;
         this.researchHistoryService = researchHistoryService;
         this.tradingClockService = tradingClockService;
         this.finalResultGate = finalResultGate;
         this.clock = clock.withZone(TradingClockService.CHINA_MARKET_ZONE);
+        this.scanTimeout = scanTimeout == null || scanTimeout.isNegative() || scanTimeout.isZero()
+                ? DEFAULT_SCAN_TIMEOUT
+                : scanTimeout;
         this.executorService = new ThreadPoolExecutor(
                 WORKER_COUNT,
                 WORKER_COUNT,
@@ -78,6 +99,12 @@ public class ShortTermScanJobService {
                 scanThreadFactory(),
                 new ThreadPoolExecutor.AbortPolicy()
         );
+        this.timeoutExecutorService = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable);
+            thread.setName("short-term-scan-timeout");
+            thread.setDaemon(true);
+            return thread;
+        });
     }
 
     public ShortTermScanJobStatus start(ShortTermScanRequest request) {
@@ -87,7 +114,12 @@ public class ShortTermScanJobService {
         MutableJob job = MutableJob.running(jobId, tradingClockService.currentMarketDate(), clock.instant());
         jobs.put(jobId, job);
         try {
-            executorService.submit(() -> runJob(job, safeRequest));
+            Future<?> future = executorService.submit(() -> runJob(job, safeRequest));
+            timeoutExecutorService.schedule(
+                    () -> timeoutJob(job, future),
+                    scanTimeout.toMillis(),
+                    TimeUnit.MILLISECONDS
+            );
         } catch (RejectedExecutionException exception) {
             jobs.remove(jobId);
             throw new IllegalStateException("短线扫描任务繁忙，请等待当前任务完成后再试", exception);
@@ -105,23 +137,19 @@ public class ShortTermScanJobService {
 
     @PreDestroy
     public void shutdown() {
+        timeoutExecutorService.shutdownNow();
         executorService.shutdownNow();
+    }
+
+    private void timeoutJob(MutableJob job, Future<?> future) {
+        if (job.failIfRunning("短线右侧扫描超时，请降低扫描数量或稍后重试", clock.instant())) {
+            future.cancel(true);
+        }
     }
 
     private void runJob(MutableJob job, ShortTermScanRequest request) {
         try {
-            ShortTermReport report = shortTermService.report(
-                    request.limit(),
-                    request.scanLimit(),
-                    request.klineLimit(),
-                    request.minAmount(),
-                    request.maxPe(),
-                    request.maxPb(),
-                    request.minVolumeRatio(),
-                    request.maxEntryRise(),
-                    request.maxDistanceToMa20(),
-                    request.minFinancialScore()
-            );
+            ShortTermReport report = shortTermService.report(request);
             Instant finishedAt = clock.instant();
             ShortTermFinalResultGate.Result result =
                     finalResultGate.evaluateManual(report, finishedAt);
@@ -216,6 +244,9 @@ public class ShortTermScanJobService {
                 ShortTermFinalResultGate.Result result,
                 Instant finishedAt
         ) {
+            if (!"RUNNING".equals(status)) {
+                return;
+            }
             this.status = "SUCCEEDED";
             this.resultStatus = result.status();
             this.blockedReasons = result.blockedReasons();
@@ -225,6 +256,21 @@ public class ShortTermScanJobService {
         }
 
         synchronized void fail(String message, Instant finishedAt) {
+            if (!"RUNNING".equals(status)) {
+                return;
+            }
+            failNow(message, finishedAt);
+        }
+
+        synchronized boolean failIfRunning(String message, Instant finishedAt) {
+            if (!"RUNNING".equals(status)) {
+                return false;
+            }
+            failNow(message, finishedAt);
+            return true;
+        }
+
+        private void failNow(String message, Instant finishedAt) {
             this.status = "FAILED";
             this.resultStatus = ShortTermSnapshotStatus.FAILED;
             this.blockedReasons = List.of();

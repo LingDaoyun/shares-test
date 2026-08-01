@@ -67,7 +67,7 @@ class ShortTermScheduledScanServiceTest {
     private static final ShortTermScanRequest REQUEST = new ShortTermScanRequest(
             8, 6000, 60, new BigDecimal("80000000"), new BigDecimal("100"),
             new BigDecimal("15"), new BigDecimal("1.20"), new BigDecimal("4"),
-            new BigDecimal("8"), new BigDecimal("58"));
+            new BigDecimal("8"), new BigDecimal("58"), null);
     private static final OvernightRuleSet RULES = new OvernightRuleSet(
             LocalTime.of(14, 45), LocalTime.of(14, 56, 59), LocalTime.of(14, 50),
             2, new BigDecimal("0.3333"), new BigDecimal("0.50"),

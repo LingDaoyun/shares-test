@@ -102,6 +102,25 @@
   .trade-review-tab-active {
     @apply bg-white text-brand-600 shadow-sm;
   }
+  .trade-review-table {
+    @apply min-w-[1280px] table-fixed border border-line border-collapse bg-white;
+  }
+  .trade-review-table thead th {
+    @apply border-r border-line last:border-r-0 align-middle whitespace-nowrap px-4 py-3;
+  }
+  .trade-review-table tbody td {
+    @apply border-r border-line-soft last:border-r-0 align-middle px-4 py-3.5;
+  }
+  .trade-review-table tbody td:nth-child(n+4):nth-child(-n+10) {
+    @apply tabular-nums;
+  }
+  .trade-review-table thead th:nth-child(n+4),
+  .trade-review-table tbody td:nth-child(n+4) {
+    @apply text-right;
+  }
+  .trade-review-table tbody tr.row-selected td {
+    @apply bg-brand-50;
+  }
 }
 
 /* 滚动条 */

@@ -18,9 +18,6 @@ public class ShortTermSupplyDemandScorer {
     private static final BigDecimal BUY_WEIGHT = new BigDecimal("0.45");
     private static final BigDecimal PRESSURE_WEIGHT = new BigDecimal("0.30");
     private static final BigDecimal TECHNICAL_WEIGHT = new BigDecimal("0.25");
-    private static final BigDecimal V3_TECHNICAL_WEIGHT = new BigDecimal("0.45");
-    private static final BigDecimal V3_PRESSURE_WEIGHT = new BigDecimal("0.20");
-    private static final BigDecimal V3_BUY_WEIGHT = new BigDecimal("0.10");
     private static final BigDecimal MAX_CHIP_CONTRIBUTION = new BigDecimal("25");
 
     public ShortTermSupplyDemandScore score(
@@ -61,16 +58,7 @@ public class ShortTermSupplyDemandScorer {
         BigDecimal chipContribution = chip == null || chip.contributionScore() == null
                 ? BigDecimal.ZERO
                 : chip.contributionScore().max(BigDecimal.ZERO).min(MAX_CHIP_CONTRIBUTION);
-        BigDecimal v3RankingScore = technicalScore.multiply(V3_TECHNICAL_WEIGHT)
-                .add(chipContribution)
-                .add(pressureRelief.multiply(V3_PRESSURE_WEIGHT));
-        if (flowScore.available()) {
-            v3RankingScore = v3RankingScore.add(flowScore.score().multiply(V3_BUY_WEIGHT));
-        }
-        ChipActivationMode safeMode = activationMode == null ? ChipActivationMode.SHADOW : activationMode;
-        BigDecimal rankingScore = safeMode == ChipActivationMode.ACTIVE
-                ? v3RankingScore
-                : v2RankingScore;
+        BigDecimal rankingScore = v2RankingScore;
         return new ShortTermSupplyDemandScore(
                 scale(flowScore.mainRatio()),
                 scale(flowScore.largeOrderRatio()),
@@ -79,7 +67,7 @@ public class ShortTermSupplyDemandScorer {
                 scale(technicalScore),
                 scale(clamp(v2RankingScore)),
                 scale(chipContribution),
-                scale(clamp(v3RankingScore)),
+                null,
                 scale(clamp(rankingScore)),
                 dataGaps
         );

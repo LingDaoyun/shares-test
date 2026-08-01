@@ -208,12 +208,12 @@ research:
         max-concurrency: 4
 ```
 
-`activation-mode` 有三档：
+`activation-mode` 目前仅作为兼容配置保留，短线主排序始终不混入筹码分：
 
 ```text
-OFF     不计算筹码排序贡献
-SHADOW  同时记录 V2/V3 分数和顺位差，但正式排序仍沿用 V2（默认）
-ACTIVE  在相同交易动作层内采用 V3 排序，不能改变动作建议或绕过风控门禁
+OFF     不计算筹码结构诊断
+SHADOW  计算筹码成本分布画像，正式排序仍沿用金叉、量能、换手和收盘强度主分（默认）
+ACTIVE  兼容旧配置；当前版本不会采用筹码分改写短线主排序
 ```
 
 没有 Tushare token、接口限流、认证冲突或数据过期时，只把该候选的认证系数降为零或单源系数，不会让整轮扫描进入 `DATA_BLOCKED`。真实 token 推荐通过容器环境变量 `TUSHARE_TOKEN` 注入；若直接写入本地 Nacos，也不要提交到 Git。

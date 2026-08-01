@@ -25,7 +25,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-@SpringBootTest
+@SpringBootTest(properties = "trade-feedback.attestation.max-market-age=P365D")
 @AutoConfigureMockMvc
 class TradeFeedbackControllerTest {
 
@@ -142,6 +142,31 @@ class TradeFeedbackControllerTest {
                 .andExpect(jsonPath("$.caseId").value(caseId))
                 .andExpect(jsonPath("$.createdAt").isNotEmpty())
                 .andExpect(jsonPath("$.updatedAt").isNotEmpty());
+    }
+
+    @Test
+    void deletesAPlannedCaseWithoutFills() throws Exception {
+        String caseId = createCase();
+
+        mockMvc.perform(delete("/api/trade-cases/{caseId}", caseId))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/api/trade-cases/{caseId}", caseId))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void deletesACancelledCaseWithoutFills() throws Exception {
+        String caseId = createCase();
+        mockMvc.perform(post("/api/trade-cases/{caseId}/cancel", caseId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELLED"));
+
+        mockMvc.perform(delete("/api/trade-cases/{caseId}", caseId))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/api/trade-cases/{caseId}", caseId))
+                .andExpect(status().isNotFound());
     }
 
     @Test

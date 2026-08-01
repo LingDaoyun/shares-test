@@ -7,6 +7,7 @@ import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -22,18 +23,91 @@ class CycleTrialServiceTest {
     private final CycleTrialService service = new CycleTrialService(eastMoneyClient);
 
     @Test
-    void shouldRequireVerifiedCycleEvidenceBeforeLeftTrial() {
+    void shouldAllowSmallLeftTrialWhenCycleHypothesisHasLowPriceAsymmetry() {
         eastMoneyClient.quotes = List.of(quote("002772", "众兴菌业", "11.92", "0.10", "10.20", "1.25"));
         eastMoneyClient.klines.put("002772", leftTrialKLines());
 
         CycleTrialReport report = service.report(10, null, null, null, null);
 
         CycleTrialCandidate zhongxing = find(report, "002772");
-        assertThat(zhongxing.action()).isEqualTo("EVIDENCE_REVIEW");
-        assertThat(zhongxing.actionLabel()).isEqualTo("周期证据待补");
-        assertThat(zhongxing.todayAdvice().action()).isEqualTo("WAIT");
+        assertThat(zhongxing.action()).isEqualTo("LEFT_TRIAL");
+        assertThat(zhongxing.actionLabel()).isEqualTo("左侧试仓");
+        assertThat(zhongxing.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
+        assertThat(zhongxing.todayAdvice().actionLabel()).isEqualTo("左侧试仓");
         assertThat(zhongxing.todayAdvice().reasons())
-                .anyMatch(reason -> reason.contains("行业价格") && reason.contains("供需"));
+                .anyMatch(reason -> reason.contains("周期假设") && reason.contains("小仓"));
+        assertThat(zhongxing.todayAdvice().riskControls())
+                .anyMatch(control -> control.contains("10%-15%") || control.contains("10%-20%"));
+    }
+
+    @Test
+    void shouldExposeLeftSideCyclePositionPlanAndEvidenceChecklist() {
+        eastMoneyClient.quotes = List.of(quote("002714", "牧原股份", "36.00", "-1.20", "-45.00", "2.60"));
+        eastMoneyClient.klines.put("002714", muyuanLeftTrialKLines());
+
+        CycleTrialReport report = service.report(10, null, null, null, null);
+
+        CycleTrialCandidate muyuan = find(report, "002714");
+        assertThat(muyuan.action()).isEqualTo("LEFT_TRIAL");
+        assertThat(muyuan.todayAdvice().riskControls())
+                .anySatisfy(control -> assertThat(control).contains("首笔", "10%-15%"))
+                .anySatisfy(control -> assertThat(control).contains("跌入", "第二笔"))
+                .anySatisfy(control -> assertThat(control).contains("周期证伪", "退出"));
+        assertThat(muyuan.entryRules())
+                .anySatisfy(rule -> assertThat(rule).contains("产品价格", "库存", "产能", "供需"))
+                .anySatisfy(rule -> assertThat(rule).contains("毛利率", "经营现金流"));
+        assertThat(muyuan.exitRules())
+                .anySatisfy(rule -> assertThat(rule).contains("产品价格", "毛利率", "现金流"));
+    }
+
+    @Test
+    void shouldNotLeftTrialWhenPriceBreaksPriorCycleLow() {
+        eastMoneyClient.quotes = List.of(quote("002772", "众兴菌业", "10.70", "-5.80", "9.20", "1.13"));
+        eastMoneyClient.klines.put("002772", brokenPriorLowKLines());
+
+        CycleTrialReport report = service.report(10, null, null, null, null);
+
+        CycleTrialCandidate zhongxing = find(report, "002772");
+        assertThat(zhongxing.action()).isEqualTo("SUPPORT_BROKEN");
+        assertThat(zhongxing.todayAdvice().action()).isEqualTo("WAIT");
+        assertThat(zhongxing.todayAdvice().riskControls())
+                .anyMatch(control -> control.contains("前低") || control.contains("破位"));
+    }
+
+    @Test
+    void shouldExplainMuyuanLikeCycleBottomLogic() {
+        eastMoneyClient.quotes = List.of(quote("002714", "牧原股份", "36.00", "-1.20", "-45.00", "2.60"));
+        eastMoneyClient.klines.put("002714", leftTrialKLines());
+
+        CycleTrialReport report = service.report(10, null, null, null, null);
+
+        assertThat(report.methodology()).anySatisfy(item ->
+                assertThat(item).contains("牧原", "基本盘", "周期"));
+    }
+
+    @Test
+    void shouldReturnDataReviewWhenKLineProviderStalls() {
+        StubEastMoneyClient slowClient = new StubEastMoneyClient();
+        slowClient.klineDelayMillis = 300;
+        slowClient.quotes = List.of(
+                quote("002772", "众兴菌业", "11.92", "0.10", "10.20", "1.25"),
+                quote("002714", "牧原股份", "36.00", "-1.20", "-45.00", "2.60"),
+                quote("601088", "中国神华", "39.00", "-0.20", "17.56", "1.81")
+        );
+        CycleTrialService fastService = new CycleTrialService(
+                slowClient,
+                Duration.ofMillis(25),
+                Duration.ofMillis(80)
+        );
+
+        long started = System.nanoTime();
+        CycleTrialReport report = fastService.report(3, null, null, null, null);
+        long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+        assertThat(elapsedMillis).isLessThan(800);
+        assertThat(report.candidates()).hasSize(3);
+        assertThat(report.candidates())
+                .allSatisfy(candidate -> assertThat(candidate.action()).isEqualTo("DATA_REVIEW"));
     }
 
     @Test
@@ -115,12 +189,36 @@ class CycleTrialServiceTest {
         return rows;
     }
 
+    private List<EastMoneyKLine> muyuanLeftTrialKLines() {
+        List<EastMoneyKLine> rows = new ArrayList<>();
+        LocalDate start = LocalDate.parse("2026-04-01");
+        BigDecimal close = new BigDecimal("49.80");
+        for (int index = 0; index < 58; index++) {
+            BigDecimal dayClose = close.subtract(new BigDecimal("0.24").multiply(BigDecimal.valueOf(index)));
+            rows.add(kline("002714", start.plusDays(index), dayClose.add(new BigDecimal("0.10")), dayClose, dayClose.add(new BigDecimal("0.35")), dayClose.subtract(new BigDecimal("0.40")), "112000"));
+        }
+        rows.add(kline("002714", LocalDate.parse("2026-06-29"), new BigDecimal("36.30"), new BigDecimal("35.55"), new BigDecimal("36.50"), new BigDecimal("35.30"), "142000"));
+        rows.add(kline("002714", LocalDate.parse("2026-06-30"), new BigDecimal("35.56"), new BigDecimal("35.72"), new BigDecimal("35.88"), new BigDecimal("35.41"), "98000"));
+        rows.add(kline("002714", LocalDate.parse("2026-07-01"), new BigDecimal("35.75"), new BigDecimal("35.90"), new BigDecimal("36.02"), new BigDecimal("35.60"), "91000"));
+        rows.add(kline("002714", LocalDate.parse("2026-07-02"), new BigDecimal("35.88"), new BigDecimal("36.00"), new BigDecimal("36.08"), new BigDecimal("35.65"), "88000"));
+        return rows;
+    }
+
     private List<EastMoneyKLine> rightSpikeKLines() {
         List<EastMoneyKLine> rows = downtrendRows();
         rows.add(kline("2026-06-29", "11.45", "11.84", "11.97", "11.10", "107500"));
         rows.add(kline("2026-06-30", "11.69", "11.36", "11.74", "11.28", "71514"));
         rows.add(kline("2026-07-01", "11.40", "11.98", "12.17", "11.31", "117403"));
         rows.add(kline("2026-07-02", "11.91", "12.84", "13.07", "11.91", "162829"));
+        return rows;
+    }
+
+    private List<EastMoneyKLine> brokenPriorLowKLines() {
+        List<EastMoneyKLine> rows = downtrendRows();
+        rows.add(kline("2026-06-29", "11.45", "11.84", "11.97", "11.10", "107500"));
+        rows.add(kline("2026-06-30", "11.69", "11.36", "11.74", "11.28", "71514"));
+        rows.add(kline("2026-07-01", "11.40", "11.98", "12.17", "11.31", "117403"));
+        rows.add(kline("2026-07-02", "11.21", "10.70", "11.28", "10.65", "162829"));
         return rows;
     }
 
@@ -145,13 +243,17 @@ class CycleTrialServiceTest {
     }
 
     private EastMoneyKLine kline(String date, String open, String close, String high, String low, String volume) {
+        return kline("002772", LocalDate.parse(date), new BigDecimal(open), new BigDecimal(close), new BigDecimal(high), new BigDecimal(low), volume);
+    }
+
+    private EastMoneyKLine kline(String symbol, LocalDate date, BigDecimal open, BigDecimal close, BigDecimal high, BigDecimal low, String volume) {
         return new EastMoneyKLine(
-                "002772",
-                LocalDate.parse(date),
-                new BigDecimal(open),
-                new BigDecimal(close),
-                new BigDecimal(high),
-                new BigDecimal(low),
+                symbol,
+                date,
+                open,
+                close,
+                high,
+                low,
                 new BigDecimal(volume),
                 null
         );
@@ -223,6 +325,7 @@ class CycleTrialServiceTest {
         private final Map<String, List<EastMoneyKLine>> klines = new java.util.HashMap<>();
         private final Map<String, EastMoneyFundFlowSnapshot> fundFlows = new java.util.HashMap<>();
         private final Map<String, List<EastMoneyQuote>> industryPeers = new java.util.HashMap<>();
+        private long klineDelayMillis;
 
         private StubEastMoneyClient() {
             super(null, null, null);
@@ -252,6 +355,13 @@ class CycleTrialServiceTest {
 
         @Override
         public List<EastMoneyKLine> fetchDailyKLines(String symbol, LocalDate begin, LocalDate end) {
+            if (klineDelayMillis > 0) {
+                try {
+                    Thread.sleep(klineDelayMillis);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             return klines.getOrDefault(symbol, List.of());
         }
 

@@ -1,0 +1,160 @@
+// @vitest-environment jsdom
+
+import { act, StrictMode } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import {
+  addTradeFill,
+  cancelTradeCase,
+  deleteTradeCase,
+  deleteTradeFill,
+  fetchTradeCase,
+  fetchTradeCases,
+  refreshTradeCase,
+  updateTradeFill
+} from '../api/client'
+import { useTradeFeedbackStore } from '../store/tradeFeedbackStore'
+import type { TradeCaseSummary } from '../types'
+import { TradeReviewPage } from './TradeReviewPage'
+
+vi.mock('../api/client', () => ({
+  addTradeFill: vi.fn(),
+  cancelTradeCase: vi.fn(),
+  createTradeCase: vi.fn(),
+  deleteTradeCase: vi.fn(),
+  deleteTradeFill: vi.fn(),
+  fetchTradeCase: vi.fn(),
+  fetchTradeCases: vi.fn(),
+  refreshTradeCase: vi.fn(),
+  updateTradeFill: vi.fn()
+}))
+
+describe('TradeReviewPage case removal', () => {
+  let host: HTMLDivElement
+  let root: Root
+  let confirmSpy: MockInstance<typeof window.confirm>
+
+  beforeEach(() => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    host = document.createElement('div')
+    document.body.append(host)
+    root = createRoot(host)
+    vi.clearAllMocks()
+    useTradeFeedbackStore.setState({
+      casesById: {},
+      caseIdByRecommendation: {},
+      loaded: false,
+      loading: false,
+      loadingMore: false,
+      hasMore: true,
+      nextCursor: null
+    })
+    vi.mocked(fetchTradeCases).mockResolvedValue([tradeCase('case-delete', '600519', '贵州茅台')])
+    vi.mocked(fetchTradeCase).mockRejectedValue(new Error('详情测试中不加载'))
+    vi.mocked(deleteTradeCase).mockResolvedValue(undefined)
+    vi.mocked(refreshTradeCase).mockRejectedValue(new Error('刷新测试中不调用'))
+    vi.mocked(cancelTradeCase).mockRejectedValue(new Error('取消测试中不调用'))
+    vi.mocked(addTradeFill).mockRejectedValue(new Error('新增测试中不调用'))
+    vi.mocked(updateTradeFill).mockRejectedValue(new Error('更新测试中不调用'))
+    vi.mocked(deleteTradeFill).mockRejectedValue(new Error('成交删除测试中不调用'))
+    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  })
+
+  afterEach(() => {
+    act(() => root.unmount())
+    host.remove()
+    confirmSpy.mockRestore()
+    vi.clearAllMocks()
+    delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
+  })
+
+  it('deletes a planned watched case from the review list after confirmation', async () => {
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('600519')
+    const deleteButton = document.querySelector<HTMLButtonElement>('button[aria-label="删除关注 600519"]')
+    expect(deleteButton).not.toBeNull()
+
+    await act(async () => {
+      deleteButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+    })
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('贵州茅台'))
+    expect(deleteTradeCase).toHaveBeenCalledWith('case-delete')
+    expect(document.body.textContent).not.toContain('600519')
+    expect(document.body.textContent).toContain('暂无复盘单')
+  })
+
+  it('deletes a cancelled zero-position case from the review list', async () => {
+    vi.mocked(fetchTradeCases).mockResolvedValue([tradeCase('case-cancelled', '601318', '中国平安', 'CANCELLED')])
+
+    await renderPage(root)
+
+    const deleteButton = document.querySelector<HTMLButtonElement>('button[aria-label="删除关注 601318"]')
+    expect(deleteButton).not.toBeNull()
+    expect(deleteButton?.disabled).toBe(false)
+
+    await act(async () => {
+      deleteButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+    })
+
+    expect(deleteTradeCase).toHaveBeenCalledWith('case-cancelled')
+    expect(document.body.textContent).not.toContain('601318')
+  })
+
+  it('uses the trade review grid table style for aligned divided cells', async () => {
+    await renderPage(root)
+
+    const table = document.querySelector('table')
+    expect(table?.className).toContain('trade-review-table')
+  })
+})
+
+async function renderPage(root: Root) {
+  await act(async () => {
+    root.render(
+      <StrictMode>
+        <TradeReviewPage />
+      </StrictMode>
+    )
+    await flushPromises()
+  })
+}
+
+async function flushPromises() {
+  await new Promise((resolve) => window.setTimeout(resolve, 0))
+}
+
+function tradeCase(
+  caseId: string,
+  symbol: string,
+  companyName: string,
+  status: TradeCaseSummary['status'] = 'PLANNED'
+): TradeCaseSummary {
+  return {
+    caseId,
+    symbol,
+    companyName,
+    sourceModule: '短线推荐',
+    recommendationAction: '观察',
+    recommendationScore: 80,
+    ruleVersion: 'test-v1',
+    recommendedPrice: 100,
+    recommendedAt: '2026-07-30T14:50:00+08:00',
+    recommendationVerified: true,
+    status,
+    ledger: {
+      latestPrice: null,
+      positionQuantity: 0,
+      averageCost: 0,
+      realizedProfit: 0,
+      unrealizedProfit: null,
+      totalProfit: null
+    },
+    outcomes: [],
+    createdAt: '2026-07-30T14:50:00+08:00',
+    updatedAt: '2026-07-30T14:50:00+08:00'
+  }
+}

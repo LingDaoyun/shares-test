@@ -132,6 +132,7 @@ interface TradeFeedbackState {
   loadMoreCases: () => Promise<void>
   refreshCases: () => Promise<void>
   upsertCase: (tradeCase: TradeCase) => void
+  removeCase: (caseId: string) => void
   getCaseId: (request: RecommendationIdentity) => string | undefined
   getCase: (caseId: string) => Promise<TradeCaseDetail>
   ensureCase: (request: CreateTradeCaseRequest) => Promise<TradeCaseDetail>
@@ -192,6 +193,16 @@ export const useTradeFeedbackStore = create<TradeFeedbackState>((set, get) => {
     },
     refreshCases: async () => get().loadCases(true),
     upsertCase: mergeCaseResponse,
+    removeCase: (caseId) => {
+      set((state) => {
+        if (!(caseId in state.casesById)) return state
+        const { [caseId]: _removed, ...casesById } = state.casesById
+        return {
+          casesById,
+          caseIdByRecommendation: buildRecommendationIndex(casesById)
+        }
+      })
+    },
     getCaseId: (request) => get().caseIdByRecommendation[caseKey(request)],
     getCase: async (caseId) => {
       const tradeCase = await fetchTradeCase(caseId)

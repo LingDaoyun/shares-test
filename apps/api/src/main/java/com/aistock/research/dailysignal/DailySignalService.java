@@ -8,7 +8,13 @@ import com.aistock.research.tech.TechTrackedStock;
 import com.aistock.research.tech.TechTrackingReport;
 import com.aistock.research.tech.TechTrackingService;
 import com.aistock.research.mispricing.MispricingService;
+import com.aistock.research.tradefeedback.RecommendationSource;
+import com.aistock.research.tradefeedback.StrategyFeedbackService;
+import com.aistock.research.tradefeedback.StrategyFeedbackSummary;
+import com.aistock.research.trading.StrategyDecisionBroker;
+import com.aistock.research.trading.StrategyDecisionInput;
 import com.aistock.research.trading.TradingAdvice;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -34,10 +40,32 @@ public class DailySignalService {
 
     private final TechTrackingService techTrackingService;
     private final MispricingService mispricingService;
+    private final StrategyDecisionBroker strategyDecisionBroker;
+    private final StrategyFeedbackService strategyFeedbackService;
 
     public DailySignalService(TechTrackingService techTrackingService, MispricingService mispricingService) {
+        this(techTrackingService, mispricingService, new StrategyDecisionBroker(), null);
+    }
+
+    public DailySignalService(
+            TechTrackingService techTrackingService,
+            MispricingService mispricingService,
+            StrategyDecisionBroker strategyDecisionBroker
+    ) {
+        this(techTrackingService, mispricingService, strategyDecisionBroker, null);
+    }
+
+    @Autowired
+    public DailySignalService(
+            TechTrackingService techTrackingService,
+            MispricingService mispricingService,
+            StrategyDecisionBroker strategyDecisionBroker,
+            StrategyFeedbackService strategyFeedbackService
+    ) {
         this.techTrackingService = techTrackingService;
         this.mispricingService = mispricingService;
+        this.strategyDecisionBroker = strategyDecisionBroker;
+        this.strategyFeedbackService = strategyFeedbackService;
     }
 
     public DailySignalReport report(Integer limit, Integer techLimit, Integer mispricingLimit, BigDecimal hotHeat) {
@@ -48,12 +76,16 @@ public class DailySignalService {
 
         TechTrackingReport techReport = techTrackingService.report(safeTechLimit, null, null, null, null);
         MispricingReport mispricingReport = mispricingService.report(safeMispricingLimit, resolvedHotHeat, null, null, null);
+        List<StrategyFeedbackSummary> feedbackSummaries = feedbackSummariesSafely();
 
         List<DailyDecisionSignal> rawSignals = new ArrayList<>();
         techReport.candidates().forEach(stock -> rawSignals.add(fromTech(stock)));
         mispricingReport.candidates().forEach(asset -> rawSignals.add(fromMispricing(asset)));
 
-        List<DailyDecisionSignal> ranked = rawSignals.stream()
+        List<DailyDecisionSignal> brokeredSignals = consolidateDuplicateSymbols(rawSignals, feedbackSummaries).stream()
+                .map(signal -> applyStrategyFeedback(signal, feedbackSummaries))
+                .toList();
+        List<DailyDecisionSignal> ranked = brokeredSignals.stream()
                 .sorted(Comparator.comparingInt((DailyDecisionSignal signal) -> actionPriority(signal.action())).reversed()
                         .thenComparing(DailyDecisionSignal::confidence, Comparator.reverseOrder())
                         .thenComparing(DailyDecisionSignal::score, Comparator.nullsLast(Comparator.reverseOrder())))
@@ -79,6 +111,230 @@ public class DailySignalService {
         );
     }
 
+    private List<StrategyFeedbackSummary> feedbackSummariesSafely() {
+        if (strategyFeedbackService == null) {
+            return List.of();
+        }
+        try {
+            List<StrategyFeedbackSummary> summaries = strategyFeedbackService.summaries();
+            return summaries == null ? List.of() : summaries;
+        } catch (RuntimeException ignored) {
+            return List.of();
+        }
+    }
+
+    private List<DailyDecisionSignal> consolidateDuplicateSymbols(
+            List<DailyDecisionSignal> rawSignals,
+            List<StrategyFeedbackSummary> feedbackSummaries
+    ) {
+        Map<String, List<DailyDecisionSignal>> bySymbol = rawSignals.stream()
+                .collect(Collectors.groupingBy(this::dedupeKey, LinkedHashMap::new, Collectors.toList()));
+        List<DailyDecisionSignal> result = new ArrayList<>();
+        bySymbol.forEach((ignored, group) -> {
+            if (group.size() == 1 || group.get(0).symbol() == null || group.get(0).symbol().isBlank()) {
+                result.addAll(group);
+            } else {
+                result.add(unifiedSignal(group, feedbackSummaries));
+            }
+        });
+        return result;
+    }
+
+    private DailyDecisionSignal unifiedSignal(
+            List<DailyDecisionSignal> group,
+            List<StrategyFeedbackSummary> feedbackSummaries
+    ) {
+        DailyDecisionSignal primary = group.stream()
+                .max(Comparator.comparingInt((DailyDecisionSignal signal) -> actionPriority(signal.action()))
+                        .thenComparing(DailyDecisionSignal::confidence)
+                        .thenComparing(DailyDecisionSignal::score, Comparator.nullsLast(Comparator.naturalOrder())))
+                .orElse(group.get(0));
+        DailyDecisionSignal freshest = group.stream()
+                .filter(signal -> signal.marketTimestamp() != null)
+                .max(Comparator.comparing(DailyDecisionSignal::marketTimestamp))
+                .orElse(primary);
+        TradingAdvice unifiedAdvice = strategyDecisionBroker.resolve(group.stream()
+                .map(this::toStrategyDecisionInput)
+                .toList(), feedbackSummaries);
+        List<String> sourceLabels = group.stream()
+                .map(DailyDecisionSignal::sourceLabel)
+                .filter(item -> item != null && !item.isBlank())
+                .distinct()
+                .toList();
+        return new DailyDecisionSignal(
+                0,
+                primary.symbol(),
+                primary.name(),
+                primary.market(),
+                "strategy_broker",
+                "统一决策中枢",
+                normalizeAction(unifiedAdvice.action()),
+                unifiedAdvice.actionLabel(),
+                unifiedAdvice.confidence(),
+                maxScore(group),
+                freshest.recommendedPrice(),
+                freshest.marketTimestamp(),
+                horizonFor(unifiedAdvice.action()),
+                primary.marketPhase(),
+                unifiedAdvice,
+                mergeTags(group),
+                "统一决策中枢：" + unifiedAdvice.summary() + " 来源：" + String.join(" / ", sourceLabels),
+                join(group.stream().map(DailyDecisionSignal::riskSummary).toList()),
+                join(group.stream().map(DailyDecisionSignal::catalystSummary).toList()),
+                merge(unifiedAdvice.riskControls(), group.stream()
+                        .flatMap(signal -> signal.watchConditions().stream())
+                        .toList()),
+                mergeEvidence(group)
+        );
+    }
+
+    private DailyDecisionSignal applyStrategyFeedback(
+            DailyDecisionSignal signal,
+            List<StrategyFeedbackSummary> feedbackSummaries
+    ) {
+        if ("strategy_broker".equals(signal.sourceType())) {
+            return signal;
+        }
+        List<StrategyFeedbackSummary> matchedFeedback = matchingFeedback(signal, feedbackSummaries);
+        if (matchedFeedback.isEmpty()) {
+            return signal;
+        }
+        TradingAdvice adjustedAdvice = strategyDecisionBroker.adjustWithFeedback(signal.todayAdvice(), matchedFeedback);
+        return new DailyDecisionSignal(
+                signal.rank(),
+                signal.symbol(),
+                signal.name(),
+                signal.market(),
+                signal.sourceType(),
+                signal.sourceLabel(),
+                normalizeAction(adjustedAdvice.action()),
+                adjustedAdvice.actionLabel(),
+                adjustedAdvice.confidence(),
+                signal.score(),
+                signal.recommendedPrice(),
+                signal.marketTimestamp(),
+                horizonFor(adjustedAdvice.action()),
+                signal.marketPhase(),
+                adjustedAdvice,
+                signal.strategyTags(),
+                signal.reason(),
+                signal.riskSummary(),
+                signal.catalystSummary(),
+                merge(adjustedAdvice.riskControls(), signal.watchConditions()),
+                appendFeedbackEvidence(signal.evidence(), matchedFeedback)
+        );
+    }
+
+    private StrategyDecisionInput toStrategyDecisionInput(DailyDecisionSignal signal) {
+        RecommendationSource source = recommendationSource(signal.sourceType());
+        return new StrategyDecisionInput(
+                signal.sourceType(),
+                signal.sourceLabel(),
+                signal.strategyTags().isEmpty() ? signal.sourceType() : signal.strategyTags().get(0),
+                signal.todayAdvice().action(),
+                signal.todayAdvice().actionLabel(),
+                signal.todayAdvice().confidence(),
+                signal.score(),
+                signal.reason(),
+                signal.todayAdvice().riskControls(),
+                source == null ? null : source.sourceModule(),
+                source == null ? null : source.ruleVersion()
+        );
+    }
+
+    private RecommendationSource recommendationSource(String sourceType) {
+        return switch (sourceType == null ? "" : sourceType) {
+            case "tech_tracker" -> RecommendationSource.HOT_TRACKER;
+            case "mispricing" -> RecommendationSource.MISPRICING;
+            case "short_term" -> RecommendationSource.SHORT_TERM;
+            case "cycle" -> RecommendationSource.CYCLE_TRIAL;
+            case "strategy_broker" -> RecommendationSource.DAILY_SIGNAL;
+            default -> null;
+        };
+    }
+
+    private List<StrategyFeedbackSummary> matchingFeedback(
+            DailyDecisionSignal signal,
+            List<StrategyFeedbackSummary> feedbackSummaries
+    ) {
+        RecommendationSource source = recommendationSource(signal.sourceType());
+        if (source == null || feedbackSummaries == null || feedbackSummaries.isEmpty()) {
+            return List.of();
+        }
+        return feedbackSummaries.stream()
+                .filter(summary -> summary != null
+                        && summary.adjustmentEligible()
+                        && summary.reliabilityAdjustment() != null)
+                .filter(summary -> source.sourceModule().equals(summary.sourceModule())
+                        && source.ruleVersion().equalsIgnoreCase(summary.ruleVersion()))
+                .sorted(Comparator.comparingInt(StrategyFeedbackSummary::sampleCount).reversed())
+                .limit(3)
+                .toList();
+    }
+
+    private List<DailySignalEvidence> appendFeedbackEvidence(
+            List<DailySignalEvidence> evidence,
+            List<StrategyFeedbackSummary> matchedFeedback
+    ) {
+        List<DailySignalEvidence> result = new ArrayList<>(evidence);
+        result.add(new DailySignalEvidence(
+                "历史复盘反馈",
+                matchedFeedback.stream()
+                        .map(summary -> summary.sourceModule()
+                                + "/" + summary.ruleVersion()
+                                + " " + summary.horizon()
+                                + " 样本 " + summary.sampleCount()
+                                + "，可靠性修正 " + signed(summary.reliabilityAdjustment()))
+                        .collect(Collectors.joining("；")),
+                null,
+                90
+        ));
+        return result.stream()
+                .filter(item -> item != null)
+                .collect(Collectors.collectingAndThen(
+                        Collectors.toMap(
+                                item -> item.title() + "|" + item.summary() + "|" + item.url(),
+                                item -> item,
+                                (left, right) -> left,
+                                LinkedHashMap::new
+                        ),
+                        map -> map.values().stream().limit(10).toList()
+                ));
+    }
+
+    private List<String> mergeTags(List<DailyDecisionSignal> group) {
+        List<String> tags = group.stream()
+                .flatMap(signal -> signal.strategyTags().stream())
+                .filter(item -> item != null && !item.isBlank())
+                .distinct()
+                .collect(Collectors.toCollection(ArrayList::new));
+        tags.add("unified_decision");
+        return tags.stream().distinct().toList();
+    }
+
+    private List<DailySignalEvidence> mergeEvidence(List<DailyDecisionSignal> group) {
+        return group.stream()
+                .flatMap(signal -> signal.evidence().stream())
+                .filter(item -> item != null)
+                .collect(Collectors.collectingAndThen(
+                        Collectors.toMap(
+                                item -> item.title() + "|" + item.summary() + "|" + item.url(),
+                                item -> item,
+                                (left, right) -> left,
+                                LinkedHashMap::new
+                        ),
+                        map -> map.values().stream().limit(10).toList()
+                ));
+    }
+
+    private BigDecimal maxScore(List<DailyDecisionSignal> group) {
+        return group.stream()
+                .map(DailyDecisionSignal::score)
+                .filter(score -> score != null)
+                .max(BigDecimal::compareTo)
+                .orElse(BigDecimal.ZERO);
+    }
+
     private DailyDecisionSignal fromTech(TechTrackedStock stock) {
         TradingAdvice advice = stock.todayAdvice();
         return new DailyDecisionSignal(
@@ -87,7 +343,7 @@ public class DailySignalService {
                 stock.name(),
                 market(stock.symbol()),
                 "tech_tracker",
-                "科技追踪池",
+                "热门追踪池",
                 normalizeAction(advice.action()),
                 advice.actionLabel(),
                 advice.confidence(),
@@ -288,6 +544,7 @@ public class DailySignalService {
     private String normalizeAction(String action) {
         return switch (action) {
             case "ADD" -> "add";
+            case "LIGHT_TRIAL" -> "trial";
             case "HOLD" -> "hold";
             case "BATCH_SELL" -> "reduce";
             case "SELL_ALL" -> "sell";
@@ -298,6 +555,7 @@ public class DailySignalService {
     private String horizonFor(String action) {
         return switch (action) {
             case "ADD" -> "3d";
+            case "LIGHT_TRIAL" -> "2d";
             case "BATCH_SELL", "SELL_ALL" -> "1d";
             default -> "5d";
         };
@@ -308,9 +566,17 @@ public class DailySignalService {
             case "sell" -> 5;
             case "reduce" -> 4;
             case "add" -> 3;
+            case "trial" -> 3;
             case "hold" -> 2;
             default -> 1;
         };
+    }
+
+    private String dedupeKey(DailyDecisionSignal signal) {
+        if (signal.symbol() == null || signal.symbol().isBlank()) {
+            return signal.sourceType() + "#" + signal.rank();
+        }
+        return signal.symbol();
     }
 
     private String market(String symbol) {
@@ -335,6 +601,14 @@ public class DailySignalService {
             return fallback;
         }
         return value.min(new BigDecimal("100"));
+    }
+
+    private String signed(BigDecimal value) {
+        if (value == null) {
+            return "0.00";
+        }
+        BigDecimal normalized = value.setScale(2, java.math.RoundingMode.HALF_UP);
+        return normalized.signum() > 0 ? "+" + normalized : normalized.toString();
     }
 
     private List<String> merge(List<String> primary, List<String> secondary) {

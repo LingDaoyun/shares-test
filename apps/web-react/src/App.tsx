@@ -71,10 +71,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 
 const MarketScanPage = lazyPage(() => import('./pages/MarketScanPage').then((m) => m.MarketScanPage))
 const ShortTermPage = lazyPage(() => import('./pages/ShortTermPage').then((m) => m.ShortTermPage))
-const TechTrackerPage = lazyPage(() => import('./pages/TechTrackerPage').then((m) => m.TechTrackerPage))
-const MispricingPage = lazyPage(() => import('./pages/MispricingPage').then((m) => m.MispricingPage))
-const CycleTrialPage = lazyPage(() => import('./pages/CycleTrialPage').then((m) => m.CycleTrialPage))
-const DailySignalsPage = lazyPage(() => import('./pages/DailySignalsPage').then((m) => m.DailySignalsPage))
+const PolicyIndustryPage = lazyPage(() => import('./pages/PolicyIndustryPage').then((m) => m.PolicyIndustryPage))
 const WatchlistPage = lazyPage(() => import('./pages/WatchlistPage').then((m) => m.WatchlistPage))
 const TradeReviewPage = lazyPage(() => import('./pages/TradeReviewPage').then((m) => m.TradeReviewPage))
 const RulesPage = lazyPage(() => import('./pages/RulesPage').then((m) => m.RulesPage))
@@ -91,10 +88,7 @@ export default function App() {
               <Route path="market" element={<MarketScanPage />} />
               <Route path="short-term" element={<ShortTermPage />} />
               <Route path="backtest" element={<Navigate to="/short-term" replace />} />
-              <Route path="tech" element={<TechTrackerPage />} />
-              <Route path="mispricing" element={<MispricingPage />} />
-              <Route path="cycle" element={<CycleTrialPage />} />
-              <Route path="signals" element={<DailySignalsPage />} />
+              <Route path="policy" element={<PolicyIndustryPage />} />
               <Route path="watchlist" element={<WatchlistPage />} />
               <Route path="trade-review" element={<TradeReviewPage />} />
               <Route path="rules" element={<RulesPage />} />

@@ -12,9 +12,10 @@ public record ShortTermScanRequest(
         BigDecimal minVolumeRatio,
         BigDecimal maxEntryRise,
         BigDecimal maxDistanceToMa20,
-        BigDecimal minFinancialScore
+        BigDecimal minFinancialScore,
+        Boolean allowStaticCachePreview
 ) {
     public static ShortTermScanRequest empty() {
-        return new ShortTermScanRequest(null, null, null, null, null, null, null, null, null, null);
+        return new ShortTermScanRequest(null, null, null, null, null, null, null, null, null, null, null);
     }
 }

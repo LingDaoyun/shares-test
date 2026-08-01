@@ -853,9 +853,10 @@ public class MispricingService {
         }
         if ("EVIDENCE_REVIEW".equals(action)) {
             return List.of(
+                    "热门退潮或热门方向过热是背景，执行点仍要落在标的弱势日或缩量企稳日",
                     "补齐至少三年年度 ROE、毛利率、经营现金流和利润质量",
-                    "核验最新公告不存在业绩、负债或治理反证",
-                    "财务证据完成前只保留观察，不执行新增仓位"
+                    "核验成交额和换手，流动性不足时不进入错杀执行池",
+                    "完成公告反证、同业估值和 Agent 财报共识后，才允许升级为分批加仓"
             );
         }
         return List.of(
@@ -924,7 +925,11 @@ public class MispricingService {
                             valuationFinding(quote, ruleSet),
                             FINANCIAL_HISTORY_GAP
                     ),
-                    List.of("补齐年度财务序列", "完成公告反证和 Agent 复核后重新计算")
+                    List.of(
+                            "弱势日或缩量企稳前不把低估值当买点",
+                            "流动性低于执行门槛时不新增仓位",
+                            "补齐年度财务序列，完成公告反证和 Agent 财报复核后重新计算"
+                    )
             );
         }
         if ("WAIT_WEAK_DAY".equals(decision.action())) {
@@ -970,6 +975,12 @@ public class MispricingService {
                         "当前热门方向过热分为 " + heat.heatScore() + "，过热阶段更容易出现非热门优质资产的资金虹吸错杀。",
                         null,
                         88
+                ),
+                new MispricingEvidenceItem(
+                        "错杀四门核验",
+                        "低估值不是自动买入；必须同时看到热门退潮或热门过热背景、资产质量证据、估值折价、弱势日价格纪律和流动性达标。",
+                        null,
+                        92
                 )
         ));
         if (isCyclicalReview(seed)) {
@@ -1023,7 +1034,7 @@ public class MispricingService {
                             valuationFinding(quote, ruleSet),
                             priceActionFinding(quote)
                     ),
-                    List.of("近三年点时财报缺失", "公告反证完成前不得执行买入"),
+                    List.of("近三年点时财报缺失", "公告反证完成前不得执行买入", "错杀四门缺一不可：热门退潮/过热、质量、估值、弱势日、流动性必须同时成立"),
                     List.of(new MispricingEvidenceItem(
                             quoteSourceTitle(quote),
                             "用于核验最新价、PE、PB 和成交额。",

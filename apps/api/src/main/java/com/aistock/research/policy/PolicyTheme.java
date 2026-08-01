@@ -11,7 +11,7 @@ public record PolicyTheme(
         BigDecimal strengthScore,
         List<String> chainSegments,
         List<PolicySignal> signals,
-        List<String> risks
+        List<String> risks,
+        List<PolicyCompanyCandidate> companyPool
 ) {
 }
-

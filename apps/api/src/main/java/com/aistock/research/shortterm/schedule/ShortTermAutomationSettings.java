@@ -81,9 +81,10 @@ public class ShortTermAutomationSettings {
                 decimal("research.short-term.schedule.max-pb", "15", new BigDecimal("0.1"), HUNDRED),
                 decimal("research.short-term.schedule.min-volume-ratio", "1.20",
                         ONE, new BigDecimal("3.20")),
-                decimal("research.short-term.schedule.max-entry-rise", "4", ZERO, new BigDecimal("20")),
+                decimal("research.short-term.schedule.max-entry-rise", "4.5", ZERO, new BigDecimal("20")),
                 decimal("research.short-term.schedule.max-distance-to-ma20", "8", ZERO, new BigDecimal("50")),
-                decimal("research.short-term.schedule.min-financial-score", "58", ZERO, HUNDRED));
+                decimal("research.short-term.schedule.min-financial-score", "55", ZERO, HUNDRED),
+                false);
     }
 
     public OvernightRuleSet overnightRules() {

@@ -38,9 +38,9 @@ class ShortTermAutomationSettingsTest {
         assertThat(scan.maxPe()).isEqualByComparingTo("100");
         assertThat(scan.maxPb()).isEqualByComparingTo("15");
         assertThat(scan.minVolumeRatio()).isEqualByComparingTo("1.20");
-        assertThat(scan.maxEntryRise()).isEqualByComparingTo("4");
+        assertThat(scan.maxEntryRise()).isEqualByComparingTo("4.5");
         assertThat(scan.maxDistanceToMa20()).isEqualByComparingTo("8");
-        assertThat(scan.minFinancialScore()).isEqualByComparingTo("58");
+        assertThat(scan.minFinancialScore()).isEqualByComparingTo("55");
 
         OvernightRuleSet rules = settings.overnightRules();
         assertThat(rules.entryStart()).isEqualTo(LocalTime.of(14, 45));

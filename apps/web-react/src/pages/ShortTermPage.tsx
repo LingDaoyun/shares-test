@@ -31,6 +31,7 @@ interface DraftParams {
   maxEntryRise: number
   maxDistanceToMa20: number
   minFinancialScore: number
+  allowStaticCachePreview: boolean
 }
 
 const DEFAULT_DRAFT: DraftParams = {
@@ -41,10 +42,13 @@ const DEFAULT_DRAFT: DraftParams = {
   maxPe: 100,
   maxPb: 15,
   minVolumeRatio: 1.2,
-  maxEntryRise: 4,
+  maxEntryRise: 4.5,
   maxDistanceToMa20: 8,
-  minFinancialScore: 58
+  minFinancialScore: 55,
+  allowStaticCachePreview: true
 }
+
+const SCHEDULED_SCAN_POLL_MS = 10_000
 
 const OVERNIGHT_DEFAULT_RULES = {
   lookbackDays: 900,
@@ -74,6 +78,7 @@ const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'n
 export function ShortTermPage() {
   const [draft, setDraft] = useState<DraftParams>(DEFAULT_DRAFT)
   const [snapshot, setSnapshot] = useState<ShortTermScheduledSnapshot | null>(null)
+  const [scheduledSnapshot, setScheduledSnapshot] = useState<ShortTermScheduledSnapshot | null>(null)
   const [origin, setOrigin] = useState<ReportOrigin>('SCHEDULED')
   const [report, setReport] = useState<ShortTermReport | null>(null)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
@@ -124,6 +129,7 @@ export function ShortTermPage() {
     preparedSnapshotRequest.current = request
     request
       .then((prepared) => {
+        if (alive) setScheduledSnapshot(prepared)
         if (!ownsRequest()) return
         setSnapshot(prepared)
         setOrigin('SCHEDULED')
@@ -141,6 +147,28 @@ export function ShortTermPage() {
       if (pollTimer.current !== undefined) window.clearTimeout(pollTimer.current)
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        const prepared = await fetchLatestShortTermScheduledSnapshot()
+        if (cancelled) return
+        setScheduledSnapshot(prepared)
+        if (!manualScanRequested.current && origin === 'SCHEDULED') {
+          setSnapshot(prepared)
+          setReport(visibleSnapshotReport(prepared))
+        }
+      } catch {
+        // Background polling should not replace the explicit page error.
+      }
+    }
+    const interval = window.setInterval(() => void refresh(), SCHEDULED_SCAN_POLL_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [origin])
 
   async function runManualScan(nextParams: DraftParams) {
     manualScanRequested.current = true
@@ -303,6 +331,9 @@ export function ShortTermPage() {
   }, [report, selectedSymbol])
 
   const diagnostics = useMemo(() => shortTermDiagnostics(report), [report])
+  const runningScheduledSnapshot = scheduledSnapshot && isScheduledScanRunning(scheduledSnapshot)
+    ? scheduledSnapshot
+    : null
 
   return (
     <div className="flex flex-col gap-4">
@@ -323,6 +354,9 @@ export function ShortTermPage() {
       />
 
       {snapshot ? <ScheduledSnapshotStatus snapshot={snapshot} origin={origin} /> : null}
+      {runningScheduledSnapshot ? (
+        <ScheduledScanPulse snapshot={runningScheduledSnapshot} />
+      ) : null}
 
       <Card
         title={
@@ -344,6 +378,21 @@ export function ShortTermPage() {
           <NumberField label="距20日线%" value={draft.maxDistanceToMa20} min={2} max={20} step={0.5} onChange={(value) => setDraft({ ...draft, maxDistanceToMa20: value })} />
           <NumberField label="财报分下限" value={draft.minFinancialScore} min={30} max={90} onChange={(value) => setDraft({ ...draft, minFinancialScore: value })} />
         </div>
+        <label className="mt-3 flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-line-soft bg-white px-3 py-2 text-sm">
+          <span>
+            <span className="block font-semibold text-ink-800">允许休市缓存预览</span>
+            <span className="block text-xs leading-relaxed text-ink-500">
+              开启后，手动扫描可用接口返回的静态行情看策略效果；结果会标记为缓存预览，不作为今日买点。
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            className="h-5 w-5 accent-brand-600"
+            checked={draft.allowStaticCachePreview}
+            onChange={(event) => setDraft({ ...draft, allowStaticCachePreview: event.target.checked })}
+            aria-label="允许休市缓存预览"
+          />
+        </label>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
           <p className="text-xs leading-relaxed text-ink-500">
             参考带只影响估值语境分和风险提示，不决定股票是否入选；低流动性、长期横盘、急拉和离均线过远仍受约束。
@@ -476,6 +525,34 @@ function HotDirectionsCard({ directions }: { directions: ShortTermHotDirection[]
   )
 }
 
+export function ScheduledScanPulse({ snapshot }: { snapshot: ShortTermScheduledSnapshot }) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-sky-200 bg-sky-50/70 px-4 py-3 text-sky-900">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="relative flex h-9 w-9 items-center justify-center rounded-full border border-sky-300 bg-white">
+            <span className="absolute h-9 w-9 animate-ping rounded-full bg-sky-200 opacity-40" />
+            <RefreshCw className="relative h-4 w-4 animate-spin" aria-hidden="true" />
+          </span>
+          <div>
+            <p className="text-sm font-semibold">14:45 自动扫描正在执行</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-sky-700">
+              页面正在跟随后台计划任务刷新，完成后会自动切换到最新候选。
+            </p>
+          </div>
+        </div>
+        <div className="text-right text-xs text-sky-700">
+          <p className="font-mono">{snapshot.tradeDate}</p>
+          <p>{snapshot.message || '后台扫描中'}</p>
+        </div>
+      </div>
+      <div className="mt-3 h-1 overflow-hidden rounded-full bg-sky-100">
+        <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-500" />
+      </div>
+    </section>
+  )
+}
+
 function toApiParams(params: DraftParams): ShortTermParams {
   return {
     limit: params.limit,
@@ -487,8 +564,13 @@ function toApiParams(params: DraftParams): ShortTermParams {
     minVolumeRatio: params.minVolumeRatio,
     maxEntryRise: params.maxEntryRise,
     maxDistanceToMa20: params.maxDistanceToMa20,
-    minFinancialScore: params.minFinancialScore
+    minFinancialScore: params.minFinancialScore,
+    allowStaticCachePreview: params.allowStaticCachePreview
   }
+}
+
+function isScheduledScanRunning(snapshot: ShortTermScheduledSnapshot) {
+  return snapshot.status === 'RUNNING' && !snapshot.message.includes('等待 ')
 }
 
 function visibleSnapshotReport(snapshot: ShortTermScheduledSnapshot) {
@@ -655,8 +737,6 @@ function CandidateDetail({
           <ScoreMetric label="阶段校准" value={candidate.score.stageAdjustment ?? 0} />
           <ScoreMetric label="排序分" value={candidate.score.rankingScore ?? candidate.score.finalScore} />
           <ScoreMetric label="V2 排序分" value={candidate.score.v2RankingScore} />
-          <ScoreMetric label="筹码排序贡献" value={candidate.score.chipContributionScore} />
-          <ScoreMetric label="V3 影子分" value={candidate.score.v3RankingScore} />
         </div>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line-soft pt-3 text-xs text-ink-500">
@@ -744,8 +824,8 @@ function ChipSummaryTags({ chip }: { chip: ShortTermChipSnapshot | null | undefi
     <>
       <Tag tone={chipVerificationTone(chip.verificationStatus)}>
         {chip.verificationStatus === 'VERIFIED' ? '筹码认证' : `筹码：${chip.verificationLabel}`}
-        {chip.contributionScore != null ? ` ${signedScore(chip.contributionScore)}` : ''}
       </Tag>
+      {chip.contributionScore != null ? <Tag tone="neutral">诊断分 {formatNumber(chip.contributionScore)}</Tag> : null}
       {chip.distanceToAverageCostPercent != null ? (
         <Tag tone="neutral">距成本 {formatSignedPercent(chip.distanceToAverageCostPercent)}</Tag>
       ) : null}
@@ -782,18 +862,13 @@ function ChipStructurePanel({ candidate }: { candidate: ShortTermCandidate }) {
             <Metric label="前高后累计换手" value={formatPercent(chip.turnoverSincePriorHighPercent)} />
             <Metric label="筹码结构分" value={formatNumber(chip.chipStructureScore)} />
             <Metric label="认证系数" value={formatNumber(chip.verificationCoefficient)} />
-            <Metric label="排序贡献" value={signedScore(chip.contributionScore)} />
-            <Metric
-              label="V2 / V3 排名"
-              value={candidate.score.v2Rank != null && candidate.score.v3Rank != null
-                ? `#${candidate.score.v2Rank} / #${candidate.score.v3Rank}`
-                : '影子顺位待补'}
-            />
+            <Metric label="独立诊断分" value={formatNumber(chip.contributionScore)} />
+            <Metric label="主排序关系" value="不参与主排序" />
             <Metric label="本地 / 外部日期" value={`${chip.localTradeDate ?? '待补'} / ${chip.externalTradeDate ?? '待补'}`} />
             <Metric label="计算口径" value={chip.calculationMode === 'INTRADAY_ESTIMATE' ? '盘中估算' : '完整日 K'} />
           </div>
           <p className="mt-3 text-xs leading-relaxed text-ink-500">
-            筹码是基于换手率与价格区间的成本分布估算，只参与同一动作层排序；认证不等于主力意图确认，也不会越过金叉、量能、风险和数据质量门禁。
+            筹码是基于换手率与价格区间估算的成本分布画像，用来观察大部分筹码在低位还是高位、上方套牢盘是否已经消化；它不参与金叉、量能、换手率和收盘强度的主分计算。
           </p>
           {chipDataGaps.length ? (
             <div className="mt-3 border-l-2 border-amber-300 pl-3 text-xs leading-relaxed text-amber-700">
@@ -811,11 +886,6 @@ function chipVerificationTone(status: ChipVerificationStatus) {
   if (status === 'SINGLE_SOURCE') return 'sky' as const
   if (status === 'CONFLICT' || status === 'STALE') return 'warning' as const
   return 'neutral' as const
-}
-
-function signedScore(value: number | null | undefined) {
-  if (value === null || value === undefined) return '待补充'
-  return `${value > 0 ? '+' : ''}${Number(value).toFixed(2)}`
 }
 
 function GoldenCrossDetail({ snapshot }: { snapshot: ShortTermGoldenCrossSnapshot | null | undefined }) {

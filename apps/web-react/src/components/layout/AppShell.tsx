@@ -10,7 +10,7 @@ export function AppShell() {
       <div className="mx-auto flex max-w-[1480px] flex-col gap-5 px-5 py-6">
         <Header />
         <NavRail />
-        <main className="animate-fade-in">
+        <main tabIndex={-1} className="animate-fade-in outline-none">
           <Outlet />
         </main>
       </div>

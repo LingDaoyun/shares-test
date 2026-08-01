@@ -120,7 +120,7 @@ class UniversalAshareScreenerTest {
     }
 
     @Test
-    void valueModeDefaultsToEightCandidatesWithoutChangingOtherModes() {
+    void valueModeDefaultsToTwelveCandidatesWithoutChangingOtherModes() {
         client.baseQuotes = List.of(
                 quote("000777", "朋友推荐", "机械设备", "18.00", "-0.20", "16.00", "1.80", "260000000")
         );
@@ -130,7 +130,7 @@ class UniversalAshareScreenerTest {
                 null, 50, null, null, null, null, false, true, "VALUE"
         ));
 
-        assertThat(report.ruleSet().limit()).isEqualTo(8);
+        assertThat(report.ruleSet().limit()).isEqualTo(12);
         assertThat(report.candidates()).allSatisfy(candidate ->
                 assertThat(candidate.action()).isNotEqualTo("ACCUMULATE"));
     }

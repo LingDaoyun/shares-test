@@ -119,7 +119,7 @@ class ShortTermSupplyDemandScorerTest {
     }
 
     @Test
-    void computesVerifiedChipV3FormulaButKeepsV2AppliedInShadowMode() {
+    void keepsVerifiedChipScoreSeparateFromAppliedRankingInShadowMode() {
         ShortTermTechnicalSnapshot technical = technical("10", "100", "1");
         ShortTermChipSnapshot chip = mock(ShortTermChipSnapshot.class);
         when(chip.contributionScore()).thenReturn(new BigDecimal("20"));
@@ -133,17 +133,13 @@ class ShortTermSupplyDemandScorerTest {
                 ChipActivationMode.SHADOW
         );
 
-        BigDecimal expectedV3 = score.technicalRankingScore().multiply(new BigDecimal("0.45"))
-                .add(new BigDecimal("20"))
-                .add(score.overheadPressureReliefScore().multiply(new BigDecimal("0.20")))
-                .add(score.buyPressureScore().multiply(new BigDecimal("0.10")));
-        assertThat(score.v3RankingScore()).isEqualByComparingTo(expectedV3);
         assertThat(score.rankingScore()).isEqualByComparingTo(score.v2RankingScore());
         assertThat(score.chipContributionScore()).isEqualByComparingTo("20.00");
+        assertThat(score.v3RankingScore()).isNull();
     }
 
     @Test
-    void appliesV3OnlyWhenActivationModeIsActive() {
+    void keepsChipAsStandaloneDiagnosticEvenWhenActivationModeIsActive() {
         ShortTermChipSnapshot chip = mock(ShortTermChipSnapshot.class);
         when(chip.contributionScore()).thenReturn(new BigDecimal("18"));
 
@@ -156,7 +152,9 @@ class ShortTermSupplyDemandScorerTest {
                 ChipActivationMode.ACTIVE
         );
 
-        assertThat(score.rankingScore()).isEqualByComparingTo(score.v3RankingScore());
+        assertThat(score.rankingScore()).isEqualByComparingTo(score.v2RankingScore());
+        assertThat(score.chipContributionScore()).isEqualByComparingTo("18.00");
+        assertThat(score.v3RankingScore()).isNull();
     }
 
     private EastMoneyFundFlowSnapshot flow(

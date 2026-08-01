@@ -29,7 +29,7 @@ interface DraftParams {
 }
 
 const DEFAULT_DRAFT: DraftParams = {
-  limit: 8,
+  limit: 12,
   scanLimit: 6000,
   minAmountYi: 0.8,
   maxPe: 35,
@@ -114,7 +114,7 @@ export function MarketScanPage() {
       <SectionBanner
         eyebrow="LONG VALUE"
         title="长期价投"
-        description="覆盖沪深北 A 股并核对数据完整度，默认输出八只候选，按长期价值投资规则排序。"
+        description="覆盖沪深北 A 股并核对数据完整度，默认输出十二只候选，优先展示低估且基本面较好的股票。"
         extra={
           <Button
             variant="primary"
@@ -136,7 +136,7 @@ export function MarketScanPage() {
         }
       >
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
-          <NumberField label="候选数量" value={draft.limit} min={3} max={20} onChange={(value) => setDraft({ ...draft, limit: value })} />
+          <NumberField label="候选数量" value={draft.limit} min={3} max={30} onChange={(value) => setDraft({ ...draft, limit: value })} />
           <NumberField label="扫描数量" value={draft.scanLimit} min={50} max={6000} step={100} onChange={(value) => setDraft({ ...draft, scanLimit: value })} />
           <NumberField label="成交额下限(亿)" value={draft.minAmountYi} min={0.8} max={20} step={0.05} onChange={(value) => setDraft({ ...draft, minAmountYi: value })} />
           <NumberField label="PE 参考带" value={draft.maxPe} min={4} max={120} onChange={(value) => setDraft({ ...draft, maxPe: value })} />
@@ -164,7 +164,7 @@ export function MarketScanPage() {
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
           <p className="text-xs leading-relaxed text-ink-500">
-            长投默认输出八只全市场价投候选；PE、PB 只形成估值语境，不作为统一行业硬门槛。
+            长投默认输出十二只全市场价投候选；优先找低估且基本面较好的股票，PE、PB 只形成估值语境，不作为统一行业硬门槛。
           </p>
           <Button variant="secondary" onClick={() => setParams({ ...draft })}>应用阈值</Button>
         </div>
@@ -235,8 +235,6 @@ export function MarketScanPage() {
               />
             ) : null}
           </DetailOverlay>
-
-          <ExclusionPanel report={report} />
         </>
       ) : null}
     </div>
@@ -278,29 +276,6 @@ function FunnelStrip({ report }: { report: MarketScanReport }) {
         </div>
       ))}
     </div>
-  )
-}
-
-function ExclusionPanel({ report }: { report: MarketScanReport }) {
-  if (!report.exclusionsSample.length) return null
-  return (
-    <Card title="排除样本" flush>
-      <div className="divide-y divide-line-soft">
-        {report.exclusionsSample.slice(0, 12).map((item, index) => (
-          <div key={`${item.symbol ?? 'missing'}-${item.stage}-${index}`} className="grid grid-cols-1 gap-2 px-5 py-3 text-sm md:grid-cols-[160px_120px_minmax(0,1fr)]">
-            <div className="min-w-0">
-              <div className="truncate font-semibold text-ink-900">{item.name ?? '名称缺失'}</div>
-              <div className="font-mono text-xs text-ink-400">{item.symbol ?? '代码缺失'}</div>
-            </div>
-            <Tag tone="neutral">{stageLabel(item.stage)}</Tag>
-            <div className="min-w-0">
-              <p className="text-ink-700">{item.reason}</p>
-              {item.evidence.length ? <p className="mt-1 truncate text-xs text-ink-400">{item.evidence.join(' / ')}</p> : null}
-            </div>
-          </div>
-        ))}
-      </div>
-    </Card>
   )
 }
 
@@ -725,19 +700,6 @@ function ScoreMetric({ label, value }: { label: string; value: number }) {
       </div>
     </div>
   )
-}
-
-function stageLabel(stage: string) {
-  const labels: Record<string, string> = {
-    TRADABLE: '可交易',
-    MODE_ELIGIBILITY: '策略资格',
-    LIQUIDITY: '流动性',
-    SCORE: '评分资格',
-    DEEP_REVIEW: '深度复核',
-    SIDEWAYS: '横盘',
-    FINAL: '候选'
-  }
-  return labels[stage] ?? stage
 }
 
 function modeLabel(mode: string) {

@@ -55,6 +55,28 @@ describe('tradeFeedbackStore pagination', () => {
       limit: 50
     })
   })
+
+  it('removes a case and clears its recommendation lookup', async () => {
+    mockedFetchTradeCases.mockResolvedValue([summary('case-delete', '2026-07-12T00:00:00Z')])
+
+    await useTradeFeedbackStore.getState().loadCases()
+    expect(useTradeFeedbackStore.getState().getCaseId({
+      symbol: '600519',
+      sourceModule: 'MISPRICING',
+      ruleVersion: 'test-v1',
+      recommendedAt: '2026-07-12T00:00:00Z'
+    })).toBe('case-delete')
+
+    useTradeFeedbackStore.getState().removeCase('case-delete')
+
+    expect(useTradeFeedbackStore.getState().casesById['case-delete']).toBeUndefined()
+    expect(useTradeFeedbackStore.getState().getCaseId({
+      symbol: '600519',
+      sourceModule: 'MISPRICING',
+      ruleVersion: 'test-v1',
+      recommendedAt: '2026-07-12T00:00:00Z'
+    })).toBeUndefined()
+  })
 })
 
 function summary(caseId: string, createdAt: string): TradeCaseSummary {

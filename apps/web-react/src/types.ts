@@ -64,6 +64,44 @@ export interface RuntimeConfigSnapshot {
   updatedAt: string
 }
 
+export interface PolicySignal {
+  source: string
+  signalType: string
+  summary: string
+  confidence: number
+  url: string | null
+  publishedAt: string | null
+}
+
+export interface PolicyTheme {
+  themeCode: string
+  name: string
+  policyLevel: string
+  timeHorizon: string
+  strengthScore: number
+  chainSegments: string[]
+  signals: PolicySignal[]
+  risks: string[]
+  companyPool: PolicyCompanyCandidate[]
+}
+
+export interface PolicyCompanyCandidate {
+  symbol: string
+  companyName: string
+  industry: string | null
+  chainSegment: string
+  researchRole: string
+  leadershipRationale: string[]
+  financialQualityScore: number
+  financialQualityLabel: string
+  latestPrice: number | null
+  peTtm: number | null
+  pbRatio: number | null
+  amount: number | null
+  actionLabel: string
+  dataGaps: string[]
+}
+
 export interface TechEvidenceItem {
   title: string
   summary: string
@@ -794,6 +832,7 @@ export type ShortTermSnapshotStatus =
   | 'RUNNING'
   | 'PRESELECT_READY'
   | 'FINAL_READY'
+  | 'CACHE_PREVIEW'
   | 'NO_TRADE'
   | 'DATA_BLOCKED'
   | 'FAILED'

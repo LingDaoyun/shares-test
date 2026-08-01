@@ -7,6 +7,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         RecommendationAttestationService.class,
         TradeFeedbackConcurrencyIntegrationTest.TestConfig.class
 })
+@TestPropertySource(properties = "trade-feedback.attestation.max-market-age=P365D")
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class TradeFeedbackConcurrencyIntegrationTest {
 

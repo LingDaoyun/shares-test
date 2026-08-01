@@ -65,6 +65,8 @@ class ShortTermServiceTest {
         assertThat(eastMoneyClient.requestedQuoteLimit).isEqualTo(6000);
         assertThat(report.ruleSet().scanLimit()).isEqualTo(6000);
         assertThat(report.ruleSet().klineLimit()).isEqualTo(60);
+        assertThat(report.ruleSet().maxEntryRisePercent()).isEqualByComparingTo("4.5");
+        assertThat(report.ruleSet().minFinancialScore()).isEqualByComparingTo("55");
     }
 
     @Test
@@ -88,7 +90,7 @@ class ShortTermServiceTest {
         });
 
         ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
                 Set.of("600795", "002128")
         );
 
@@ -124,7 +126,7 @@ class ShortTermServiceTest {
         }
 
         ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
                 Set.of("600000", "600001")
         );
 
@@ -152,7 +154,7 @@ class ShortTermServiceTest {
         eastMoneyClient.snapshotExpectedCount = 5000;
 
         ShortTermReport report = service.report(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null)
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null)
         );
 
         assertThat(eastMoneyClient.requestedQuoteLimit).isEqualTo(100);
@@ -179,7 +181,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600000", goodFinancial("600000"));
 
         ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
                 Set.of("600000")
         );
 
@@ -206,7 +208,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600000", goodFinancial("600000"));
 
         ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
                 Set.of("600000")
         );
 
@@ -230,7 +232,7 @@ class ShortTermServiceTest {
         ShortTermService pointInTimeService = serviceAt(decisionClock);
 
         ShortTermReport report = pointInTimeService.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
                 Set.of("600001", "600002")
         );
 
@@ -261,7 +263,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600001", goodFinancial("600001"));
 
         ShortTermReport report = serviceAt(decisionClock).finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
                 Set.of("600001")
         );
 
@@ -279,7 +281,7 @@ class ShortTermServiceTest {
         ShortTermService pointInTimeService = serviceAt(decisionClock);
 
         ShortTermReport report = pointInTimeService.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
                 Set.of("600001")
         );
 
@@ -340,7 +342,7 @@ class ShortTermServiceTest {
                 eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "180000")));
 
         ShortTermReport report = service.report(
-                new ShortTermScanRequest(3, 100, 9, null, null, null, null, null, null, null)
+                new ShortTermScanRequest(3, 100, 9, null, null, null, null, null, null, null, null)
         );
 
         assertThat(report.coverage().expectedCount()).isEqualTo(10);
@@ -375,7 +377,7 @@ class ShortTermServiceTest {
         eastMoneyClient.quotes = List.of(
                 quote("600001", "过期覆盖样本", "10.62", "1.20", "18", "1.60", "600000000")
         );
-        eastMoneyClient.snapshotFetchedAt = Instant.parse("2026-07-07T06:50:00Z");
+        eastMoneyClient.snapshotFetchedAt = Instant.parse("2026-07-07T06:53:00Z");
         eastMoneyClient.klines.put("600001", rightEarlyKLines("600001", "10.62", "180000"));
         eastMoneyClient.financials.put("600001", goodFinancial("600001"));
 
@@ -496,7 +498,7 @@ class ShortTermServiceTest {
         Clock decisionClock = Clock.fixed(Instant.parse("2026-07-07T06:50:00Z"), SHANGHAI);
         ShortTermService pointInTimeService = serviceAt(decisionClock);
         ShortTermScanRequest request = new ShortTermScanRequest(
-                3, 100, 10, null, null, null, null, null, null, null
+                3, 100, 10, null, null, null, null, null, null, null, null
         );
 
         eastMoneyClient.quotes = List.of(validQuote);
@@ -710,7 +712,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shadowRecordsChipRankingWhileActiveModeAppliesItWithinTheSameActionLayer() {
+    void chipDiagnosticsDoNotChangeRankingEvenWhenActivationModeIsActive() {
         eastMoneyClient.quotes = List.of(
                 quote("600607", "强买盘样本", "10.62", "1.20", "18", "1.6", "600000000"),
                 quote("600608", "优质筹码样本", "10.62", "1.20", "18", "1.6", "600000000")
@@ -735,11 +737,13 @@ class ShortTermServiceTest {
         assertThat(shadow.candidates()).extracting(ShortTermCandidate::symbol)
                 .containsExactly("600607", "600608");
         assertThat(shadow.candidates()).allSatisfy(candidate -> assertThat(candidate.chip()).isNotNull());
-        assertThat(find(shadow, "600608").score().v3RankingScore())
-                .isGreaterThan(find(shadow, "600607").score().v3RankingScore());
+        assertThat(find(shadow, "600608").score().chipContributionScore())
+                .isGreaterThan(find(shadow, "600607").score().chipContributionScore());
+        assertThat(find(shadow, "600608").score().v3RankingScore()).isNull();
         assertThat(active.candidates()).extracting(ShortTermCandidate::symbol)
-                .containsExactly("600608", "600607");
+                .containsExactly("600607", "600608");
         assertThat(find(active, "600608").action()).isEqualTo(find(active, "600607").action());
+        assertThat(find(active, "600608").score().v3Rank()).isNull();
         assertThat(eastMoneyClient.turnoverEnrichmentCalls).isPositive();
     }
 
@@ -918,6 +922,62 @@ class ShortTermServiceTest {
     }
 
     @Test
+    void shouldBlockAllShortTermRecommendationsWhenFullMarketIsInExtremeSelloff() {
+        List<EastMoneyQuote> quotes = new ArrayList<>();
+        quotes.add(quote("600201", "逆势右侧候选", "10.62", "1.60", "18", "1.6", "600000000"));
+        for (int index = 0; index < 4200; index++) {
+            quotes.add(quote(String.format("%06d", 601000 + index), "普跌样本" + index,
+                    "10.00", "-2.10", "18", "1.6", "300000000"));
+        }
+        for (int index = 0; index < 1000; index++) {
+            quotes.add(quote(String.format("%06d", 1 + index), "跌停样本" + index,
+                    "10.00", "-10.00", "18", "1.6", "300000000"));
+        }
+        eastMoneyClient.quotes = quotes;
+        eastMoneyClient.snapshotExpectedCount = quotes.size();
+        eastMoneyClient.klines.put("600201", rightEarlyKLines("600201", "10.62", "180000"));
+        eastMoneyClient.financials.put("600201", goodFinancial("600201"));
+
+        ShortTermReport report = service.report(8, 6000, 60, null, null, null, null, null, null, null);
+
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.marketSentiment().phase()).isEqualTo("极端退潮");
+        assertThat(report.marketSentiment().declining()).isGreaterThan(5000);
+        assertThat(report.marketSentiment().limitDownLike()).isGreaterThanOrEqualTo(1000);
+        assertThat(report.candidates()).isEmpty();
+        assertThat(report.candidateCount()).isZero();
+        assertThat(report.quoteNote()).contains("极端弱市");
+        assertThat(eastMoneyClient.requestedKlineSymbols).isEmpty();
+        assertThat(eastMoneyClient.requestedFinancialSymbols).isEmpty();
+    }
+
+    @Test
+    void shouldNotUseExtremeSelloffGateBeforeSixHundredLimitDownLikeStocks() {
+        List<EastMoneyQuote> quotes = new ArrayList<>();
+        quotes.add(quote("600201", "逆势右侧候选", "10.62", "1.60", "18", "1.6", "600000000"));
+        for (int index = 0; index < 5400; index++) {
+            quotes.add(quote(String.format("%06d", 601000 + index), "普跌样本" + index,
+                    "10.00", "-2.10", "18", "1.6", "300000000"));
+        }
+        for (int index = 0; index < 599; index++) {
+            quotes.add(quote(String.format("%06d", 1 + index), "跌停样本" + index,
+                    "10.00", "-10.00", "18", "1.6", "300000000"));
+        }
+        eastMoneyClient.quotes = quotes;
+        eastMoneyClient.snapshotExpectedCount = quotes.size();
+        eastMoneyClient.klines.put("600201", rightEarlyKLines("600201", "10.62", "180000"));
+        eastMoneyClient.financials.put("600201", goodFinancial("600201"));
+
+        ShortTermReport report = service.report(8, 6000, 60, null, null, null, null, null, null, null);
+
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.marketSentiment().phase()).isEqualTo("退潮");
+        assertThat(report.marketSentiment().limitDownLike()).isEqualTo(599);
+        assertThat(report.quoteNote()).doesNotContain("极端弱市闸门");
+        assertThat(eastMoneyClient.requestedKlineSymbols).isNotEmpty();
+    }
+
+    @Test
     void shouldTreatNarrowHotSectorAsStructuralMarketInsteadOfIcePointBlock() {
         List<EastMoneyQuote> quotes = new ArrayList<>();
         quotes.add(quoteWithIndustry("600401", "算力甲", "算力设备", "10.62", "2.80", "48", "5.2", "900000000"));
@@ -990,24 +1050,45 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldNotLetTailCreateAnEntryWhenCrowdedMarketDowngradesTheDailySignal() {
+    void shouldAllowOnlyLightTrialWhenCrowdedMarketHasConfirmedRightSideAndTailEvidence() {
         List<EastMoneyQuote> quotes = new ArrayList<>();
-        quotes.add(quote("600301", "右侧候选", "10.62", "1.60", "18", "1.6", "600000000"));
+        quotes.add(withTurnover(
+                quoteAt(
+                        "600301",
+                        "右侧候选",
+                        "通用设备",
+                        Instant.parse("2026-07-07T06:50:00Z"),
+                        "1.60",
+                        "600000000"
+                ),
+                "3.00"
+        ));
         for (int index = 0; index < 80; index++) {
-            quotes.add(quote(String.format("60%04d", 400 + index), "涨停样本" + index,
-                    "10.00", "9.60", "30", "3", "300000000"));
+            quotes.add(quoteAt(
+                    String.format("60%04d", 400 + index),
+                    "涨停样本" + index,
+                    "通用设备",
+                    Instant.parse("2026-07-07T06:50:00Z"),
+                    "9.60",
+                    "300000000"
+            ));
         }
         eastMoneyClient.quotes = quotes;
+        eastMoneyClient.snapshotExpectedCount = quotes.size();
+        eastMoneyClient.snapshotFetchedAt = Instant.parse("2026-07-07T06:53:00Z");
         eastMoneyClient.klines.put("600301", confirmedRightEarlyKLines("600301", "10.62", "180000"));
         eastMoneyClient.financials.put("600301", goodFinancial("600301"));
         eastMoneyClient.intraday.put("600301", confirmedTail("600301"));
 
-        ShortTermReport report = service.report(5, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:55:00Z"), SHANGHAI))
+                .report(5, 100, 10, null, null, null, null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600301");
+        assertThat(report.coverage().executionReliable()).as(report.coverage().toString()).isTrue();
         assertThat(report.marketSentiment().phase()).isEqualTo("高潮");
-        assertThat(candidate.action()).isEqualTo("WATCH_RIGHT_SIDE");
-        assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
+        assertThat(candidate.action()).isEqualTo("RIGHT_EARLY_LIGHT_TRIAL");
+        assertThat(candidate.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
+        assertThat(candidate.todayAdvice().summary()).contains("高潮", "轻仓");
     }
 
     @Test

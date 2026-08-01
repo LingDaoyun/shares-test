@@ -19,6 +19,7 @@ public class ShortTermMomentumQualityEvaluator {
     private static final BigDecimal FIVE = new BigDecimal("5");
     private static final BigDecimal EIGHT = new BigDecimal("8");
     private static final BigDecimal HUNDRED = new BigDecimal("100");
+    private static final BigDecimal LARGE_AMOUNT = new BigDecimal("2000000000");
 
     public ShortTermMomentumQuality evaluate(
             EastMoneyQuote quote,
@@ -28,7 +29,7 @@ public class ShortTermMomentumQualityEvaluator {
     ) {
         List<String> dataGaps = new ArrayList<>();
         BigDecimal turnoverRate = quote == null ? null : quote.turnoverRate();
-        TurnoverEvaluation turnover = evaluateTurnover(turnoverRate);
+        TurnoverEvaluation turnover = evaluateTurnover(quote, turnoverRate);
         if (turnoverRate == null) {
             dataGaps.add("实时换手率缺失");
         }
@@ -95,11 +96,18 @@ public class ShortTermMomentumQualityEvaluator {
         );
     }
 
-    private TurnoverEvaluation evaluateTurnover(BigDecimal turnoverRate) {
+    private TurnoverEvaluation evaluateTurnover(EastMoneyQuote quote, BigDecimal turnoverRate) {
         if (turnoverRate == null) {
             return new TurnoverEvaluation("UNAVAILABLE", new BigDecimal("45.00"));
         }
         BigDecimal rate = turnoverRate.max(BigDecimal.ZERO);
+        BigDecimal amount = quote == null ? null : quote.amount();
+        boolean veryLargeAmount = amount != null && amount.compareTo(LARGE_AMOUNT) >= 0;
+        if (veryLargeAmount && rate.compareTo(new BigDecimal("1.50")) >= 0 && rate.compareTo(FIVE) <= 0) {
+            BigDecimal center = new BigDecimal("2.60");
+            BigDecimal score = new BigDecimal("96").subtract(rate.subtract(center).abs().multiply(new BigDecimal("6")));
+            return new TurnoverEvaluation("PREFERRED", scale(score.max(new BigDecimal("85"))));
+        }
         if (rate.compareTo(TWO) >= 0 && rate.compareTo(FIVE) <= 0) {
             BigDecimal score = HUNDRED.subtract(rate.subtract(THREE).abs().multiply(new BigDecimal("8")));
             return new TurnoverEvaluation("PREFERRED", scale(score));

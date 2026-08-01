@@ -12,7 +12,7 @@ import {
 } from '../api/client'
 import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
 import type { OvernightBacktestReport, ShortTermScheduledSnapshot, ShortTermSnapshotStatus } from '../types'
-import { ShortTermPage } from './ShortTermPage'
+import { ScheduledScanPulse, ShortTermPage } from './ShortTermPage'
 
 vi.mock('../api/client', () => ({
   fetchLatestShortTermScheduledSnapshot: vi.fn(),
@@ -313,6 +313,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
   afterEach(() => {
     act(() => root.unmount())
     host.remove()
+    vi.useRealTimers()
     vi.clearAllMocks()
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
   })
@@ -361,7 +362,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(document.body.textContent).toContain('盘中暂定')
   })
 
-  it('shows verified chip contribution in the row and auditable evidence in the detail', async () => {
+  it('shows verified chip diagnostics as standalone evidence in the row and detail', async () => {
     const verifiedCandidate = {
       ...candidate('600795'),
       score: {
@@ -424,14 +425,16 @@ describe('ShortTermPage prepared snapshot mount', () => {
 
     await renderPage(root)
     expect(document.body.textContent).toContain('筹码认证')
-    expect(document.body.textContent).toContain('+21.50')
+    expect(document.body.textContent).toContain('诊断分 21.50')
     expect(document.body.textContent).toContain('距成本 +3.17%')
 
     await clickButton('候选600795')
     expect(document.body.textContent).toContain('筹码结构与外部认证')
     expect(document.body.textContent).toContain('双源认证通过')
-    expect(document.body.textContent).toContain('V2 / V3 排名')
-    expect(document.body.textContent).toContain('#5 / #2')
+    expect(document.body.textContent).toContain('独立诊断分')
+    expect(document.body.textContent).toContain('主排序关系')
+    expect(document.body.textContent).toContain('不参与主排序')
+    expect(document.body.textContent).not.toContain('V2 / V3 排名')
     expect(document.body.textContent).toContain('前高区残余筹码')
     expect(document.body.textContent).toContain('7.50%')
   })
@@ -707,12 +710,32 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(startShortTermScanJob).toHaveBeenCalledTimes(1)
     expect(startShortTermScanJob).toHaveBeenCalledWith(expect.objectContaining({
       limit: 8,
-      minVolumeRatio: 1.2
+      minVolumeRatio: 1.2,
+      allowStaticCachePreview: true
     }))
     expect(fetchShortTermScanJob).toHaveBeenCalledWith('manual-1')
     expect(fetchLatestShortTermScheduledSnapshot).toHaveBeenCalledTimes(1)
     }
   )
+
+  it('lets manual scans disable static cache preview from the page switch', async () => {
+    mockManualReport(emptyReport, 'manual-cache-toggle')
+    await renderPage(root)
+
+    const toggle = document.querySelector('input[aria-label="允许休市缓存预览"]') as HTMLInputElement | null
+    expect(toggle).not.toBeNull()
+    expect(toggle?.checked).toBe(true)
+    await act(async () => {
+      toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+    })
+
+    await clickButton('重新扫描')
+
+    expect(startShortTermScanJob).toHaveBeenCalledWith(expect.objectContaining({
+      allowStaticCachePreview: false
+    }))
+  })
 
   it('keeps the manual result when the older scheduled request resolves later', async () => {
     const prepared = deferred<ShortTermScheduledSnapshot>()
@@ -774,11 +797,41 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(document.body.textContent).toContain('手动重算')
     expect(document.body.textContent).not.toContain('旧计划快照失败')
   })
+
+  it('shows scheduled running animation during background polling without replacing manual results', async () => {
+    vi.useFakeTimers()
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue(finalReadySnapshot)
+    mockManualReport(reportWithCandidates(['600900']), 'manual-scheduled-pulse')
+
+    await renderPagePlain(root)
+    await clickButton('重新扫描')
+    expect(document.body.textContent).toContain('手动重算')
+    expect(document.body.textContent).toContain('候选600900')
+
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      stage: 'FINAL',
+      status: 'RUNNING',
+      message: '短线右侧实时扫描中',
+      report: null
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000)
+      await flushPromises()
+    })
+
+    expect(document.body.textContent).toContain('14:45 自动扫描正在执行')
+    expect(document.body.textContent).toContain('短线右侧实时扫描中')
+    expect(document.body.textContent).toContain('手动重算')
+    expect(document.body.textContent).toContain('候选600900')
+  })
 })
 
 describe('ScheduledSnapshotStatus', () => {
   const expectations: Array<[ShortTermSnapshotStatus, string, string]> = [
     ['FINAL_READY', '14:55 前买入确认已就绪', 'emerald'],
+    ['CACHE_PREVIEW', '缓存行情预览', 'sky'],
     ['PRESELECT_READY', '自动预选已就绪', 'border-line'],
     ['RUNNING', '自动任务执行中', 'border-line'],
     ['NO_TRADE', '今日不交易', 'amber'],
@@ -840,8 +893,27 @@ describe('ScheduledSnapshotStatus', () => {
       />
     )
 
+    expect(html).toContain('等待自动扫描')
     expect(html).toContain('等待 0 30 14 * * MON-FRI 自动预选')
+    expect(html).not.toContain('自动任务执行中')
     expect(html).toContain('计划任务')
+  })
+
+  it('shows scheduled scan animation while backend task is running', () => {
+    const html = renderToStaticMarkup(
+      <ScheduledScanPulse
+        snapshot={{
+          ...finalReadySnapshot,
+          stage: 'FINAL',
+          status: 'RUNNING',
+          message: '短线右侧实时扫描中',
+          report: null
+        }}
+      />
+    )
+
+    expect(html).toContain('14:45 自动扫描正在执行')
+    expect(html).toContain('短线右侧实时扫描中')
   })
 })
 
@@ -893,7 +965,8 @@ function mockManualReport(report: typeof emptyReport, jobId: string) {
 }
 
 async function flushPromises() {
-  await new Promise((resolve) => window.setTimeout(resolve, 0))
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 async function clickButton(label: string) {

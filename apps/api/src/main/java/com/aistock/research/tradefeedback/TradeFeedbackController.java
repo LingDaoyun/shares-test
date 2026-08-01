@@ -109,6 +109,15 @@ public class TradeFeedbackController {
         return detail(translate(() -> tradeFeedbackService.deleteFill(caseId, fillId)));
     }
 
+    @DeleteMapping("/{caseId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteCase(@PathVariable String caseId) {
+        translate(() -> {
+            tradeFeedbackService.deleteCase(caseId);
+            return null;
+        });
+    }
+
     @PostMapping("/{caseId}/cancel")
     public TradeCaseDetail cancel(@PathVariable String caseId) {
         return detail(translate(() -> tradeFeedbackService.cancelCase(caseId)));

@@ -13,6 +13,8 @@ public interface TradeFillRevisionRepository extends JpaRepository<TradeFillRevi
 
     List<TradeFillRevisionEntity> findByCaseIdInOrderByCaseIdAscRevisionSequenceAsc(Collection<String> caseIds);
 
+    boolean existsByCaseId(String caseId);
+
     @Query("select coalesce(max(revision.revisionSequence), 0) from TradeFillRevisionEntity revision where revision.caseId = :caseId")
     long findMaxRevisionSequenceByCaseId(@Param("caseId") String caseId);
 }

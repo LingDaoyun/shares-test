@@ -37,6 +37,7 @@ public class TradeFeedbackService {
     private final TradeCaseRepository caseRepository;
     private final TradeFillRepository fillRepository;
     private final TradeFillRevisionRepository revisionRepository;
+    private final TradeOutcomeRepository outcomeRepository;
     private final TradeFillProjector fillProjector;
     private final RecommendationAttestationService attestationService;
     private final TradeLedgerCalculator ledgerCalculator;
@@ -49,6 +50,7 @@ public class TradeFeedbackService {
             TradeCaseRepository caseRepository,
             TradeFillRepository fillRepository,
             TradeFillRevisionRepository revisionRepository,
+            TradeOutcomeRepository outcomeRepository,
             TradeFillProjector fillProjector,
             RecommendationAttestationService attestationService,
             TradeLedgerCalculator ledgerCalculator,
@@ -59,6 +61,7 @@ public class TradeFeedbackService {
                 caseRepository,
                 fillRepository,
                 revisionRepository,
+                outcomeRepository,
                 fillProjector,
                 attestationService,
                 ledgerCalculator,
@@ -71,6 +74,7 @@ public class TradeFeedbackService {
             TradeCaseRepository caseRepository,
             TradeFillRepository fillRepository,
             TradeFillRevisionRepository revisionRepository,
+            TradeOutcomeRepository outcomeRepository,
             TradeFillProjector fillProjector,
             RecommendationAttestationService attestationService,
             TradeLedgerCalculator ledgerCalculator,
@@ -81,6 +85,7 @@ public class TradeFeedbackService {
         this.caseRepository = caseRepository;
         this.fillRepository = fillRepository;
         this.revisionRepository = revisionRepository;
+        this.outcomeRepository = outcomeRepository;
         this.fillProjector = fillProjector;
         this.attestationService = attestationService;
         this.ledgerCalculator = ledgerCalculator;
@@ -232,6 +237,21 @@ public class TradeFeedbackService {
         }
         tradeCase.updateStatus(TradeCaseStatus.CANCELLED.name(), clock.instant());
         return caseRepository.save(tradeCase);
+    }
+
+    @Transactional
+    public void deleteCase(String caseId) {
+        TradeCaseEntity tradeCase = requireCaseForUpdate(caseId);
+        if (!TradeCaseStatus.PLANNED.name().equals(tradeCase.getStatus())
+                && !TradeCaseStatus.CANCELLED.name().equals(tradeCase.getStatus())) {
+            throw new TradeFeedbackConflictException("只有尚未成交的计划或已取消关注可以删除");
+        }
+        if (!activeFills(tradeCase.getCaseId()).isEmpty()
+                || revisionRepository.existsByCaseId(tradeCase.getCaseId())) {
+            throw new TradeFeedbackConflictException("已有成交记录的复盘单不能删除");
+        }
+        outcomeRepository.deleteByCaseId(tradeCase.getCaseId());
+        caseRepository.delete(tradeCase);
     }
 
     @Transactional(readOnly = true)
