@@ -296,6 +296,7 @@ export interface MarketScanRuleSet {
   minFinancialScore: number
   excludeSideways: boolean
   includeNorthExchange: boolean
+  allowChiNext: boolean
   mode: string
 }
 
@@ -522,6 +523,7 @@ export interface ShortTermRuleSet {
   maxEntryRisePercent: number
   maxDistanceToMa20Percent: number
   minFinancialScore: number
+  allowChiNext: boolean
 }
 
 export type ShortTermGoldenCrossState =

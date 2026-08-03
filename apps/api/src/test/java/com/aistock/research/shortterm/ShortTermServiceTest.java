@@ -78,6 +78,34 @@ class ShortTermServiceTest {
     }
 
     @Test
+    void shouldExcludeChiNextByDefaultAndAllowItWhenPermissionSwitchIsOn() {
+        eastMoneyClient.quotes = List.of(
+                quote("300750", "宁德时代", "260.00", "0.80", "28.00", "5.20", "900000000"),
+                quote("600036", "招商银行", "36.80", "0.20", "6.00", "0.85", "900000000")
+        );
+        eastMoneyClient.quotes.forEach(quote -> {
+            eastMoneyClient.klines.put(
+                    quote.symbol(),
+                    confirmedRightEarlyKLines(quote.symbol(), quote.latestPrice().toPlainString(), "260000")
+            );
+            eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
+        });
+
+        ShortTermReport defaultReport = service.report(new ShortTermScanRequest(
+                5, 100, 10, null, null, null, null, null, null, null, false
+        ));
+        assertThat(defaultReport.ruleSet().allowChiNext()).isFalse();
+        assertThat(defaultReport.reviewedSymbols()).doesNotContain("300750");
+        assertThat(defaultReport.reviewedSymbols()).contains("600036");
+
+        ShortTermReport allowedReport = service.report(new ShortTermScanRequest(
+                5, 100, 10, null, null, null, null, null, null, null, false, true
+        ));
+        assertThat(allowedReport.ruleSet().allowChiNext()).isTrue();
+        assertThat(allowedReport.reviewedSymbols()).contains("300750");
+    }
+
+    @Test
     void finalReportRestrictsExpensiveReviewToPreselectedSymbols() {
         eastMoneyClient.quotes = List.of(
                 quote("600795", "国电电力", "4.90", "1.03", "12.95", "1.49", "900000000"),
@@ -1183,7 +1211,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("300059", goodFinancial("300059"));
         eastMoneyClient.intraday.put("600001", confirmedTail("600001"));
 
-        ShortTermReport report = service.report(5, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(5, 100, 5, null, null, null, null, null, null, null, true);
 
         ShortTermCandidate candidate = find(report, "600001");
         assertThat(report.scope()).contains("短线右侧");

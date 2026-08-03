@@ -11,6 +11,31 @@ public record UniversalScreenRuleSet(
         BigDecimal minFinancialScore,
         boolean excludeSideways,
         boolean includeNorthExchange,
-        String mode
+        String mode,
+        boolean allowChiNext
 ) {
+    public UniversalScreenRuleSet(
+            int limit,
+            int scanLimit,
+            BigDecimal minAmount,
+            BigDecimal maxPe,
+            BigDecimal maxPb,
+            BigDecimal minFinancialScore,
+            boolean excludeSideways,
+            boolean includeNorthExchange,
+            String mode
+    ) {
+        this(
+                limit,
+                scanLimit,
+                minAmount,
+                maxPe,
+                maxPb,
+                minFinancialScore,
+                excludeSideways,
+                includeNorthExchange,
+                mode,
+                false
+        );
+    }
 }

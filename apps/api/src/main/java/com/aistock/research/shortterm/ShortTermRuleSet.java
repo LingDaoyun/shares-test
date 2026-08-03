@@ -11,6 +11,31 @@ public record ShortTermRuleSet(
         BigDecimal minVolumeRatio,
         BigDecimal maxEntryRisePercent,
         BigDecimal maxDistanceToMa20Percent,
-        BigDecimal minFinancialScore
+        BigDecimal minFinancialScore,
+        boolean allowChiNext
 ) {
+    public ShortTermRuleSet(
+            int scanLimit,
+            int klineLimit,
+            BigDecimal minAmount,
+            BigDecimal maxPe,
+            BigDecimal maxPb,
+            BigDecimal minVolumeRatio,
+            BigDecimal maxEntryRisePercent,
+            BigDecimal maxDistanceToMa20Percent,
+            BigDecimal minFinancialScore
+    ) {
+        this(
+                scanLimit,
+                klineLimit,
+                minAmount,
+                maxPe,
+                maxPb,
+                minVolumeRatio,
+                maxEntryRisePercent,
+                maxDistanceToMa20Percent,
+                minFinancialScore,
+                false
+        );
+    }
 }

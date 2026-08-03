@@ -53,7 +53,7 @@ public class MarketScanService {
             BigDecimal maxPe,
             BigDecimal maxPb
     ) {
-        return report(limit, scanLimit, minAmount, maxPe, maxPb, null, null, null, null);
+        return report(limit, scanLimit, minAmount, maxPe, maxPb, null, null, null, null, null);
     }
 
     public MarketScanReport report(
@@ -67,6 +67,32 @@ public class MarketScanService {
             Boolean includeNorthExchange,
             String mode
     ) {
+        return report(
+                limit,
+                scanLimit,
+                minAmount,
+                maxPe,
+                maxPb,
+                minFinancialScore,
+                excludeSideways,
+                includeNorthExchange,
+                mode,
+                null
+        );
+    }
+
+    public MarketScanReport report(
+            Integer limit,
+            Integer scanLimit,
+            BigDecimal minAmount,
+            BigDecimal maxPe,
+            BigDecimal maxPb,
+            BigDecimal minFinancialScore,
+            Boolean excludeSideways,
+            Boolean includeNorthExchange,
+            String mode,
+            Boolean allowChiNext
+    ) {
         UniversalScreenReport universal = universalScreener.screen(new UniversalScreenRequest(
                 limit,
                 scanLimit,
@@ -76,7 +102,8 @@ public class MarketScanService {
                 minFinancialScore,
                 excludeSideways,
                 includeNorthExchange,
-                mode
+                mode,
+                allowChiNext
         ));
         UniversalScreenRuleSet universalRuleSet = universal.ruleSet();
         UniversalScreenMode screenMode = UniversalScreenMode.fromExternal(universalRuleSet.mode());
@@ -101,7 +128,8 @@ public class MarketScanService {
                         universalRuleSet.minFinancialScore(),
                         universalRuleSet.excludeSideways(),
                         universalRuleSet.includeNorthExchange(),
-                        universalRuleSet.mode()
+                        universalRuleSet.mode(),
+                        universalRuleSet.allowChiNext()
                 ),
                 universal.stageStats(),
                 candidates,

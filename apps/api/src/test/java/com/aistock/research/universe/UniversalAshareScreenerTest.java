@@ -78,7 +78,8 @@ class UniversalAshareScreenerTest {
                 null,
                 true,
                 true,
-                "SHORT_TERM"
+                "SHORT_TERM",
+                true
         ));
 
         assertThat(report.stageStats()).extracting(UniversalScreenStageStats::stage)
@@ -90,6 +91,34 @@ class UniversalAshareScreenerTest {
                 .isEqualTo(Instant.parse("2026-07-08T07:30:00Z"));
         assertThat(report.exclusionsSample()).extracting(UniversalScreenExclusion::stage)
                 .contains("TRADABLE", "LIQUIDITY", "SIDEWAYS");
+    }
+
+    @Test
+    void shouldExcludeChiNextByDefaultAndAllowItWhenPermissionSwitchIsOn() {
+        client.baseQuotes = List.of(
+                quote("300750", "宁德时代", "电池", "260.00", "0.20", "28.00", "5.20", "900000000"),
+                quote("600036", "招商银行", "银行", "36.80", "-0.20", "6.00", "0.85", "900000000")
+        );
+        client.tencentQuotes = client.baseQuotes;
+
+        UniversalScreenReport defaultReport = screener.screen(new UniversalScreenRequest(
+                10, 100, null, null, null, null, false, true, "ALL"
+        ));
+        assertThat(defaultReport.ruleSet().allowChiNext()).isFalse();
+        assertThat(defaultReport.candidates()).extracting(UniversalScreenCandidate::symbol)
+                .doesNotContain("300750")
+                .contains("600036");
+        assertThat(defaultReport.exclusionsSample()).anySatisfy(exclusion -> {
+            assertThat(exclusion.symbol()).isEqualTo("300750");
+            assertThat(exclusion.reason()).contains("创业板权限未开启");
+        });
+
+        UniversalScreenReport allowedReport = screener.screen(new UniversalScreenRequest(
+                10, 100, null, null, null, null, false, true, "ALL", true
+        ));
+        assertThat(allowedReport.ruleSet().allowChiNext()).isTrue();
+        assertThat(allowedReport.candidates()).extracting(UniversalScreenCandidate::symbol)
+                .contains("300750");
     }
 
     @Test
@@ -178,7 +207,8 @@ class UniversalAshareScreenerTest {
                 new BigDecimal("52"),
                 false,
                 false,
-                "VALUE"
+                "VALUE",
+                true
         );
 
         assertThat(report.ruleSet().limit()).isEqualTo(8);
@@ -186,6 +216,7 @@ class UniversalAshareScreenerTest {
         assertThat(report.ruleSet().minAmount()).isEqualByComparingTo("120000000");
         assertThat(report.ruleSet().excludeSideways()).isFalse();
         assertThat(report.ruleSet().includeNorthExchange()).isFalse();
+        assertThat(report.ruleSet().allowChiNext()).isTrue();
         assertThat(report.ruleSet().mode()).isEqualTo("VALUE");
     }
 
@@ -310,7 +341,7 @@ class UniversalAshareScreenerTest {
         client.sidewaysSymbols = Set.of("300001");
 
         UniversalScreenReport report = screener.screen(new UniversalScreenRequest(
-                10, 50, null, null, null, null, true, true, "ALL"
+                10, 50, null, null, null, null, true, true, "ALL", true
         ));
 
         UniversalScreenCandidate candidate = find(report, "300001");

@@ -341,6 +341,9 @@ public class UniversalAshareScreener {
         if (symbol == null || !symbol.matches("\\d{6}")) {
             return new StageProblem("代码异常，非标准 A 股代码", List.of("symbol=" + symbol));
         }
+        if (isChiNext(symbol) && !ruleSet.allowChiNext()) {
+            return new StageProblem("创业板权限未开启，已剔除", List.of("symbol=" + symbol));
+        }
         if (!isSupportedAshare(symbol, ruleSet.includeNorthExchange())) {
             return new StageProblem("暂不纳入本轮市场范围", List.of("symbol=" + symbol));
         }
@@ -967,7 +970,7 @@ public class UniversalAshareScreener {
 
     private UniversalScreenRuleSet resolveRuleSet(UniversalScreenRequest request) {
         UniversalScreenRequest safe = request == null
-                ? new UniversalScreenRequest(null, null, null, null, null, null, null, null, null)
+                ? new UniversalScreenRequest(null, null, null, null, null, null, null, null, null, null)
                 : request;
         UniversalScreenMode mode = UniversalScreenMode.fromExternal(safe.mode());
         boolean requestedSidewaysReview = safe.excludeSideways() == null || safe.excludeSideways();
@@ -981,7 +984,8 @@ public class UniversalAshareScreener {
                 positiveOrDefault(safe.minFinancialScore(), DEFAULT_MIN_FINANCIAL_SCORE),
                 mode.effectiveSidewaysReview(requestedSidewaysReview),
                 safe.includeNorthExchange() == null || safe.includeNorthExchange(),
-                mode.name()
+                mode.name(),
+                Boolean.TRUE.equals(safe.allowChiNext())
         );
     }
 
@@ -1182,6 +1186,10 @@ public class UniversalAshareScreener {
             return true;
         }
         return includeNorthExchange && (symbol.startsWith("4") || symbol.startsWith("8") || symbol.startsWith("92"));
+    }
+
+    private boolean isChiNext(String symbol) {
+        return symbol != null && (symbol.startsWith("300") || symbol.startsWith("301"));
     }
 
     private String bucket(EastMoneyQuote quote, UniversalScreenRuleSet ruleSet) {

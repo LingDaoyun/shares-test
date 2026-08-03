@@ -95,6 +95,7 @@ export interface MarketScanParams {
   minFinancialScore?: number
   excludeSideways?: boolean
   includeNorthExchange?: boolean
+  allowChiNext?: boolean
   mode?: string
 }
 
@@ -120,6 +121,7 @@ export interface ShortTermParams {
   maxDistanceToMa20?: number
   minFinancialScore?: number
   allowStaticCachePreview?: boolean
+  allowChiNext?: boolean
 }
 
 export function fetchShortTermReport(params: ShortTermParams = {}) {

@@ -260,6 +260,34 @@ public class ShortTermService {
             BigDecimal maxDistanceToMa20,
             BigDecimal minFinancialScore
     ) {
+        return report(
+                limit,
+                scanLimit,
+                klineLimit,
+                minAmount,
+                maxPe,
+                maxPb,
+                minVolumeRatio,
+                maxEntryRise,
+                maxDistanceToMa20,
+                minFinancialScore,
+                null
+        );
+    }
+
+    public ShortTermReport report(
+            Integer limit,
+            Integer scanLimit,
+            Integer klineLimit,
+            BigDecimal minAmount,
+            BigDecimal maxPe,
+            BigDecimal maxPb,
+            BigDecimal minVolumeRatio,
+            BigDecimal maxEntryRise,
+            BigDecimal maxDistanceToMa20,
+            BigDecimal minFinancialScore,
+            Boolean allowChiNext
+    ) {
         return report(new ShortTermScanRequest(
                 limit,
                 scanLimit,
@@ -271,7 +299,8 @@ public class ShortTermService {
                 maxEntryRise,
                 maxDistanceToMa20,
                 minFinancialScore,
-                false
+                false,
+                allowChiNext
         ));
     }
 
@@ -304,7 +333,8 @@ public class ShortTermService {
                 request.minVolumeRatio(),
                 request.maxEntryRise(),
                 request.maxDistanceToMa20(),
-                request.minFinancialScore()
+                request.minFinancialScore(),
+                request.allowChiNext()
         );
 
         int quoteRequestLimit = fullMarketExecution ? FULL_MARKET_QUOTE_REQUEST : ruleSet.scanLimit();
@@ -318,7 +348,7 @@ public class ShortTermService {
                 .filter(quote -> quoteAvailableAtDecision(quote, decisionAt, allowClosedMarketCachePreview))
                 .toList();
         List<EastMoneyQuote> quoteUniverse = pointInTimeCoverageQuotes.stream()
-                .filter(this::isTradableCommonShare)
+                .filter(quote -> isTradableCommonShare(quote, ruleSet.allowChiNext()))
                 .filter(this::hasUsablePrice)
                 .toList();
         ShortTermCoverageSnapshot coverage = coverageSnapshot(
@@ -2748,7 +2778,8 @@ public class ShortTermService {
             BigDecimal minVolumeRatio,
             BigDecimal maxEntryRise,
             BigDecimal maxDistanceToMa20,
-            BigDecimal minFinancialScore
+            BigDecimal minFinancialScore,
+            Boolean allowChiNext
     ) {
         return new ShortTermRuleSet(
                 Math.max(50, Math.min(scanLimit == null ? DEFAULT_SCAN_LIMIT : scanLimit, MAX_SCAN_LIMIT)),
@@ -2759,7 +2790,8 @@ public class ShortTermService {
                 approvedVolumeRatioThreshold(minVolumeRatio),
                 positiveOrDefault(maxEntryRise, DEFAULT_MAX_ENTRY_RISE),
                 positiveOrDefault(maxDistanceToMa20, DEFAULT_MAX_DISTANCE_TO_MA20),
-                positiveOrDefault(minFinancialScore, DEFAULT_MIN_FINANCIAL_SCORE)
+                positiveOrDefault(minFinancialScore, DEFAULT_MIN_FINANCIAL_SCORE),
+                Boolean.TRUE.equals(allowChiNext)
         );
     }
 
@@ -3009,7 +3041,7 @@ public class ShortTermService {
         return !quote.marketTimestamp().isAfter(decisionInstant);
     }
 
-    private boolean isTradableCommonShare(EastMoneyQuote quote) {
+    private boolean isTradableCommonShare(EastMoneyQuote quote, boolean allowChiNext) {
         if (quote == null || quote.symbol() == null || quote.name() == null) {
             return false;
         }
@@ -3020,12 +3052,19 @@ public class ShortTermService {
                 || name.contains("ERROR") || name.contains("HTML")) {
             return false;
         }
+        if (!allowChiNext && isChiNext(quote.symbol())) {
+            return false;
+        }
         return quote.symbol().startsWith("0")
                 || quote.symbol().startsWith("3")
                 || quote.symbol().startsWith("4")
                 || quote.symbol().startsWith("6")
                 || quote.symbol().startsWith("8")
                 || quote.symbol().startsWith("92");
+    }
+
+    private boolean isChiNext(String symbol) {
+        return symbol != null && (symbol.startsWith("300") || symbol.startsWith("301"));
     }
 
     private boolean hasUsablePrice(EastMoneyQuote quote) {

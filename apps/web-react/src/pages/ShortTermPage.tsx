@@ -32,6 +32,7 @@ interface DraftParams {
   maxDistanceToMa20: number
   minFinancialScore: number
   allowStaticCachePreview: boolean
+  allowChiNext: boolean
 }
 
 const DEFAULT_DRAFT: DraftParams = {
@@ -45,7 +46,8 @@ const DEFAULT_DRAFT: DraftParams = {
   maxEntryRise: 4.5,
   maxDistanceToMa20: 8,
   minFinancialScore: 55,
-  allowStaticCachePreview: true
+  allowStaticCachePreview: true,
+  allowChiNext: false
 }
 
 const SCHEDULED_SCAN_POLL_MS = 10_000
@@ -393,6 +395,21 @@ export function ShortTermPage() {
             aria-label="允许休市缓存预览"
           />
         </label>
+        <label className="mt-3 flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-line-soft bg-white px-3 py-2 text-sm">
+          <span>
+            <span className="block font-semibold text-ink-800">允许创业板</span>
+            <span className="block text-xs leading-relaxed text-ink-500">
+              默认关闭，剔除 300/301 开头股票；开通创业板权限后可开启纳入扫描。
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            className="h-5 w-5 accent-brand-600"
+            checked={draft.allowChiNext}
+            onChange={(event) => setDraft({ ...draft, allowChiNext: event.target.checked })}
+            aria-label="允许创业板"
+          />
+        </label>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
           <p className="text-xs leading-relaxed text-ink-500">
             参考带只影响估值语境分和风险提示，不决定股票是否入选；低流动性、长期横盘、急拉和离均线过远仍受约束。
@@ -439,6 +456,7 @@ export function ShortTermPage() {
                 <Metric label="次日关注" value={diagnostics.nextWatchCount} />
                 <Metric label="尾盘确认" value={diagnostics.tailConfirmedCount} />
                 <Metric label="等回踩" value={diagnostics.pullbackAdviceCount} />
+                <Metric label="创业板" value={report.ruleSet?.allowChiNext ? '纳入' : '剔除'} />
               </div>
               {report.tradingSession.warnings.length ? (
                 <p className="mt-3 border-t border-line-soft pt-3 text-xs leading-relaxed text-amber-700">
@@ -565,7 +583,8 @@ function toApiParams(params: DraftParams): ShortTermParams {
     maxEntryRise: params.maxEntryRise,
     maxDistanceToMa20: params.maxDistanceToMa20,
     minFinancialScore: params.minFinancialScore,
-    allowStaticCachePreview: params.allowStaticCachePreview
+    allowStaticCachePreview: params.allowStaticCachePreview,
+    allowChiNext: params.allowChiNext
   }
 }
 

@@ -55,7 +55,8 @@ public class ShortTermController {
             @RequestParam(required = false) BigDecimal minVolumeRatio,
             @RequestParam(required = false) BigDecimal maxEntryRise,
             @RequestParam(required = false) BigDecimal maxDistanceToMa20,
-            @RequestParam(required = false) BigDecimal minFinancialScore
+            @RequestParam(required = false) BigDecimal minFinancialScore,
+            @RequestParam(required = false) Boolean allowChiNext
     ) {
         return attestationService.attest(shortTermService.report(
                 limit,
@@ -67,7 +68,8 @@ public class ShortTermController {
                 minVolumeRatio,
                 maxEntryRise,
                 maxDistanceToMa20,
-                minFinancialScore
+                minFinancialScore,
+                allowChiNext
         ));
     }
 

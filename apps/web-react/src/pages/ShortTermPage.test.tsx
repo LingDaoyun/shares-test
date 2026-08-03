@@ -54,7 +54,8 @@ const emptyReport = {
     minVolumeRatio: 1.2,
     maxEntryRisePercent: 4,
     maxDistanceToMa20Percent: 8,
-    minFinancialScore: 58
+    minFinancialScore: 58,
+    allowChiNext: false
   },
   weightProfile: {
     preliminaryValuation: 0.2,
@@ -711,7 +712,8 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(startShortTermScanJob).toHaveBeenCalledWith(expect.objectContaining({
       limit: 8,
       minVolumeRatio: 1.2,
-      allowStaticCachePreview: true
+      allowStaticCachePreview: true,
+      allowChiNext: false
     }))
     expect(fetchShortTermScanJob).toHaveBeenCalledWith('manual-1')
     expect(fetchLatestShortTermScheduledSnapshot).toHaveBeenCalledTimes(1)
@@ -734,6 +736,25 @@ describe('ShortTermPage prepared snapshot mount', () => {
 
     expect(startShortTermScanJob).toHaveBeenCalledWith(expect.objectContaining({
       allowStaticCachePreview: false
+    }))
+  })
+
+  it('lets manual scans opt in to ChiNext stocks when the account has permission', async () => {
+    mockManualReport(emptyReport, 'manual-chinext-toggle')
+    await renderPage(root)
+
+    const toggle = document.querySelector('input[aria-label="允许创业板"]') as HTMLInputElement | null
+    expect(toggle).not.toBeNull()
+    expect(toggle?.checked).toBe(false)
+    await act(async () => {
+      toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+    })
+
+    await clickButton('重新扫描')
+
+    expect(startShortTermScanJob).toHaveBeenCalledWith(expect.objectContaining({
+      allowChiNext: true
     }))
   })
 

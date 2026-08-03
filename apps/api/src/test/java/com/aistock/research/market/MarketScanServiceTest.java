@@ -408,7 +408,7 @@ class MarketScanServiceTest {
         );
         eastMoneyClient.tencentQuotes = eastMoneyClient.baseQuotes;
 
-        MarketScanReport report = service.report(3, 50, null, null, null, null, true, true, "VALUE");
+        MarketScanReport report = service.report(3, 50, null, null, null, null, true, true, "VALUE", true);
 
         MarketScanCandidate candidate = find(report, "300750");
         assertThat(candidate.valuationContext().state()).isEqualTo(ValuationContextState.MISSING);

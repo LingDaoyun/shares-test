@@ -27,7 +27,8 @@ public class MarketScanController {
             @RequestParam(required = false) BigDecimal minFinancialScore,
             @RequestParam(required = false) Boolean excludeSideways,
             @RequestParam(required = false) Boolean includeNorthExchange,
-            @RequestParam(required = false) String mode
+            @RequestParam(required = false) String mode,
+            @RequestParam(required = false) Boolean allowChiNext
     ) {
         return marketScanService.report(
                 limit,
@@ -38,7 +39,8 @@ public class MarketScanController {
                 minFinancialScore,
                 excludeSideways,
                 includeNorthExchange,
-                mode
+                mode,
+                allowChiNext
         );
     }
 }

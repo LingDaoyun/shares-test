@@ -25,6 +25,7 @@ interface DraftParams {
   minFinancialScore: number
   excludeSideways: boolean
   includeNorthExchange: boolean
+  allowChiNext: boolean
   mode: string
 }
 
@@ -37,6 +38,7 @@ const DEFAULT_DRAFT: DraftParams = {
   minFinancialScore: 45,
   excludeSideways: true,
   includeNorthExchange: true,
+  allowChiNext: false,
   mode: 'VALUE'
 }
 
@@ -160,6 +162,7 @@ export function MarketScanPage() {
               onChange={(checked) => setDraft({ ...draft, excludeSideways: checked })}
             />
             <ToggleField label="含北交所" checked={draft.includeNorthExchange} onChange={(checked) => setDraft({ ...draft, includeNorthExchange: checked })} />
+            <ToggleField label="允许创业板" checked={draft.allowChiNext} onChange={(checked) => setDraft({ ...draft, allowChiNext: checked })} />
           </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
@@ -203,6 +206,7 @@ export function MarketScanPage() {
                 <Metric label="PB 参考带" value={formatNumber(report.ruleSet.maxPb)} />
                 <Metric label="模式" value={modeLabel(report.ruleSet.mode)} />
                 <Metric label="单票上限" value={`${formatNumber(report.ruleSet.maxSinglePositionPercent)}%`} />
+                <Metric label="创业板" value={report.ruleSet.allowChiNext ? '纳入' : '剔除'} />
               </div>
             </Card>
           </div>
@@ -251,6 +255,7 @@ function toApiParams(params: DraftParams): MarketScanParams {
     minFinancialScore: params.minFinancialScore,
     excludeSideways: params.excludeSideways,
     includeNorthExchange: params.includeNorthExchange,
+    allowChiNext: params.allowChiNext,
     mode: params.mode
   }
 }

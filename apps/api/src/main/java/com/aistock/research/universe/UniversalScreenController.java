@@ -27,7 +27,8 @@ public class UniversalScreenController {
             @RequestParam(required = false) BigDecimal minFinancialScore,
             @RequestParam(required = false) Boolean excludeSideways,
             @RequestParam(required = false) Boolean includeNorthExchange,
-            @RequestParam(required = false) String mode
+            @RequestParam(required = false) String mode,
+            @RequestParam(required = false) Boolean allowChiNext
     ) {
         return screener.screen(new UniversalScreenRequest(
                 limit,
@@ -38,7 +39,8 @@ public class UniversalScreenController {
                 minFinancialScore,
                 excludeSideways,
                 includeNorthExchange,
-                mode
+                mode,
+                allowChiNext
         ));
     }
 }

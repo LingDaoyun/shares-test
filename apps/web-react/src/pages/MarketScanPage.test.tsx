@@ -88,10 +88,43 @@ describe('MarketScanPage long-term assessment', () => {
       await Promise.resolve()
     })
 
-    expect(mockedFetchMarketScanReport).toHaveBeenCalledWith(expect.objectContaining({ limit: 12 }))
+    expect(mockedFetchMarketScanReport).toHaveBeenCalledWith(expect.objectContaining({
+      limit: 12,
+      allowChiNext: false
+    }))
     expect(document.body.textContent).toContain('默认输出十二只候选')
     expect(document.body.textContent).toContain('低估且基本面较好的股票')
     expect(document.body.textContent).not.toContain('排除样本')
+  })
+
+  it('lets long-term scanning opt in to ChiNext stocks when the account has permission', async () => {
+    await act(async () => {
+      root.render(<MarketScanPage />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const switchLabel = [...host.querySelectorAll<HTMLLabelElement>('label')]
+      .find((label) => label.textContent?.includes('允许创业板'))
+    const switchInput = switchLabel?.querySelector<HTMLInputElement>('input')
+    expect(switchInput).toBeTruthy()
+    expect(switchInput?.checked).toBe(false)
+
+    await act(async () => {
+      switchInput?.click()
+      await Promise.resolve()
+    })
+    const applyButton = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('应用阈值'))
+    await act(async () => {
+      applyButton?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mockedFetchMarketScanReport).toHaveBeenLastCalledWith(expect.objectContaining({
+      allowChiNext: true
+    }))
   })
 
   it('loads industry policy and cycle context when a candidate is opened', async () => {
@@ -304,6 +337,7 @@ const report = {
     minFinancialScore: 45,
     excludeSideways: false,
     includeNorthExchange: true,
+    allowChiNext: false,
     mode: 'VALUE'
   },
   stageStats: [],

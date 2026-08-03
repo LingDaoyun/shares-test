@@ -54,7 +54,7 @@ class RecommendationControllerAttestationTest {
         ShortTermScanJobService jobs = mock(ShortTermScanJobService.class);
         ShortTermReport report = mock(ShortTermReport.class);
         ShortTermScanJobStatus status = mock(ShortTermScanJobStatus.class);
-        when(service.report(null, null, null, null, null, null, null, null, null, null)).thenReturn(report);
+        when(service.report(null, null, null, null, null, null, null, null, null, null, null)).thenReturn(report);
         when(jobs.get("job-1")).thenReturn(status);
         when(attestations.attest(report)).thenReturn(report);
         when(attestations.attest(status)).thenReturn(status);
@@ -67,7 +67,7 @@ class RecommendationControllerAttestationTest {
                 mock(ShortTermAutomationSettings.class)
         );
 
-        assertThat(controller.report(null, null, null, null, null, null, null, null, null, null)).isSameAs(report);
+        assertThat(controller.report(null, null, null, null, null, null, null, null, null, null, null)).isSameAs(report);
         assertThat(controller.scanJob("job-1")).isSameAs(status);
 
         verify(attestations).attest(report);
