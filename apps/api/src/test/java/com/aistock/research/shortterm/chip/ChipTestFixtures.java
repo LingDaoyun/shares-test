@@ -14,6 +14,13 @@ final class ChipTestFixtures {
     }
 
     static LocalChipDistribution localDistributionWithDistance(BigDecimal distance) {
+        List<ChipDistributionBucket> buckets = List.of(
+                new ChipDistributionBucket(bd("9.50"), bd("9.80"), bd("9.65"), bd("25.00"), bd("50.00")),
+                new ChipDistributionBucket(bd("9.80"), bd("10.20"), bd("10.00"), bd("50.00"), bd("100.00")),
+                new ChipDistributionBucket(bd("10.20"), bd("10.50"), bd("10.35"), bd("25.00"), bd("50.00"))
+        );
+        ChipConcentrationZone dominant = new ChipConcentrationZone(
+                1, bd("9.80"), bd("10.20"), bd("10.00"), bd("50.00"), bd("-3.85"), ChipPricePosition.BELOW);
         return new LocalChipDistribution(
                 ChipDataQuality.VALID,
                 ChipCalculationMode.COMPLETED_BAR,
@@ -26,8 +33,8 @@ final class ChipTestFixtures {
                 distance,
                 bd("15.00"), bd("10.00"), bd("120.00"),
                 bd("100.00"), 120,
-                List.of(), List.of(),
-                null, null, null, null, null, null,
+                buckets, List.of(dominant),
+                bd("10.00"), bd("9.80"), bd("10.20"), bd("50.00"), ChipPricePosition.ABOVE, null,
                 List.of()
         );
     }

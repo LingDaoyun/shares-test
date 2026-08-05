@@ -13,10 +13,10 @@ class ChipStructureScorerTest {
     private final ChipStructureScorer scorer = new ChipStructureScorer(new BigDecimal("0.25"));
 
     @Test
-    void appliesSingleSourceCoefficientToTheMaximumTwentyFivePointContribution() {
+    void usesTheCompleteValidLocalDistributionWithoutAPaidVerifierDiscount() {
         ChipVerificationResult verification = new ChipVerificationResult(
                 ChipVerificationStatus.SINGLE_SOURCE,
-                new BigDecimal("0.60"),
+                BigDecimal.ONE,
                 null, null, null,
                 List.of("外部筹码认证不可用")
         );
@@ -24,9 +24,12 @@ class ChipStructureScorerTest {
         ShortTermChipSnapshot snapshot = scorer.score(ChipTestFixtures.localDistribution(), verification, null);
 
         assertThat(snapshot.chipStructureScore()).isEqualByComparingTo("76.30");
-        assertThat(snapshot.verificationCoefficient()).isEqualByComparingTo("0.60");
-        assertThat(snapshot.contributionScore()).isEqualByComparingTo("11.45");
-        assertThat(snapshot.verificationLabel()).isEqualTo("单源模型");
+        assertThat(snapshot.verificationCoefficient()).isEqualByComparingTo("1.00");
+        assertThat(snapshot.contributionScore()).isEqualByComparingTo("19.08");
+        assertThat(snapshot.verificationLabel()).isEqualTo("本地估算 · 未交叉验证");
+        assertThat(snapshot.distributionBuckets()).hasSize(3);
+        assertThat(snapshot.concentrationZones()).hasSize(1);
+        assertThat(snapshot.dominantPeakPrice()).isEqualByComparingTo("10.00");
     }
 
     @Test

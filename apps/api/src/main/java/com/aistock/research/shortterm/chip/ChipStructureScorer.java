@@ -83,6 +83,14 @@ public class ChipStructureScorer {
                 safeVerification.averageCostDeviation(),
                 safeVerification.cost70BandOverlap(),
                 safeVerification.winnerRateDeviation(),
+                local.distributionBuckets(),
+                local.concentrationZones(),
+                local.dominantPeakPrice(),
+                local.dominantZoneLow(),
+                local.dominantZoneHigh(),
+                local.dominantZoneChipRatioPercent(),
+                local.currentPricePosition(),
+                local.nearestOverheadZone(),
                 ShortTermChipSnapshot.MODEL_VERSION,
                 List.copyOf(new LinkedHashSet<>(gaps))
         );

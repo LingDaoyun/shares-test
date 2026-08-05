@@ -184,7 +184,11 @@ public class ShortTermChipAnalysisService {
                 settings.lookbackBars(),
                 settings.priceBuckets(),
                 settings.minValidBars(),
-                settings.minTurnoverCoverage()
+                settings.minTurnoverCoverage(),
+                settings.displayBuckets(),
+                settings.maxConcentrationZones(),
+                settings.minPeakRelativeHeight(),
+                settings.zoneEdgeRelativeHeight()
         );
     }
 

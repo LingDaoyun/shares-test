@@ -1,11 +1,11 @@
 package com.aistock.research.shortterm.chip;
 
 public enum ChipVerificationStatus {
-    VERIFIED("筹码模型已认证"),
-    SINGLE_SOURCE("单源模型"),
-    CONFLICT("模型数据冲突"),
-    STALE("认证数据过期"),
-    INSUFFICIENT("筹码数据不足");
+    VERIFIED("本地估算 · 外部数据已核验"),
+    SINGLE_SOURCE("本地估算 · 未交叉验证"),
+    CONFLICT("本地与外部数据冲突"),
+    STALE("外部认证数据过期"),
+    INSUFFICIENT("本地筹码数据不足");
 
     private final String label;
 

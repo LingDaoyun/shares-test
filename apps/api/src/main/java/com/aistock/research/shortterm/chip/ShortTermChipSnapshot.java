@@ -40,12 +40,22 @@ public record ShortTermChipSnapshot(
         BigDecimal averageCostDeviation,
         BigDecimal cost70BandOverlap,
         BigDecimal winnerRateDeviation,
+        List<ChipDistributionBucket> distributionBuckets,
+        List<ChipConcentrationZone> concentrationZones,
+        BigDecimal dominantPeakPrice,
+        BigDecimal dominantZoneLow,
+        BigDecimal dominantZoneHigh,
+        BigDecimal dominantZoneChipRatioPercent,
+        ChipPricePosition currentPricePosition,
+        ChipConcentrationZone nearestOverheadZone,
         String modelVersion,
         List<String> dataGaps
 ) {
-    public static final String MODEL_VERSION = "short-term-chip-v1";
+    public static final String MODEL_VERSION = "short-term-chip-v2-peaks";
 
     public ShortTermChipSnapshot {
+        distributionBuckets = distributionBuckets == null ? List.of() : List.copyOf(distributionBuckets);
+        concentrationZones = concentrationZones == null ? List.of() : List.copyOf(concentrationZones);
         dataGaps = ChipEvidenceSanitizer.sanitizeAll(dataGaps);
     }
 
@@ -66,6 +76,9 @@ public record ShortTermChipSnapshot(
                 chipStructureScore, verificationStatus, verificationLabel,
                 verificationCoefficient, contributionScore,
                 averageCostDeviation, cost70BandOverlap, winnerRateDeviation,
+                distributionBuckets, concentrationZones,
+                dominantPeakPrice, dominantZoneLow, dominantZoneHigh,
+                dominantZoneChipRatioPercent, currentPricePosition, nearestOverheadZone,
                 modelVersion, List.copyOf(merged)
         );
     }

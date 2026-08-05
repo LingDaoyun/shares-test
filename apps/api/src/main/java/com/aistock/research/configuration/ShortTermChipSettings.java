@@ -30,6 +30,22 @@ public class ShortTermChipSettings {
         return integer("price-buckets", 150, 50, 500);
     }
 
+    public int displayBuckets() {
+        return integer("display-buckets", 60, 20, 150);
+    }
+
+    public int maxConcentrationZones() {
+        return integer("max-concentration-zones", 3, 1, 5);
+    }
+
+    public BigDecimal minPeakRelativeHeight() {
+        return decimal("min-peak-relative-height", "0.20", new BigDecimal("0.01"), BigDecimal.ONE);
+    }
+
+    public BigDecimal zoneEdgeRelativeHeight() {
+        return decimal("zone-edge-relative-height", "0.25", new BigDecimal("0.01"), BigDecimal.ONE);
+    }
+
     public int minValidBars() {
         return integer("min-valid-bars", 80, 20, lookbackBars());
     }
@@ -44,14 +60,14 @@ public class ShortTermChipSettings {
 
     public ChipActivationMode activationMode() {
         try {
-            return ChipActivationMode.valueOf(text("activation-mode", "SHADOW").toUpperCase(Locale.ROOT));
+            return ChipActivationMode.valueOf(text("activation-mode", "ACTIVE").toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException exception) {
-            return ChipActivationMode.SHADOW;
+            return ChipActivationMode.ACTIVE;
         }
     }
 
     public BigDecimal singleSourceCoefficient() {
-        return decimal("single-source-coefficient", "0.60", BigDecimal.ZERO, BigDecimal.ONE);
+        return decimal("single-source-coefficient", "1.00", BigDecimal.ZERO, BigDecimal.ONE);
     }
 
     public BigDecimal maxAverageCostDeviation() {

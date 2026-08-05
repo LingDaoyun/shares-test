@@ -39,6 +39,7 @@ class ShortTermChipAnalysisServiceTest {
         ShortTermChipSnapshot snapshot = service.analyze(quote(), bars(), true, Instant.parse("2026-07-30T06:50:00Z"));
 
         assertThat(snapshot.verificationStatus()).isEqualTo(ChipVerificationStatus.SINGLE_SOURCE);
+        assertThat(snapshot.verificationCoefficient()).isEqualByComparingTo("1.00");
         assertThat(snapshot.contributionScore()).isPositive();
         assertThat(snapshot.dataGaps()).contains("外部筹码认证不可用", "HTTP 429");
         verify(store).save(anyString(), any(), anyString(), any(), any(), any(), any(), any());
