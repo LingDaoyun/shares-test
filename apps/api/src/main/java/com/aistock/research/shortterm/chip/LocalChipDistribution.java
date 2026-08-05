@@ -28,9 +28,19 @@ public record LocalChipDistribution(
         BigDecimal turnoverSincePriorHighPercent,
         BigDecimal turnoverCoveragePercent,
         int validBars,
+        List<ChipDistributionBucket> distributionBuckets,
+        List<ChipConcentrationZone> concentrationZones,
+        BigDecimal dominantPeakPrice,
+        BigDecimal dominantZoneLow,
+        BigDecimal dominantZoneHigh,
+        BigDecimal dominantZoneChipRatioPercent,
+        ChipPricePosition currentPricePosition,
+        ChipConcentrationZone nearestOverheadZone,
         List<String> dataGaps
 ) {
     public LocalChipDistribution {
+        distributionBuckets = distributionBuckets == null ? List.of() : List.copyOf(distributionBuckets);
+        concentrationZones = concentrationZones == null ? List.of() : List.copyOf(concentrationZones);
         dataGaps = dataGaps == null ? List.of() : List.copyOf(dataGaps);
     }
 
@@ -52,6 +62,8 @@ public record LocalChipDistribution(
                 null, null, null, null,
                 turnoverCoveragePercent,
                 validBars,
+                List.of(), List.of(),
+                null, null, null, null, null, null,
                 dataGaps
         );
     }

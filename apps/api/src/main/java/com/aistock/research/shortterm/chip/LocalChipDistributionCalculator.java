@@ -21,6 +21,10 @@ public class LocalChipDistributionCalculator {
     private final int priceBuckets;
     private final int minValidBars;
     private final BigDecimal minTurnoverCoverage;
+    private final int displayBuckets;
+    private final int maxConcentrationZones;
+    private final BigDecimal minPeakRelativeHeight;
+    private final BigDecimal zoneEdgeRelativeHeight;
 
     public LocalChipDistributionCalculator(
             int lookbackBars,
@@ -28,7 +32,30 @@ public class LocalChipDistributionCalculator {
             int minValidBars,
             BigDecimal minTurnoverCoverage
     ) {
-        if (lookbackBars < 1 || priceBuckets < 2 || minValidBars < 1) {
+        this(
+                lookbackBars,
+                priceBuckets,
+                minValidBars,
+                minTurnoverCoverage,
+                60,
+                3,
+                new BigDecimal("0.20"),
+                new BigDecimal("0.25")
+        );
+    }
+
+    public LocalChipDistributionCalculator(
+            int lookbackBars,
+            int priceBuckets,
+            int minValidBars,
+            BigDecimal minTurnoverCoverage,
+            int displayBuckets,
+            int maxConcentrationZones,
+            BigDecimal minPeakRelativeHeight,
+            BigDecimal zoneEdgeRelativeHeight
+    ) {
+        if (lookbackBars < 1 || priceBuckets < 2 || minValidBars < 1
+                || displayBuckets < 1 || maxConcentrationZones < 1) {
             throw new IllegalArgumentException("筹码计算参数必须为正数");
         }
         this.lookbackBars = lookbackBars;
@@ -37,6 +64,10 @@ public class LocalChipDistributionCalculator {
         this.minTurnoverCoverage = minTurnoverCoverage == null
                 ? new BigDecimal("0.95")
                 : minTurnoverCoverage;
+        this.displayBuckets = Math.min(displayBuckets, priceBuckets);
+        this.maxConcentrationZones = maxConcentrationZones;
+        this.minPeakRelativeHeight = boundedFraction(minPeakRelativeHeight, "0.20");
+        this.zoneEdgeRelativeHeight = boundedFraction(zoneEdgeRelativeHeight, "0.25");
     }
 
     public LocalChipDistribution calculate(
@@ -72,12 +103,15 @@ public class LocalChipDistributionCalculator {
 
         BigDecimal minimum = bars.stream().map(EastMoneyKLine::low).min(BigDecimal::compareTo).orElseThrow();
         BigDecimal maximum = bars.stream().map(EastMoneyKLine::high).max(BigDecimal::compareTo).orElseThrow();
-        BigDecimal step = maximum.subtract(minimum)
-                .divide(BigDecimal.valueOf(priceBuckets - 1L), 10, RoundingMode.HALF_UP)
+        int effectiveBucketCount = maximum.compareTo(minimum) == 0 ? 1 : priceBuckets;
+        BigDecimal step = effectiveBucketCount == 1
+                ? MIN_BUCKET_STEP
+                : maximum.subtract(minimum)
+                .divide(BigDecimal.valueOf(effectiveBucketCount - 1L), 10, RoundingMode.HALF_UP)
                 .max(MIN_BUCKET_STEP);
-        BigDecimal[] prices = new BigDecimal[priceBuckets];
-        double[] weights = new double[priceBuckets];
-        for (int index = 0; index < priceBuckets; index++) {
+        BigDecimal[] prices = new BigDecimal[effectiveBucketCount];
+        double[] weights = new double[effectiveBucketCount];
+        for (int index = 0; index < effectiveBucketCount; index++) {
             prices[index] = minimum.add(step.multiply(BigDecimal.valueOf(index)));
         }
 
@@ -224,6 +258,13 @@ public class LocalChipDistributionCalculator {
                 .multiply(HUNDRED)
                 .divide(average, 6, RoundingMode.HALF_UP);
         PriorHigh priorHigh = priorHigh(bars, prices, weights);
+        List<ChipDistributionBucket> displayDistribution = displayDistribution(prices, weights);
+        List<ChipConcentrationZone> zones = concentrationZones(prices, weights, currentPrice);
+        ChipConcentrationZone dominant = zones.isEmpty() ? null : zones.get(0);
+        ChipConcentrationZone nearestOverhead = zones.stream()
+                .filter(zone -> zone.positionToCurrentPrice() == ChipPricePosition.ABOVE)
+                .min(Comparator.comparing(ChipConcentrationZone::lowPrice))
+                .orElse(null);
 
         return new LocalChipDistribution(
                 ChipDataQuality.VALID,
@@ -249,8 +290,214 @@ public class LocalChipDistributionCalculator {
                 scaleRatio(priorHigh.turnoverSincePercent()),
                 scaleRatio(coverage),
                 bars.size(),
+                displayDistribution,
+                zones,
+                dominant == null ? null : dominant.peakPrice(),
+                dominant == null ? null : dominant.lowPrice(),
+                dominant == null ? null : dominant.highPrice(),
+                dominant == null ? null : dominant.chipRatioPercent(),
+                currentPricePosition(currentPrice, dominant),
+                nearestOverhead,
                 gaps
         );
+    }
+
+    private List<ChipDistributionBucket> displayDistribution(BigDecimal[] prices, double[] weights) {
+        int first = firstPositiveIndex(weights);
+        int last = lastPositiveIndex(weights);
+        if (first < 0 || last < first) {
+            return List.of();
+        }
+        int activeCount = last - first + 1;
+        int groupSize = Math.max(1, (int) Math.ceil((double) activeCount / displayBuckets));
+        List<DisplayGroup> groups = new ArrayList<>();
+        double maxRatio = 0d;
+        for (int start = first; start <= last; start += groupSize) {
+            int end = Math.min(last, start + groupSize - 1);
+            double ratio = 0d;
+            BigDecimal weightedPrice = BigDecimal.ZERO;
+            for (int index = start; index <= end; index++) {
+                ratio += weights[index];
+                weightedPrice = weightedPrice.add(
+                        prices[index].multiply(BigDecimal.valueOf(weights[index]), MC));
+            }
+            BigDecimal representative = ratio <= 0d
+                    ? prices[start].add(prices[end]).divide(BigDecimal.valueOf(2), 8, RoundingMode.HALF_UP)
+                    : weightedPrice.divide(BigDecimal.valueOf(ratio), 8, RoundingMode.HALF_UP);
+            groups.add(new DisplayGroup(start, end, representative, ratio));
+            maxRatio = Math.max(maxRatio, ratio);
+        }
+        List<ChipDistributionBucket> result = new ArrayList<>();
+        for (DisplayGroup group : groups) {
+            BigDecimal normalized = maxRatio <= 0d
+                    ? BigDecimal.ZERO
+                    : BigDecimal.valueOf(group.ratio() / maxRatio * 100d);
+            result.add(new ChipDistributionBucket(
+                    scalePrice(prices[group.start()]),
+                    scalePrice(prices[group.end()]),
+                    scalePrice(group.price()),
+                    scaleRatio(BigDecimal.valueOf(group.ratio() * 100d)),
+                    scaleRatio(normalized)
+            ));
+        }
+        return List.copyOf(result);
+    }
+
+    private List<ChipConcentrationZone> concentrationZones(
+            BigDecimal[] prices,
+            double[] weights,
+            BigDecimal currentPrice
+    ) {
+        double maxWeight = Arrays.stream(weights).max().orElse(0d);
+        if (maxWeight <= 0d) {
+            return List.of();
+        }
+        double peakFloor = maxWeight * minPeakRelativeHeight.doubleValue();
+        List<PeakRange> candidates = new ArrayList<>();
+        for (int index = 0; index < weights.length; index++) {
+            double left = index == 0 ? Double.NEGATIVE_INFINITY : weights[index - 1];
+            double right = index == weights.length - 1 ? Double.NEGATIVE_INFINITY : weights[index + 1];
+            if (weights[index] + 1e-12 < peakFloor
+                    || weights[index] + 1e-12 < left
+                    || weights[index] + 1e-12 < right) {
+                continue;
+            }
+            candidates.add(expandPeak(index, weights));
+        }
+        candidates.sort(Comparator
+                .comparingDouble(PeakRange::peakWeight).reversed()
+                .thenComparingInt(PeakRange::peakIndex));
+
+        List<PeakRange> selected = new ArrayList<>();
+        for (PeakRange candidate : candidates) {
+            boolean overlaps = selected.stream().anyMatch(existing -> rangesOverlap(candidate, existing));
+            if (!overlaps) {
+                selected.add(candidate);
+            }
+            if (selected.size() >= maxConcentrationZones) {
+                break;
+            }
+        }
+        selected.sort(Comparator.comparingInt(PeakRange::peakIndex));
+        splitOverlapsAtValleys(selected, weights);
+
+        List<UnrankedZone> unranked = new ArrayList<>();
+        for (PeakRange range : selected) {
+            double ratio = 0d;
+            for (int index = range.start(); index <= range.end(); index++) {
+                ratio += weights[index];
+            }
+            ChipPricePosition position = zonePosition(
+                    prices[range.start()], prices[range.end()], currentPrice);
+            BigDecimal distance = prices[range.peakIndex()].subtract(currentPrice)
+                    .multiply(HUNDRED)
+                    .divide(currentPrice, 6, RoundingMode.HALF_UP);
+            unranked.add(new UnrankedZone(
+                    range,
+                    scalePrice(prices[range.start()]),
+                    scalePrice(prices[range.end()]),
+                    scalePrice(prices[range.peakIndex()]),
+                    scaleRatio(BigDecimal.valueOf(ratio * 100d)),
+                    scaleRatio(distance),
+                    position
+            ));
+        }
+        unranked.sort(Comparator
+                .comparing(UnrankedZone::chipRatioPercent, Comparator.reverseOrder())
+                .thenComparing(UnrankedZone::peakPrice));
+        List<ChipConcentrationZone> result = new ArrayList<>();
+        for (int index = 0; index < unranked.size(); index++) {
+            UnrankedZone zone = unranked.get(index);
+            result.add(new ChipConcentrationZone(
+                    index + 1,
+                    zone.lowPrice(),
+                    zone.highPrice(),
+                    zone.peakPrice(),
+                    zone.chipRatioPercent(),
+                    zone.distanceToCurrentPricePercent(),
+                    zone.positionToCurrentPrice()
+            ));
+        }
+        return List.copyOf(result);
+    }
+
+    private PeakRange expandPeak(int peakIndex, double[] weights) {
+        double edge = weights[peakIndex] * zoneEdgeRelativeHeight.doubleValue();
+        int start = peakIndex;
+        int end = peakIndex;
+        while (start > 0 && weights[start - 1] + 1e-12 >= edge) {
+            start--;
+        }
+        while (end < weights.length - 1 && weights[end + 1] + 1e-12 >= edge) {
+            end++;
+        }
+        return new PeakRange(peakIndex, start, end, weights[peakIndex]);
+    }
+
+    private boolean rangesOverlap(PeakRange left, PeakRange right) {
+        return left.start() <= right.end() && right.start() <= left.end();
+    }
+
+    private void splitOverlapsAtValleys(List<PeakRange> ranges, double[] weights) {
+        for (int index = 0; index < ranges.size() - 1; index++) {
+            PeakRange left = ranges.get(index);
+            PeakRange right = ranges.get(index + 1);
+            if (!rangesOverlap(left, right)) {
+                continue;
+            }
+            int valley = left.peakIndex();
+            for (int cursor = left.peakIndex(); cursor <= right.peakIndex(); cursor++) {
+                if (weights[cursor] < weights[valley]) {
+                    valley = cursor;
+                }
+            }
+            ranges.set(index, left.withEnd(Math.max(left.peakIndex(), valley)));
+            ranges.set(index + 1, right.withStart(Math.min(right.peakIndex(), valley + 1)));
+        }
+    }
+
+    private ChipPricePosition zonePosition(BigDecimal low, BigDecimal high, BigDecimal currentPrice) {
+        if (low.compareTo(currentPrice) > 0) {
+            return ChipPricePosition.ABOVE;
+        }
+        if (high.compareTo(currentPrice) < 0) {
+            return ChipPricePosition.BELOW;
+        }
+        return ChipPricePosition.AROUND;
+    }
+
+    private ChipPricePosition currentPricePosition(
+            BigDecimal currentPrice,
+            ChipConcentrationZone dominant
+    ) {
+        if (dominant == null) {
+            return null;
+        }
+        if (currentPrice.compareTo(dominant.lowPrice()) < 0) {
+            return ChipPricePosition.BELOW;
+        }
+        if (currentPrice.compareTo(dominant.highPrice()) > 0) {
+            return ChipPricePosition.ABOVE;
+        }
+        return ChipPricePosition.AROUND;
+    }
+
+    private int firstPositiveIndex(double[] weights) {
+        for (int index = 0; index < weights.length; index++) {
+            if (weights[index] > 1e-12) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private int lastPositiveIndex(double[] weights) {
+        for (int index = weights.length - 1; index >= 0; index--) {
+            if (weights[index] > 1e-12) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private PriorHigh priorHigh(List<EastMoneyKLine> bars, BigDecimal[] prices, double[] weights) {
@@ -351,6 +598,37 @@ public class LocalChipDistributionCalculator {
 
     private BigDecimal scaleRatio(BigDecimal value) {
         return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal boundedFraction(BigDecimal value, String fallback) {
+        if (value == null || value.compareTo(BigDecimal.ZERO) <= 0 || value.compareTo(BigDecimal.ONE) > 0) {
+            return new BigDecimal(fallback);
+        }
+        return value;
+    }
+
+    private record DisplayGroup(int start, int end, BigDecimal price, double ratio) {
+    }
+
+    private record PeakRange(int peakIndex, int start, int end, double peakWeight) {
+        private PeakRange withStart(int value) {
+            return new PeakRange(peakIndex, value, end, peakWeight);
+        }
+
+        private PeakRange withEnd(int value) {
+            return new PeakRange(peakIndex, start, value, peakWeight);
+        }
+    }
+
+    private record UnrankedZone(
+            PeakRange range,
+            BigDecimal lowPrice,
+            BigDecimal highPrice,
+            BigDecimal peakPrice,
+            BigDecimal chipRatioPercent,
+            BigDecimal distanceToCurrentPricePercent,
+            ChipPricePosition positionToCurrentPrice
+    ) {
     }
 
     private record PriorHigh(

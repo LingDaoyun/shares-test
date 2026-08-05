@@ -9,8 +9,58 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 class LocalChipDistributionCalculatorTest {
+
+    @Test
+    void exposesACompactAuditableDistributionAndDominantPeak() {
+        LocalChipDistributionCalculator calculator = calculator(80, 1.0);
+        List<EastMoneyKLine> bars = fixedPriceBars(0, 80, "10.00", "2.00");
+
+        LocalChipDistribution result = calculator.calculate(
+                bars,
+                new BigDecimal("10.10"),
+                ChipCalculationMode.COMPLETED_BAR
+        );
+
+        assertThat(result.distributionBuckets()).hasSizeLessThanOrEqualTo(60);
+        BigDecimal totalRatio = result.distributionBuckets().stream()
+                .map(ChipDistributionBucket::chipRatioPercent)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(totalRatio)
+                .isCloseTo(new BigDecimal("100.00"), within(new BigDecimal("0.10")));
+        assertThat(result.concentrationZones()).hasSize(1);
+        assertThat(result.concentrationZones().get(0).peakPrice())
+                .isBetween(new BigDecimal("9.99"), new BigDecimal("10.01"));
+        assertThat(result.dominantPeakPrice())
+                .isEqualByComparingTo(result.concentrationZones().get(0).peakPrice());
+    }
+
+    @Test
+    void identifiesSeparateChipPeaksAndTheNearestOverheadZone() {
+        LocalChipDistributionCalculator calculator = calculator(80, 1.0);
+        List<EastMoneyKLine> bars = new ArrayList<>();
+        bars.addAll(fixedPriceBars(0, 40, "10.00", "1.00"));
+        bars.addAll(fixedPriceBars(40, 40, "12.00", "1.00"));
+
+        LocalChipDistribution result = calculator.calculate(
+                bars,
+                new BigDecimal("11.00"),
+                ChipCalculationMode.COMPLETED_BAR
+        );
+
+        assertThat(result.concentrationZones()).hasSize(2);
+        assertThat(result.concentrationZones())
+                .extracting(ChipConcentrationZone::rank)
+                .containsExactly(1, 2);
+        assertThat(result.concentrationZones().get(0).chipRatioPercent())
+                .isGreaterThanOrEqualTo(result.concentrationZones().get(1).chipRatioPercent());
+        assertThat(result.nearestOverheadZone()).isNotNull();
+        assertThat(result.nearestOverheadZone().peakPrice()).isEqualByComparingTo("12.00");
+        assertThat(result.nearestOverheadZone().positionToCurrentPrice())
+                .isEqualTo(ChipPricePosition.ABOVE);
+    }
 
     @Test
     void oneHundredPercentTurnoverReplacesThePreviousDistribution() {
@@ -139,6 +189,20 @@ class LocalChipDistributionCalculatorTest {
 
     private LocalChipDistributionCalculator calculator(int minValidBars, double minCoverage) {
         return new LocalChipDistributionCalculator(120, 150, minValidBars, BigDecimal.valueOf(minCoverage));
+    }
+
+    private List<EastMoneyKLine> fixedPriceBars(
+            int startDayOffset,
+            int count,
+            String price,
+            String turnover
+    ) {
+        List<EastMoneyKLine> bars = new ArrayList<>();
+        for (int index = 0; index < count; index++) {
+            bars.add(bar(startDayOffset + index, price, price, price, price,
+                    turnover, "100000", new BigDecimal(price).multiply(new BigDecimal("10000000")).toPlainString()));
+        }
+        return bars;
     }
 
     private EastMoneyKLine bar(

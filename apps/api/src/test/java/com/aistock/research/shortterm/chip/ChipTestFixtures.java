@@ -25,7 +25,10 @@ final class ChipTestFixtures {
                 bd("9.00"), bd("11.00"), bd("20.00"),
                 distance,
                 bd("15.00"), bd("10.00"), bd("120.00"),
-                bd("100.00"), 120, List.of()
+                bd("100.00"), 120,
+                List.of(), List.of(),
+                null, null, null, null, null, null,
+                List.of()
         );
     }
 
