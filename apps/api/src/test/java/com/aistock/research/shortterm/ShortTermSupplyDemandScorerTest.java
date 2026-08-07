@@ -135,11 +135,11 @@ class ShortTermSupplyDemandScorerTest {
 
         assertThat(score.rankingScore()).isEqualByComparingTo(score.v2RankingScore());
         assertThat(score.chipContributionScore()).isEqualByComparingTo("20.00");
-        assertThat(score.v3RankingScore()).isNull();
+        assertThat(score.v3RankingScore()).isNotNull();
     }
 
     @Test
-    void keepsChipAsStandaloneDiagnosticEvenWhenActivationModeIsActive() {
+    void appliesTheConfiguredV3WeightsWhenActivationModeIsActive() {
         ShortTermChipSnapshot chip = mock(ShortTermChipSnapshot.class);
         when(chip.contributionScore()).thenReturn(new BigDecimal("18"));
 
@@ -152,9 +152,10 @@ class ShortTermSupplyDemandScorerTest {
                 ChipActivationMode.ACTIVE
         );
 
-        assertThat(score.rankingScore()).isEqualByComparingTo(score.v2RankingScore());
+        assertThat(score.v3RankingScore()).isEqualByComparingTo("77.21");
+        assertThat(score.rankingScore()).isEqualByComparingTo("77.21");
         assertThat(score.chipContributionScore()).isEqualByComparingTo("18.00");
-        assertThat(score.v3RankingScore()).isNull();
+        assertThat(score.rankingScore()).isNotEqualByComparingTo(score.v2RankingScore());
     }
 
     private EastMoneyFundFlowSnapshot flow(

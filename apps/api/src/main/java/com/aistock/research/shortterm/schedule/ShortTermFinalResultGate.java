@@ -44,7 +44,7 @@ public class ShortTermFinalResultGate {
             );
         }
         Optional<Failure> failure = validate(
-                tradeDate, report, decisionCompletedAt, decisionCompletedAt, false, true);
+                tradeDate, report, decisionCompletedAt, decisionCompletedAt, false, true, false);
         if (failure.isPresent()) {
             Failure blocked = failure.orElseThrow();
             return blocked(blocked.reason(), blocked.message());
@@ -73,7 +73,7 @@ public class ShortTermFinalResultGate {
             boolean enforceScheduledDeadline
     ) {
         Optional<Failure> failure = validate(
-                tradeDate, report, decisionCompletedAt, freshnessCheckedAt, enforceScheduledDeadline, false);
+                tradeDate, report, decisionCompletedAt, freshnessCheckedAt, enforceScheduledDeadline, false, true);
         if (failure.isPresent()) {
             Failure blocked = failure.orElseThrow();
             return blocked(blocked.reason(), blocked.message());
@@ -101,7 +101,8 @@ public class ShortTermFinalResultGate {
             Instant decisionCompletedAt,
             Instant freshnessCheckedAt,
             boolean enforceScheduledDeadline,
-            boolean allowNonTradingFetchFreshness
+            boolean allowNonTradingFetchFreshness,
+            boolean enforceFreshness
     ) {
         if (tradeDate == null || decisionCompletedAt == null
                 || !marketDate(decisionCompletedAt).equals(tradeDate)
@@ -135,11 +136,12 @@ public class ShortTermFinalResultGate {
                 && !report.tradingSession().regularAuctionOpen()) {
             freshnessReference = coverage.fetchedAt();
         }
-        if (freshnessCheckedAt == null
+        if (enforceFreshness
+                && (freshnessCheckedAt == null
                 || freshnessReference == null
                 || freshnessReference.isAfter(freshnessCheckedAt)
                 || Duration.between(freshnessReference, freshnessCheckedAt)
-                .compareTo(settings.freshness()) > 0) {
+                .compareTo(settings.freshness()) > 0)) {
             return Optional.of(new Failure("QUOTE_STALE", "尾盘行情已经过期"));
         }
         return Optional.empty();

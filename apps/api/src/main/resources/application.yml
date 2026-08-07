@@ -34,15 +34,20 @@ server:
 
 research:
   short-term:
+    scan-job-timeout: PT15M
     chip:
       enabled: true
       lookback-bars: 120
       price-buckets: 150
+      display-buckets: 60
+      max-concentration-zones: 3
+      min-peak-relative-height: 0.20
+      zone-edge-relative-height: 0.25
       min-valid-bars: 80
       min-turnover-coverage: 0.95
       weight: 0.25
-      activation-mode: SHADOW
-      single-source-coefficient: 0.60
+      activation-mode: ACTIVE
+      single-source-coefficient: 1.00
       max-average-cost-deviation: 0.03
       min-cost-band-overlap: 0.70
       max-winner-rate-deviation: 0.10

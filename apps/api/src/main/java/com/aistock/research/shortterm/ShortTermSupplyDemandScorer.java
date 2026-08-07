@@ -19,6 +19,9 @@ public class ShortTermSupplyDemandScorer {
     private static final BigDecimal PRESSURE_WEIGHT = new BigDecimal("0.30");
     private static final BigDecimal TECHNICAL_WEIGHT = new BigDecimal("0.25");
     private static final BigDecimal MAX_CHIP_CONTRIBUTION = new BigDecimal("25");
+    private static final BigDecimal V3_TECHNICAL_WEIGHT = new BigDecimal("0.45");
+    private static final BigDecimal V3_PRESSURE_WEIGHT = new BigDecimal("0.20");
+    private static final BigDecimal V3_BUY_WEIGHT = new BigDecimal("0.10");
 
     public ShortTermSupplyDemandScore score(
             EastMoneyFundFlowSnapshot fundFlow,
@@ -58,7 +61,15 @@ public class ShortTermSupplyDemandScorer {
         BigDecimal chipContribution = chip == null || chip.contributionScore() == null
                 ? BigDecimal.ZERO
                 : chip.contributionScore().max(BigDecimal.ZERO).min(MAX_CHIP_CONTRIBUTION);
-        BigDecimal rankingScore = v2RankingScore;
+        BigDecimal v3RankingScore = technicalScore.multiply(V3_TECHNICAL_WEIGHT)
+                .add(chipContribution)
+                .add(pressureRelief.multiply(V3_PRESSURE_WEIGHT))
+                .add(flowScore.available()
+                        ? flowScore.score().multiply(V3_BUY_WEIGHT)
+                        : BigDecimal.ZERO);
+        BigDecimal rankingScore = activationMode == ChipActivationMode.ACTIVE && chip != null
+                ? v3RankingScore
+                : v2RankingScore;
         return new ShortTermSupplyDemandScore(
                 scale(flowScore.mainRatio()),
                 scale(flowScore.largeOrderRatio()),
@@ -67,7 +78,7 @@ public class ShortTermSupplyDemandScorer {
                 scale(technicalScore),
                 scale(clamp(v2RankingScore)),
                 scale(chipContribution),
-                null,
+                scale(clamp(v3RankingScore)),
                 scale(clamp(rankingScore)),
                 dataGaps
         );

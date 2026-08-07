@@ -10,6 +10,7 @@ import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOv
 import { Loader } from '../components/ui/Loader'
 import { SectionBanner } from '../components/ui/SectionBanner'
 import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
+import { ChipDistributionChart } from '../components/shortterm/ChipDistributionChart'
 import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
 import type { ReportOrigin } from '../components/shortterm/ScheduledSnapshotStatus'
 import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
@@ -18,7 +19,7 @@ import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
 import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCounterEvidenceTone, goldenCrossDisplayLabel, goldenCrossSpreadLabel, goldenCrossSpreadTrendLabel, goldenCrossTone, goldenCrossV2Context } from '../lib/shortTermGoldenCross'
-import type { ChipVerificationStatus, OvernightBacktestReport, OvernightBacktestSummary, ShortTermCandidate, ShortTermChipSnapshot, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermReport, ShortTermScanJobStatus, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { ChipVerificationStatus, OvernightBacktestReport, OvernightBacktestSummary, ShortTermCandidate, ShortTermChipSnapshot, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermScanJobStatus, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -38,12 +39,12 @@ interface DraftParams {
 const DEFAULT_DRAFT: DraftParams = {
   limit: 8,
   scanLimit: 6000,
-  klineLimit: 60,
+  klineLimit: 120,
   minAmountYi: 0.8,
   maxPe: 100,
   maxPb: 15,
   minVolumeRatio: 1.2,
-  maxEntryRise: 4.5,
+  maxEntryRise: 6.5,
   maxDistanceToMa20: 8,
   minFinancialScore: 55,
   allowStaticCachePreview: true,
@@ -428,7 +429,7 @@ export function ShortTermPage() {
 
       {report ? (
         <>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
             <Card title="方法">
               <div className="flex flex-col gap-2 text-sm leading-relaxed text-ink-600">
                 {report.methodology.map((item) => <p key={item}>{item}</p>)}
@@ -443,6 +444,7 @@ export function ShortTermPage() {
                 <p className="text-xs leading-relaxed text-ink-500">{report.marketSentiment.explanation}</p>
               </div>
             </Card>
+            <MarketFundDirectionCard direction={report.marketFundDirection} />
             <Card title="扫描快照">
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <Metric label="全市场样本" value={report.universeCount} />
@@ -597,6 +599,85 @@ function visibleSnapshotReport(snapshot: ShortTermScheduledSnapshot) {
     return null
   }
   return snapshot.report
+}
+
+function MarketFundDirectionCard({ direction }: { direction?: ShortTermMarketFundDirection | null }) {
+  const topInflows = direction?.topInflows ?? []
+  const topOutflows = direction?.topOutflows ?? []
+  const hasRows = topInflows.length > 0 || topOutflows.length > 0
+  const coverage = direction && direction.expectedIndustryCount > 0
+    ? `${direction.coveredIndustryCount}/${direction.expectedIndustryCount}`
+    : '待补'
+
+  return (
+    <Card title="今日资金去向">
+      <div className="flex flex-col gap-3 text-sm text-ink-600">
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <Metric label="数据日" value={direction?.tradeDate ?? '待确认'} />
+          <Metric label="覆盖" value={coverage} />
+        </div>
+        <p className="truncate text-xs text-ink-400">
+          覆盖 {coverage} · {direction?.sourceName ?? '行业资金流未返回'}
+        </p>
+        {hasRows ? (
+          <div className="flex flex-col gap-3">
+            <FundDirectionList title="主力流入" items={topInflows} tone="success" />
+            <FundDirectionList title="主力流出" items={topOutflows} tone="danger" />
+          </div>
+        ) : (
+          <p className="rounded-lg border border-line-soft bg-ink-50 px-3 py-2 text-xs leading-relaxed text-ink-500">
+            行业资金流暂不可用
+          </p>
+        )}
+        {direction?.dataGaps?.length ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+            {direction.dataGaps.slice(0, 2).join('；')}
+          </div>
+        ) : null}
+      </div>
+    </Card>
+  )
+}
+
+function FundDirectionList({
+  title,
+  items,
+  tone
+}: {
+  title: string
+  items: ShortTermIndustryFundDirection[]
+  tone: 'success' | 'danger'
+}) {
+  if (!items.length) {
+    return null
+  }
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-xs font-semibold text-ink-700">{title}</span>
+        <Tag tone={tone}>{items.length} 项</Tag>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {items.map((item) => (
+          <div key={`${title}-${item.code}`} className="rounded-lg border border-line-soft px-2.5 py-2">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="truncate font-semibold text-ink-900">{item.name}</span>
+              <span className={`shrink-0 tabular font-semibold ${changeClass(item.mainNetInflow)}`}>
+                {formatAmount(item.mainNetInflow)}
+              </span>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              <Tag tone="neutral">占比 {formatPercent(item.mainNetInflowRatio)}</Tag>
+              <Tag tone="neutral">集中 {formatPercent(item.concentrationPercent)}</Tag>
+              {item.constituentCount > 0 ? (
+                <Tag tone="neutral">涨跌 {item.advancing}/{item.declining}</Tag>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function snapshotFromManualJob(job: ShortTermScanJobStatus): ShortTermScheduledSnapshot {
@@ -842,9 +923,13 @@ function ChipSummaryTags({ chip }: { chip: ShortTermChipSnapshot | null | undefi
   return (
     <>
       <Tag tone={chipVerificationTone(chip.verificationStatus)}>
-        {chip.verificationStatus === 'VERIFIED' ? '筹码认证' : `筹码：${chip.verificationLabel}`}
+        {chip.verificationStatus === 'VERIFIED'
+          ? '筹码核验'
+          : chip.verificationStatus === 'SINGLE_SOURCE'
+            ? '筹码：本地估算'
+            : `筹码：${chip.verificationLabel}`}
       </Tag>
-      {chip.contributionScore != null ? <Tag tone="neutral">诊断分 {formatNumber(chip.contributionScore)}</Tag> : null}
+      {chip.contributionScore != null ? <Tag tone="neutral">排序贡献 {formatNumber(chip.contributionScore)}</Tag> : null}
       {chip.distanceToAverageCostPercent != null ? (
         <Tag tone="neutral">距成本 {formatSignedPercent(chip.distanceToAverageCostPercent)}</Tag>
       ) : null}
@@ -855,6 +940,9 @@ function ChipSummaryTags({ chip }: { chip: ShortTermChipSnapshot | null | undefi
 function ChipStructurePanel({ candidate }: { candidate: ShortTermCandidate }) {
   const chip = candidate.chip
   const chipDataGaps = chip?.dataGaps ?? []
+  const participatesInRanking = candidate.score.v3RankingScore != null
+    && candidate.score.rankingScore != null
+    && Math.abs(candidate.score.v3RankingScore - candidate.score.rankingScore) < 0.005
   return (
     <section className="border-t border-line-soft pt-4" aria-label="筹码结构与外部认证">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -881,13 +969,23 @@ function ChipStructurePanel({ candidate }: { candidate: ShortTermCandidate }) {
             <Metric label="前高后累计换手" value={formatPercent(chip.turnoverSincePriorHighPercent)} />
             <Metric label="筹码结构分" value={formatNumber(chip.chipStructureScore)} />
             <Metric label="认证系数" value={formatNumber(chip.verificationCoefficient)} />
-            <Metric label="独立诊断分" value={formatNumber(chip.contributionScore)} />
-            <Metric label="主排序关系" value="不参与主排序" />
+            <Metric label="筹码排序贡献" value={formatNumber(chip.contributionScore)} />
+            <Metric label="主排序关系" value={participatesInRanking ? '参与同层排序' : '历史/旁路诊断'} />
             <Metric label="本地 / 外部日期" value={`${chip.localTradeDate ?? '待补'} / ${chip.externalTradeDate ?? '待补'}`} />
             <Metric label="计算口径" value={chip.calculationMode === 'INTRADAY_ESTIMATE' ? '盘中估算' : '完整日 K'} />
           </div>
+          <ChipDistributionChart
+            currentPrice={candidate.latestPrice}
+            distributionBuckets={chip.distributionBuckets ?? []}
+            concentrationZones={chip.concentrationZones ?? []}
+            dominantPeakPrice={chip.dominantPeakPrice}
+            dominantZoneLow={chip.dominantZoneLow}
+            dominantZoneHigh={chip.dominantZoneHigh}
+            dominantZoneChipRatioPercent={chip.dominantZoneChipRatioPercent}
+            nearestOverheadZone={chip.nearestOverheadZone}
+          />
           <p className="mt-3 text-xs leading-relaxed text-ink-500">
-            筹码是基于换手率与价格区间估算的成本分布画像，用来观察大部分筹码在低位还是高位、上方套牢盘是否已经消化；它不参与金叉、量能、换手率和收盘强度的主分计算。
+            筹码是基于换手率与价格区间估算的成本分布画像。有效本地筹码在 ACTIVE 模式下占排序的 25%，只调整同一动作层级内的顺序，不绕过技术与风险门禁。
           </p>
           {chipDataGaps.length ? (
             <div className="mt-3 border-l-2 border-amber-300 pl-3 text-xs leading-relaxed text-amber-700">

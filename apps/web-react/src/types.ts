@@ -636,6 +636,26 @@ export type ChipVerificationStatus =
   | 'STALE'
   | 'INSUFFICIENT'
 
+export type ChipPricePosition = 'BELOW' | 'AROUND' | 'ABOVE'
+
+export interface ChipDistributionBucket {
+  lowPrice: number
+  highPrice: number
+  price: number
+  chipRatioPercent: number
+  normalizedHeight: number
+}
+
+export interface ChipConcentrationZone {
+  rank: number
+  lowPrice: number
+  highPrice: number
+  peakPrice: number
+  chipRatioPercent: number
+  distanceToCurrentPricePercent: number
+  positionToCurrentPrice: ChipPricePosition
+}
+
 export interface ShortTermChipSnapshot {
   dataQuality: 'VALID' | 'INSUFFICIENT'
   calculationMode: 'COMPLETED_BAR' | 'INTRADAY_ESTIMATE'
@@ -671,6 +691,14 @@ export interface ShortTermChipSnapshot {
   averageCostDeviation: number | null
   cost70BandOverlap: number | null
   winnerRateDeviation: number | null
+  distributionBuckets?: ChipDistributionBucket[] | null
+  concentrationZones?: ChipConcentrationZone[] | null
+  dominantPeakPrice?: number | null
+  dominantZoneLow?: number | null
+  dominantZoneHigh?: number | null
+  dominantZoneChipRatioPercent?: number | null
+  currentPricePosition?: ChipPricePosition | null
+  nearestOverheadZone?: ChipConcentrationZone | null
   modelVersion: string
   dataGaps: string[]
 }
@@ -822,6 +850,7 @@ export interface ShortTermReport {
   candidates: ShortTermCandidate[]
   hotDirections: ShortTermHotDirection[]
   marketSentiment: ShortTermMarketSentiment
+  marketFundDirection?: ShortTermMarketFundDirection | null
   exclusions: ShortTermRiskExclusion[]
   tradeCaptureTokens: Record<string, string>
   coverage: ShortTermCoverageSnapshot
@@ -860,6 +889,32 @@ export interface ShortTermMarketSentiment {
   limitDownLike: number
   breadthPercent: number
   explanation: string
+}
+
+export interface ShortTermIndustryFundDirection {
+  code: string
+  name: string
+  mainNetInflow: number | null
+  mainNetInflowRatio: number | null
+  superLargeNetInflow: number | null
+  largeNetInflow: number | null
+  advancing: number
+  declining: number
+  constituentCount: number
+  concentrationPercent: number | null
+  sourceUrl: string | null
+}
+
+export interface ShortTermMarketFundDirection {
+  topInflows: ShortTermIndustryFundDirection[]
+  topOutflows: ShortTermIndustryFundDirection[]
+  coveredIndustryCount: number
+  expectedIndustryCount: number
+  coverageRatio: number | null
+  tradeDate: string | null
+  fetchedAt: string | null
+  sourceName: string
+  dataGaps: string[]
 }
 
 export type ShortTermScanJobState = 'RUNNING' | 'SUCCEEDED' | 'FAILED'

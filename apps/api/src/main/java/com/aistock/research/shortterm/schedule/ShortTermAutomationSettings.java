@@ -74,14 +74,14 @@ public class ShortTermAutomationSettings {
         return new ShortTermScanRequest(
                 integer("research.short-term.schedule.limit", 8, 1, 20),
                 integer("research.short-term.schedule.scan-limit", 6000, 100, 10000),
-                integer("research.short-term.schedule.kline-limit", 60, 20, 500),
+                integer("research.short-term.schedule.kline-limit", 120, 20, 500),
                 decimal("research.short-term.schedule.min-amount", "80000000", ZERO,
                         new BigDecimal("100000000000000")),
                 decimal("research.short-term.schedule.max-pe", "100", ONE, new BigDecimal("1000")),
                 decimal("research.short-term.schedule.max-pb", "15", new BigDecimal("0.1"), HUNDRED),
                 decimal("research.short-term.schedule.min-volume-ratio", "1.20",
                         ONE, new BigDecimal("3.20")),
-                decimal("research.short-term.schedule.max-entry-rise", "4.5", ZERO, new BigDecimal("20")),
+                decimal("research.short-term.schedule.max-entry-rise", "6.5", ZERO, new BigDecimal("20")),
                 decimal("research.short-term.schedule.max-distance-to-ma20", "8", ZERO, new BigDecimal("50")),
                 decimal("research.short-term.schedule.min-financial-score", "55", ZERO, HUNDRED),
                 false);

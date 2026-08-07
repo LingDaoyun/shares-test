@@ -191,11 +191,15 @@ research:
       enabled: true
       lookback-bars: 120
       price-buckets: 150
+      display-buckets: 60
+      max-concentration-zones: 3
+      min-peak-relative-height: 0.20
+      zone-edge-relative-height: 0.25
       min-valid-bars: 80
       min-turnover-coverage: 0.95
       weight: 0.25
-      activation-mode: SHADOW
-      single-source-coefficient: 0.60
+      activation-mode: ACTIVE
+      single-source-coefficient: 1.00
       max-average-cost-deviation: 0.03
       min-cost-band-overlap: 0.70
       max-winner-rate-deviation: 0.10
@@ -208,15 +212,15 @@ research:
         max-concurrency: 4
 ```
 
-`activation-mode` 目前仅作为兼容配置保留，短线主排序始终不混入筹码分：
+`activation-mode` 控制筹码结构是否进入同一动作层级内的正式排序：
 
 ```text
-OFF     不计算筹码结构诊断
-SHADOW  计算筹码成本分布画像，正式排序仍沿用金叉、量能、换手和收盘强度主分（默认）
-ACTIVE  兼容旧配置；当前版本不会采用筹码分改写短线主排序
+OFF     不计算筹码结构
+SHADOW  计算并展示筹码成本分布，但正式排序继续使用 V2
+ACTIVE  使用技术 45%、筹码 25%、上方抛压弱度 20%、买盘强度 10% 的 V3 排序（默认）
 ```
 
-没有 Tushare token、接口限流、认证冲突或数据过期时，只把该候选的认证系数降为零或单源系数，不会让整轮扫描进入 `DATA_BLOCKED`。真实 token 推荐通过容器环境变量 `TUSHARE_TOKEN` 注入；若直接写入本地 Nacos，也不要提交到 Git。
+没有 Tushare token 或接口限流时，有效的本地筹码模型仍按系数 1.00 使用并显示“本地估算 · 未交叉验证”，不会让整轮扫描进入 `DATA_BLOCKED`。双源冲突、数据过期或本地数据不足时筹码贡献为零。真实 token 推荐通过容器环境变量 `TUSHARE_TOKEN` 注入；若直接写入本地 Nacos，也不要提交到 Git。
 
 公告证据会优先查询巨潮公告列表。当前版本会对可匹配证券内部编码的样本返回真实公告，并默认解析少量公告 PDF 的前几页，抽取风险事件、壁垒线索和兑现线索；无法匹配或接口失败时，研究视图会降级使用公司画像里的年报/公告证据，并在 `dataGaps` 中提示需要补齐巨潮、上交所、深交所、北交所公告源。在线解析参数要保守，完整 PDF 解析适合迁到批处理或文档库。
 

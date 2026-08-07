@@ -25,8 +25,8 @@ vi.mock('../api/client', () => ({
 const emptyReport = {
   scope: '短线右侧',
   universeCount: 5500,
-  reviewedCount: 60,
-  klineReviewedCount: 60,
+  reviewedCount: 120,
+  klineReviewedCount: 120,
   candidateCount: 0,
   quoteNote: '全市场覆盖可靠',
   tradingSession: {
@@ -47,12 +47,12 @@ const emptyReport = {
   ruleSet: {
     limit: 8,
     scanLimit: 6000,
-    klineLimit: 60,
+    klineLimit: 120,
     minAmount: 80000000,
     maxPe: 100,
     maxPb: 15,
     minVolumeRatio: 1.2,
-    maxEntryRisePercent: 4,
+    maxEntryRisePercent: 6.5,
     maxDistanceToMa20Percent: 8,
     minFinancialScore: 58,
     allowChiNext: false
@@ -329,7 +329,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(document.body.textContent).toContain('计划任务')
   })
 
-  it('keeps four summary cards by removing the current-rule card', async () => {
+  it('keeps the current-rule card removed from the summary area', async () => {
     await renderPage(root)
 
     expect(document.body.textContent).toContain('方法')
@@ -337,6 +337,66 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(document.body.textContent).toContain('扫描快照')
     expect(document.body.textContent).toContain('热门方向')
     expect(document.body.textContent).not.toContain('当前规则')
+  })
+
+  it('renders today market fund direction with explicit inflow and outflow sections', async () => {
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: {
+        ...emptyReport,
+        marketFundDirection: {
+          topInflows: [{
+            code: 'BK1201',
+            name: '电子',
+            mainNetInflow: 25470566400,
+            mainNetInflowRatio: 3.75,
+            superLargeNetInflow: 18464870400,
+            largeNetInflow: 7005696000,
+            advancing: 411,
+            declining: 102,
+            constituentCount: 513,
+            concentrationPercent: 18.4,
+            sourceUrl: 'https://push2delay.eastmoney.com/api/qt/clist/get'
+          }],
+          topOutflows: [{
+            code: 'BK0475',
+            name: '银行',
+            mainNetInflow: -9000000000,
+            mainNetInflowRatio: -2.5,
+            superLargeNetInflow: -6000000000,
+            largeNetInflow: -3000000000,
+            advancing: 4,
+            declining: 28,
+            constituentCount: 32,
+            concentrationPercent: 7.2,
+            sourceUrl: 'https://push2delay.eastmoney.com/api/qt/clist/get'
+          }],
+          coveredIndustryCount: 496,
+          expectedIndustryCount: 496,
+          coverageRatio: 1,
+          tradeDate: '2026-08-07',
+          fetchedAt: '2026-08-07T14:15:00+08:00',
+          sourceName: '东方财富行业资金流',
+          dataGaps: []
+        }
+      } as never
+    })
+
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('今日资金去向')
+    expect(document.body.textContent).toContain('主力流入')
+    expect(document.body.textContent).toContain('电子')
+    expect(document.body.textContent).toContain('主力流出')
+    expect(document.body.textContent).toContain('银行')
+    expect(document.body.textContent).toContain('覆盖 496/496')
+  })
+
+  it('renders an explicit unavailable state for legacy reports without market fund direction', async () => {
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('今日资金去向')
+    expect(document.body.textContent).toContain('行业资金流暂不可用')
   })
 
   it('shows the four core signals and candle-strength evidence in the candidate detail', async () => {
@@ -374,7 +434,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
         v2Rank: 5,
         v3Rank: 2,
         rankDelta: 3,
-        rankingScore: 82
+        rankingScore: 88.4
       },
       chip: {
         dataQuality: 'VALID',
@@ -405,13 +465,52 @@ describe('ShortTermPage prepared snapshot mount', () => {
         priorHighDigestionScore: 92,
         chipStructureScore: 86,
         verificationStatus: 'VERIFIED',
-        verificationLabel: '双源认证通过',
+        verificationLabel: '本地估算 · 外部数据已核验',
         verificationCoefficient: 1,
         contributionScore: 21.5,
         averageCostDeviation: 0.018,
         cost70BandOverlap: 0.82,
         winnerRateDeviation: 0.04,
-        modelVersion: 'short-term-chip-v1',
+        distributionBuckets: [
+          { lowPrice: 4.72, highPrice: 4.9, price: 4.82, chipRatioPercent: 18.2, normalizedHeight: 42 },
+          { lowPrice: 4.9, highPrice: 5.18, price: 5.05, chipRatioPercent: 43.6, normalizedHeight: 100 },
+          { lowPrice: 5.3, highPrice: 5.46, price: 5.38, chipRatioPercent: 12.4, normalizedHeight: 28 }
+        ],
+        concentrationZones: [
+          {
+            rank: 1,
+            lowPrice: 4.9,
+            highPrice: 5.18,
+            peakPrice: 5.05,
+            chipRatioPercent: 43.6,
+            distanceToCurrentPricePercent: -3.07,
+            positionToCurrentPrice: 'BELOW'
+          },
+          {
+            rank: 2,
+            lowPrice: 5.3,
+            highPrice: 5.46,
+            peakPrice: 5.38,
+            chipRatioPercent: 12.4,
+            distanceToCurrentPricePercent: 3.26,
+            positionToCurrentPrice: 'ABOVE'
+          }
+        ],
+        dominantPeakPrice: 5.05,
+        dominantZoneLow: 4.9,
+        dominantZoneHigh: 5.18,
+        dominantZoneChipRatioPercent: 43.6,
+        currentPricePosition: 'ABOVE',
+        nearestOverheadZone: {
+          rank: 2,
+          lowPrice: 5.3,
+          highPrice: 5.46,
+          peakPrice: 5.38,
+          chipRatioPercent: 12.4,
+          distanceToCurrentPricePercent: 3.26,
+          positionToCurrentPrice: 'ABOVE'
+        },
+        modelVersion: 'short-term-chip-v2-peaks',
         dataGaps: []
       }
     }
@@ -425,17 +524,21 @@ describe('ShortTermPage prepared snapshot mount', () => {
     })
 
     await renderPage(root)
-    expect(document.body.textContent).toContain('筹码认证')
-    expect(document.body.textContent).toContain('诊断分 21.50')
+    expect(document.body.textContent).toContain('筹码核验')
+    expect(document.body.textContent).toContain('排序贡献 21.50')
     expect(document.body.textContent).toContain('距成本 +3.17%')
 
     await clickButton('候选600795')
     expect(document.body.textContent).toContain('筹码结构与外部认证')
-    expect(document.body.textContent).toContain('双源认证通过')
-    expect(document.body.textContent).toContain('独立诊断分')
+    expect(document.body.textContent).toContain('本地估算 · 外部数据已核验')
+    expect(document.body.textContent).toContain('筹码排序贡献')
     expect(document.body.textContent).toContain('主排序关系')
-    expect(document.body.textContent).toContain('不参与主排序')
+    expect(document.body.textContent).toContain('参与同层排序')
     expect(document.body.textContent).not.toContain('V2 / V3 排名')
+    expect(document.body.textContent).toContain('主筹码峰')
+    expect(document.body.textContent).toContain('主要集中区')
+    expect(document.body.textContent).toContain('43.60%')
+    expect(document.body.textContent).toContain('最近上方筹码区')
     expect(document.body.textContent).toContain('前高区残余筹码')
     expect(document.body.textContent).toContain('7.50%')
   })
@@ -479,6 +582,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
 
     expect(document.body.textContent).toContain('筹码结构与外部认证')
     expect(document.body.textContent).toContain('仅本地模型')
+    expect(document.body.textContent).toContain('历史版本未计算完整筹码峰')
   })
 
   it('requests the T1/T2 overnight contract without a legacy 20-day holding window', async () => {
@@ -711,6 +815,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(startShortTermScanJob).toHaveBeenCalledTimes(1)
     expect(startShortTermScanJob).toHaveBeenCalledWith(expect.objectContaining({
       limit: 8,
+      klineLimit: 120,
       minVolumeRatio: 1.2,
       allowStaticCachePreview: true,
       allowChiNext: false

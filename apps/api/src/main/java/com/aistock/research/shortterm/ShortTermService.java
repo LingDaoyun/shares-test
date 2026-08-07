@@ -6,6 +6,7 @@ import com.aistock.research.integration.eastmoney.EastMoneyAnnualIndicator;
 import com.aistock.research.integration.eastmoney.AshareQuoteSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
 import com.aistock.research.integration.eastmoney.EastMoneyFundFlowSnapshot;
+import com.aistock.research.integration.eastmoney.EastMoneyIndustryFundFlowSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyIntradayPoint;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
@@ -14,6 +15,7 @@ import com.aistock.research.quality.EvidenceCompletenessInput;
 import com.aistock.research.quality.EvidenceCompletenessService;
 import com.aistock.research.quality.RecommendationQuality;
 import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
+import com.aistock.research.shortterm.chip.ChipActivationMode;
 import com.aistock.research.shortterm.chip.ChipVerificationStatus;
 import com.aistock.research.shortterm.chip.ShortTermChipAnalysisService;
 import com.aistock.research.shortterm.chip.ShortTermChipSnapshot;
@@ -56,16 +58,17 @@ public class ShortTermService {
     private static final int DEFAULT_SCAN_LIMIT = 6000;
     private static final int MAX_SCAN_LIMIT = 6000;
     private static final int FULL_MARKET_QUOTE_REQUEST = Integer.MAX_VALUE;
-    private static final int DEFAULT_KLINE_LIMIT = 60;
+    private static final int DEFAULT_KLINE_LIMIT = 120;
     private static final int MAX_KLINE_LIMIT = 160;
     private static final BigDecimal DEFAULT_MIN_AMOUNT = new BigDecimal("80000000");
     private static final BigDecimal DEFAULT_MAX_PE = new BigDecimal("100");
     private static final BigDecimal DEFAULT_MAX_PB = new BigDecimal("15.0");
     private static final BigDecimal DEFAULT_MIN_VOLUME_RATIO = new BigDecimal("1.20");
-    private static final BigDecimal DEFAULT_MAX_ENTRY_RISE = new BigDecimal("4.50");
+    private static final BigDecimal DEFAULT_MAX_ENTRY_RISE = new BigDecimal("6.50");
     private static final BigDecimal DEFAULT_MAX_DISTANCE_TO_MA20 = new BigDecimal("8.00");
     private static final BigDecimal DEFAULT_MIN_FINANCIAL_SCORE = new BigDecimal("55");
     private static final BigDecimal MIN_RELIABLE_MARKET_COVERAGE = new BigDecimal("0.90");
+    private static final BigDecimal MIN_RELIABLE_INDUSTRY_FUND_FLOW_COVERAGE = new BigDecimal("0.70");
     private static final BigDecimal ROE_STRONG = RatioScale.fromPercentPoints("12");
     private static final BigDecimal ROE_ACCEPTABLE = RatioScale.fromPercentPoints("8");
     private static final BigDecimal GROSS_MARGIN_STRONG = RatioScale.fromPercentPoints("30");
@@ -369,12 +372,14 @@ public class ShortTermService {
                 .filter(quote -> passesQuotePreFilter(quote, ruleSet, unstableIndustrySymbols))
                 .toList();
         ShortTermMarketSentiment marketSentiment = marketSentiment(quoteUniverse, coverage);
+        ShortTermMarketFundDirection marketFundDirection = marketFundDirection(quoteUniverse);
         if (isExtremeRiskOffMarket(marketSentiment)) {
             return extremeRiskOffReport(
                     ruleSet,
                     quoteUniverse,
                     coverage,
                     marketSentiment,
+                    marketFundDirection,
                     quoteExclusions,
                     pointInTimeCoverageQuotes
             );
@@ -470,7 +475,7 @@ public class ShortTermService {
                 ))
                 .toList();
         List<ScoredShortTerm> scored = attachRankingDiagnostics(rawScored).stream()
-                .sorted(shortTermRankingComparator())
+                .sorted(shortTermRankingComparator(rawScored))
                 .toList();
 
         List<ShortTermRiskExclusion> exclusions = java.util.stream.Stream.of(
@@ -500,7 +505,8 @@ public class ShortTermService {
                 tradableQuotes.size(),
                 (int) validKlineCount,
                 candidates.size(),
-                quoteNote(coverage, (int) validKlineCount, tradableQuotes.size()),
+                quoteNote(coverage, (int) validKlineCount, tradableQuotes.size())
+                        + marketFundDirectionNote(marketFundDirection),
                 tradingClockService.currentSession(),
                 List.of(
                         "第一层用全 A 股行情做流动性、非 ST、热门方向和追涨风险排序，PE/PB 只占预选分的 10%。",
@@ -508,7 +514,7 @@ public class ShortTermService {
                         "第三层技术底分固定为金叉 45%、放量上涨 30%、换手适配 15%、K 线收盘强度 10%。",
                         "筹码结构是独立证据层，只展示成本分布、上方筹码和前高残余筹码；不与金叉、量能、换手率混算主分。",
                         "筹码由东方财富换手率和日 K 在 Java 本地复算，Tushare 只认证最近完整交易日；认证失败不阻断扫描，也不能改变动作建议。",
-                        "当前筹码配置为 " + chipSettings.activationMode() + "；系统仍按无筹码主排序输出，筹码只用于独立诊断和风险复核。",
+                        "当前筹码配置为 " + chipSettings.activationMode() + "；ACTIVE 模式下有效本地筹码占 25%，只在同一动作层级内调整推荐顺序。",
                         "默认输出八个短线候选：可执行层在前、观察层补足展示，但不会为了凑数制造加仓建议。",
                         "PE、PB、热门方向和普通财务质量只作上下文与风险说明，不进入短线四项主分。",
                         "热门方向可帮助全市场预选，但不能覆盖金叉、放量、换手、上影线和硬风险门禁。",
@@ -521,6 +527,7 @@ public class ShortTermService {
                 candidates,
                 hotDirections,
                 marketSentiment,
+                marketFundDirection,
                 exclusions,
                 Map.of(),
                 coverage,
@@ -551,11 +558,133 @@ public class ShortTermService {
                 + coverage.source() + "。" + goldenCrossNote;
     }
 
+    private ShortTermMarketFundDirection marketFundDirection(List<EastMoneyQuote> quoteUniverse) {
+        try {
+            List<EastMoneyIndustryFundFlowSnapshot> snapshots = eastMoneyClient.fetchIndustryFundFlows();
+            if (snapshots == null || snapshots.isEmpty()) {
+                return ShortTermMarketFundDirection.unavailable("行业资金流为空，今日资金去向暂不可用。");
+            }
+
+            List<String> dataGaps = new ArrayList<>();
+            LocalDate tradeDate = snapshots.stream()
+                    .map(EastMoneyIndustryFundFlowSnapshot::tradeDate)
+                    .filter(java.util.Objects::nonNull)
+                    .max(LocalDate::compareTo)
+                    .orElse(null);
+            LocalDate quoteDate = (quoteUniverse == null ? List.<EastMoneyQuote>of() : quoteUniverse).stream()
+                    .map(EastMoneyQuote::tradeDate)
+                    .filter(java.util.Objects::nonNull)
+                    .max(LocalDate::compareTo)
+                    .orElse(null);
+            if (tradeDate == null) {
+                dataGaps.add("行业资金流缺少数据日，无法确认是否为今日快照。");
+            } else if (quoteDate != null && !tradeDate.equals(quoteDate)) {
+                dataGaps.add("行业资金流数据日 " + tradeDate + " 与行情日 " + quoteDate + " 不一致。");
+            }
+
+            long coveredCount = snapshots.stream()
+                    .filter(snapshot -> snapshot.mainNetInflow() != null)
+                    .count();
+            int expectedCount = snapshots.size();
+            BigDecimal coverageRatio = BigDecimal.valueOf(coveredCount)
+                    .divide(BigDecimal.valueOf(expectedCount), 4, RoundingMode.HALF_UP);
+            if (coverageRatio.compareTo(MIN_RELIABLE_INDUSTRY_FUND_FLOW_COVERAGE) < 0) {
+                dataGaps.add("行业资金流覆盖不足，当前覆盖率 " + coverageRatio.multiply(new BigDecimal("100"))
+                        .setScale(2, RoundingMode.HALF_UP) + "%。");
+            }
+
+            BigDecimal totalAbsoluteFlow = snapshots.stream()
+                    .map(EastMoneyIndustryFundFlowSnapshot::mainNetInflow)
+                    .filter(java.util.Objects::nonNull)
+                    .map(BigDecimal::abs)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            List<ShortTermIndustryFundDirection> directions = snapshots.stream()
+                    .filter(snapshot -> snapshot.mainNetInflow() != null)
+                    .map(snapshot -> industryFundDirection(snapshot, totalAbsoluteFlow))
+                    .toList();
+            Instant fetchedAt = snapshots.stream()
+                    .map(EastMoneyIndustryFundFlowSnapshot::fetchedAt)
+                    .filter(java.util.Objects::nonNull)
+                    .max(Instant::compareTo)
+                    .orElse(null);
+            String sourceName = snapshots.stream()
+                    .map(EastMoneyIndustryFundFlowSnapshot::sourceName)
+                    .filter(value -> value != null && !value.isBlank())
+                    .findFirst()
+                    .orElse("东方财富行业资金流");
+            return new ShortTermMarketFundDirection(
+                    directions.stream()
+                            .filter(direction -> direction.mainNetInflow().compareTo(BigDecimal.ZERO) > 0)
+                            .sorted(Comparator.comparing(
+                                    ShortTermIndustryFundDirection::mainNetInflow,
+                                    Comparator.reverseOrder()))
+                            .limit(5)
+                            .toList(),
+                    directions.stream()
+                            .filter(direction -> direction.mainNetInflow().compareTo(BigDecimal.ZERO) < 0)
+                            .sorted(Comparator.comparing(ShortTermIndustryFundDirection::mainNetInflow))
+                            .limit(3)
+                            .toList(),
+                    (int) coveredCount,
+                    expectedCount,
+                    coverageRatio,
+                    tradeDate,
+                    fetchedAt,
+                    sourceName,
+                    dataGaps
+            );
+        } catch (RuntimeException exception) {
+            logger.warn("短线右侧行业资金流获取失败，保留扫描结果", exception);
+            return ShortTermMarketFundDirection.unavailable(
+                    "行业资金流获取失败：" + rootMessage(exception)
+            );
+        }
+    }
+
+    private ShortTermIndustryFundDirection industryFundDirection(
+            EastMoneyIndustryFundFlowSnapshot snapshot,
+            BigDecimal totalAbsoluteFlow
+    ) {
+        BigDecimal concentration = BigDecimal.ZERO;
+        if (snapshot.mainNetInflow() != null && totalAbsoluteFlow.compareTo(BigDecimal.ZERO) > 0) {
+            concentration = snapshot.mainNetInflow().abs()
+                    .divide(totalAbsoluteFlow, 6, RoundingMode.HALF_UP)
+                    .multiply(new BigDecimal("100"))
+                    .setScale(2, RoundingMode.HALF_UP);
+        }
+        return new ShortTermIndustryFundDirection(
+                snapshot.code(),
+                snapshot.name(),
+                snapshot.mainNetInflow(),
+                snapshot.mainNetInflowRatio(),
+                snapshot.superLargeNetInflow(),
+                snapshot.largeNetInflow(),
+                snapshot.advancing(),
+                snapshot.declining(),
+                snapshot.constituentCount(),
+                concentration,
+                snapshot.sourceUrl()
+        );
+    }
+
+    private String marketFundDirectionNote(ShortTermMarketFundDirection direction) {
+        if (direction == null || (direction.topInflows().isEmpty() && direction.topOutflows().isEmpty())) {
+            return " 今日资金去向：行业资金流暂不可用，页面仅展示个股自身资金流证据。";
+        }
+        String gapNote = direction.dataGaps().isEmpty()
+                ? ""
+                : " 数据缺口：" + String.join("；", direction.dataGaps()) + "。";
+        return " 今日资金去向为独立市场背景，覆盖 " + direction.coveredIndustryCount()
+                + "/" + direction.expectedIndustryCount() + " 个行业板块，数据日 "
+                + (direction.tradeDate() == null ? "待确认" : direction.tradeDate()) + "。" + gapNote;
+    }
+
     private ShortTermReport extremeRiskOffReport(
             ShortTermRuleSet ruleSet,
             List<EastMoneyQuote> quoteUniverse,
             ShortTermCoverageSnapshot coverage,
             ShortTermMarketSentiment marketSentiment,
+            ShortTermMarketFundDirection marketFundDirection,
             List<ShortTermRiskExclusion> quoteExclusions,
             List<EastMoneyQuote> pointInTimeCoverageQuotes
     ) {
@@ -581,6 +710,7 @@ public class ShortTermService {
                 List.of(),
                 List.of(),
                 marketSentiment,
+                marketFundDirection,
                 quoteExclusions,
                 Map.of(),
                 coverage,
@@ -2137,7 +2267,7 @@ public class ShortTermService {
                 && chip.contributionScore() != null
                 && chip.contributionScore().compareTo(BigDecimal.ZERO) > 0) {
             strengths.add("筹码模型已认证：当前价距推算成本中枢 "
-                    + valueText(chip.distanceToAverageCostPercent()) + "% ，独立诊断分 "
+                    + valueText(chip.distanceToAverageCostPercent()) + "% ，筹码排序贡献 "
                     + valueText(chip.contributionScore()) + " 分。");
         }
         if (chip.overheadChipRatioPercent() != null
@@ -2239,11 +2369,11 @@ public class ShortTermService {
             return risks.stream().distinct().limit(11).toList();
         }
         if (chip.verificationStatus() == ChipVerificationStatus.SINGLE_SOURCE) {
-            risks.add("筹码结构仅由本地模型推算，外部认证缺失，独立诊断分已按60%折减。");
+            risks.add("筹码结构由本地成交与换手模型推算，尚未使用外部数据交叉验证。");
         } else if (chip.verificationStatus() == ChipVerificationStatus.CONFLICT) {
-            risks.add("本地与外部筹码模型冲突，本轮筹码独立诊断分为0。");
+            risks.add("本地与外部筹码模型冲突，本轮筹码排序贡献为0。");
         } else if (chip.verificationStatus() == ChipVerificationStatus.STALE) {
-            risks.add("筹码认证日期过期，本轮筹码独立诊断分为0。");
+            risks.add("筹码认证日期过期，本轮筹码排序贡献为0。");
         } else if (chip.verificationStatus() == ChipVerificationStatus.INSUFFICIENT) {
             risks.add("K线或换手率质量不足，无法形成可靠筹码成本分布画像。");
         }
@@ -2436,7 +2566,7 @@ public class ShortTermService {
                         + valueText(chip.cost70High()) + " 元，上方筹码 "
                         + valueText(chip.overheadChipRatioPercent()) + "% ，结构分 "
                         + valueText(chip.chipStructureScore()) + "，认证系数 "
-                        + valueText(chip.verificationCoefficient()) + "，独立诊断分 "
+                        + valueText(chip.verificationCoefficient()) + "，筹码排序贡献 "
                         + valueText(chip.contributionScore()) + " 分。",
                 chip.externalTradeDate() == null
                         ? null
@@ -2807,13 +2937,16 @@ public class ShortTermService {
 
     private List<ScoredShortTerm> attachRankingDiagnostics(List<ScoredShortTerm> scored) {
         Map<String, Integer> v2Ranks = rankingPositions(scored, shortTermV2RankingComparator());
+        Map<String, Integer> v3Ranks = rankingPositions(scored, shortTermV3RankingComparator());
         return scored.stream()
                 .map(item -> {
                     String symbol = item.candidate().symbol();
                     Integer v2Rank = v2Ranks.get(symbol);
+                    Integer v3Rank = v3Ranks.get(symbol);
+                    Integer rankDelta = v2Rank == null || v3Rank == null ? null : v2Rank - v3Rank;
                     return new ScoredShortTerm(copyWithScore(
                             item.candidate(),
-                            withRankingDiagnostics(item.candidate().score(), v2Rank, null, null)
+                            withRankingDiagnostics(item.candidate().score(), v2Rank, v3Rank, rankDelta)
                     ));
                 })
                 .toList();
@@ -2914,8 +3047,38 @@ public class ShortTermService {
         };
     }
 
-    private Comparator<ScoredShortTerm> shortTermRankingComparator() {
-        return shortTermV2RankingComparator();
+    private Comparator<ScoredShortTerm> shortTermRankingComparator(List<ScoredShortTerm> scored) {
+        boolean hasChipSnapshot = scored != null && scored.stream()
+                .anyMatch(item -> item.candidate().chip() != null);
+        return chipSettings.activationMode() == ChipActivationMode.ACTIVE && hasChipSnapshot
+                ? shortTermActiveRankingComparator()
+                : shortTermV2RankingComparator();
+    }
+
+    private Comparator<ScoredShortTerm> shortTermActiveRankingComparator() {
+        return Comparator
+                .comparingInt((ScoredShortTerm item) -> eligibilityGatePriority(item.candidate().action())).reversed()
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed())
+                .thenComparing(item -> item.candidate().score().rankingScore(),
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> eligibleGoldenCrossPriority(item.candidate())).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> rightSideMaturityPriority(item.candidate())).reversed());
+    }
+
+    private Comparator<ScoredShortTerm> shortTermV3RankingComparator() {
+        return Comparator
+                .comparingInt((ScoredShortTerm item) -> eligibilityGatePriority(item.candidate().action())).reversed()
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed())
+                .thenComparing(item -> item.candidate().score().v3RankingScore(),
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> eligibleGoldenCrossPriority(item.candidate())).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (ScoredShortTerm item) -> rightSideMaturityPriority(item.candidate())).reversed());
     }
 
     private Comparator<ScoredShortTerm> shortTermV2RankingComparator() {

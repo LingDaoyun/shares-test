@@ -33,12 +33,12 @@ class ShortTermAutomationSettingsTest {
         ShortTermScanRequest scan = settings.scanRequest();
         assertThat(scan.limit()).isEqualTo(8);
         assertThat(scan.scanLimit()).isEqualTo(6000);
-        assertThat(scan.klineLimit()).isEqualTo(60);
+        assertThat(scan.klineLimit()).isEqualTo(120);
         assertThat(scan.minAmount()).isEqualByComparingTo("80000000");
         assertThat(scan.maxPe()).isEqualByComparingTo("100");
         assertThat(scan.maxPb()).isEqualByComparingTo("15");
         assertThat(scan.minVolumeRatio()).isEqualByComparingTo("1.20");
-        assertThat(scan.maxEntryRise()).isEqualByComparingTo("4.5");
+        assertThat(scan.maxEntryRise()).isEqualByComparingTo("6.5");
         assertThat(scan.maxDistanceToMa20()).isEqualByComparingTo("8");
         assertThat(scan.minFinancialScore()).isEqualByComparingTo("55");
 

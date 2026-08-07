@@ -4,6 +4,7 @@ import com.aistock.research.integration.eastmoney.EastMoneyAnnualIndicator;
 import com.aistock.research.integration.eastmoney.AshareQuoteSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
 import com.aistock.research.integration.eastmoney.EastMoneyFundFlowSnapshot;
+import com.aistock.research.integration.eastmoney.EastMoneyIndustryFundFlowSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyIntradayPoint;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
@@ -64,8 +65,8 @@ class ShortTermServiceTest {
 
         assertThat(eastMoneyClient.requestedQuoteLimit).isEqualTo(6000);
         assertThat(report.ruleSet().scanLimit()).isEqualTo(6000);
-        assertThat(report.ruleSet().klineLimit()).isEqualTo(60);
-        assertThat(report.ruleSet().maxEntryRisePercent()).isEqualByComparingTo("4.5");
+        assertThat(report.ruleSet().klineLimit()).isEqualTo(120);
+        assertThat(report.ruleSet().maxEntryRisePercent()).isEqualByComparingTo("6.5");
         assertThat(report.ruleSet().minFinancialScore()).isEqualByComparingTo("55");
     }
 
@@ -740,7 +741,49 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void chipDiagnosticsDoNotChangeRankingEvenWhenActivationModeIsActive() {
+    void marketFundDirectionIsReportContextAndDoesNotReorderCandidates() {
+        eastMoneyClient.quotes = List.of(
+                quoteWithIndustry("600607", "强买盘样本", "电子", "10.62", "1.20", "18", "1.6", "600000000"),
+                quoteWithIndustry("600608", "资金流出样本", "银行", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600607", rightEarlyKLines("600607", "10.62", "180000"));
+        eastMoneyClient.klines.put("600608", rightEarlyKLines("600608", "10.62", "180000"));
+        eastMoneyClient.quotes.forEach(quote ->
+                eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
+        eastMoneyClient.fundFlows.put("600607", fundFlow("600607", "8", "3", "2"));
+        eastMoneyClient.fundFlows.put("600608", fundFlow("600608", "-6", "-2", "-1"));
+        eastMoneyClient.industryFundFlows = List.of(
+                industryFundFlow("BK0475", "银行", "900000000000", "5.5", 41, 1),
+                industryFundFlow("BK1201", "电子", "-120000000000", "-1.8", 100, 220)
+        );
+
+        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+
+        assertThat(report.marketFundDirection().topInflows())
+                .extracting(ShortTermIndustryFundDirection::name)
+                .containsExactly("银行");
+        assertThat(report.marketFundDirection().topOutflows())
+                .extracting(ShortTermIndustryFundDirection::name)
+                .containsExactly("电子");
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600607", "600608");
+        assertThat(eastMoneyClient.industryFundFlowCalls).isEqualTo(1);
+    }
+
+    @Test
+    void marketFundDirectionFailureCreatesDataGapWithoutBlockingReport() {
+        eastMoneyClient.industryFundFlowFailure = new IllegalStateException("行业接口超时");
+
+        ShortTermReport report = service.report(3, 100, 10, null, null, null, null, null, null, null);
+
+        assertThat(report.marketFundDirection().topInflows()).isEmpty();
+        assertThat(report.marketFundDirection().topOutflows()).isEmpty();
+        assertThat(report.marketFundDirection().dataGaps())
+                .anyMatch(gap -> gap.contains("行业资金流获取失败") && gap.contains("行业接口超时"));
+    }
+
+    @Test
+    void activeChipRankingChangesOrderOnlyInsideTheSameActionLayer() {
         eastMoneyClient.quotes = List.of(
                 quote("600607", "强买盘样本", "10.62", "1.20", "18", "1.6", "600000000"),
                 quote("600608", "优质筹码样本", "10.62", "1.20", "18", "1.6", "600000000")
@@ -767,12 +810,45 @@ class ShortTermServiceTest {
         assertThat(shadow.candidates()).allSatisfy(candidate -> assertThat(candidate.chip()).isNotNull());
         assertThat(find(shadow, "600608").score().chipContributionScore())
                 .isGreaterThan(find(shadow, "600607").score().chipContributionScore());
-        assertThat(find(shadow, "600608").score().v3RankingScore()).isNull();
+        assertThat(find(shadow, "600608").score().v3RankingScore()).isNotNull();
         assertThat(active.candidates()).extracting(ShortTermCandidate::symbol)
-                .containsExactly("600607", "600608");
+                .containsExactly("600608", "600607");
         assertThat(find(active, "600608").action()).isEqualTo(find(active, "600607").action());
-        assertThat(find(active, "600608").score().v3Rank()).isNull();
+        assertThat(find(active, "600608").score().v3Rank()).isEqualTo(1);
+        assertThat(find(active, "600608").score().rankDelta()).isPositive();
+        assertThat(find(active, "600608").score().rankingScore())
+                .isEqualByComparingTo(find(active, "600608").score().v3RankingScore());
         assertThat(eastMoneyClient.turnoverEnrichmentCalls).isPositive();
+    }
+
+    @Test
+    void activeChipRankingUsesOneComparatorWhenChipAvailabilityIsMixed() {
+        eastMoneyClient.quotes = List.of(
+                quote("600607", "筹码样本", "10.62", "1.20", "18", "1.6", "600000000"),
+                quote("600608", "低分资金流样本", "10.62", "1.20", "18", "1.6", "600000000"),
+                quote("600609", "高分无资金流样本", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.quotes.forEach(quote -> {
+            eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "180000"));
+            eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
+        });
+        eastMoneyClient.fundFlows.put("600608", fundFlow("600608", "-6", "-2", "-1"));
+        ShortTermChipAnalysisService chipAnalysis = mock(ShortTermChipAnalysisService.class);
+        when(chipAnalysis.analyze(any(), anyList(), anyBoolean(), any())).thenAnswer(invocation -> {
+            EastMoneyQuote quote = invocation.getArgument(0);
+            return "600607".equals(quote.symbol()) ? chipSnapshot("25") : null;
+        });
+
+        ShortTermReport report = chipAwareService("ACTIVE", chipAnalysis)
+                .report(3, 100, 10, null, null, null, null, null, null, null);
+
+        ShortTermCandidate lowScoreWithFlow = find(report, "600608");
+        ShortTermCandidate highScoreWithoutFlow = find(report, "600609");
+        assertThat(highScoreWithoutFlow.action()).isEqualTo(lowScoreWithFlow.action());
+        assertThat(highScoreWithoutFlow.score().rankingScore())
+                .isGreaterThan(lowScoreWithFlow.score().rankingScore());
+        assertThat(report.candidates().indexOf(highScoreWithoutFlow))
+                .isLessThan(report.candidates().indexOf(lowScoreWithFlow));
     }
 
     @Test
@@ -828,15 +904,21 @@ class ShortTermServiceTest {
     @Test
     void shouldRankActionPriorityBeforeRightSideMaturity() {
         eastMoneyClient.quotes = List.of(
-                quote("600605", "等回踩确认样本", "10.62", "5.20", "18", "1.6", "600000000"),
+                quote("600605", "等回踩确认样本", "10.62", "7.20", "18", "1.6", "600000000"),
                 quote("600606", "右侧观察样本", "10.62", "1.20", "18", "1.6", "600000000")
         );
         eastMoneyClient.klines.put("600605", rightEarlyKLines("600605", "10.62", "180000"));
         eastMoneyClient.klines.put("600606", rightEarlyKLines("600606", "10.62", "105000"));
         eastMoneyClient.quotes.forEach(quote ->
                 eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
+        ShortTermChipAnalysisService chipAnalysis = mock(ShortTermChipAnalysisService.class);
+        when(chipAnalysis.analyze(any(), anyList(), anyBoolean(), any())).thenAnswer(invocation -> {
+            EastMoneyQuote quote = invocation.getArgument(0);
+            return chipSnapshot("600605".equals(quote.symbol()) ? "25" : "0");
+        });
 
-        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = chipAwareService("ACTIVE", chipAnalysis)
+                .report(2, 100, 10, null, null, null, null, null, null, null);
 
         ShortTermCandidate pullback = find(report, "600605");
         ShortTermCandidate observation = find(report, "600606");
@@ -1722,10 +1804,10 @@ class ShortTermServiceTest {
                 new BigDecimal("0.50"),
                 new BigDecimal("2.5"),
                 new BigDecimal("4.0"),
-                new BigDecimal("4.5"),
+                new BigDecimal("6.5"),
                 new BigDecimal("7.0"),
                 new BigDecimal("2.5"),
-                new BigDecimal("4.5"),
+                new BigDecimal("6.5"),
                 new BigDecimal("2.0")
         );
     }
@@ -1960,6 +2042,34 @@ class ShortTermServiceTest {
         );
     }
 
+    private EastMoneyIndustryFundFlowSnapshot industryFundFlow(
+            String code,
+            String name,
+            String mainNetInflow,
+            String mainNetInflowRatio,
+            int advancing,
+            int declining
+    ) {
+        return new EastMoneyIndustryFundFlowSnapshot(
+                code,
+                name,
+                new BigDecimal(mainNetInflow),
+                new BigDecimal(mainNetInflowRatio),
+                new BigDecimal("60000000"),
+                new BigDecimal("1.5"),
+                new BigDecimal("40000000"),
+                new BigDecimal("1.0"),
+                advancing,
+                declining,
+                advancing + declining,
+                "东方财富行业资金流",
+                "https://push2delay.eastmoney.com/api/qt/clist/get",
+                Instant.parse("2026-07-07T07:01:00Z"),
+                LocalDate.parse("2026-07-07"),
+                Instant.parse("2026-07-07T07:00:00Z")
+        );
+    }
+
     private EastMoneyQuote quoteAt(
             String symbol,
             String name,
@@ -2135,6 +2245,9 @@ class ShortTermServiceTest {
         private final Map<String, List<EastMoneyAnnualIndicator>> financials = new HashMap<>();
         private final Map<String, List<EastMoneyIntradayPoint>> intraday = new HashMap<>();
         private final Map<String, EastMoneyFundFlowSnapshot> fundFlows = new HashMap<>();
+        private List<EastMoneyIndustryFundFlowSnapshot> industryFundFlows = List.of();
+        private RuntimeException industryFundFlowFailure;
+        private int industryFundFlowCalls;
         private int fundFlowBatchCalls;
         private int turnoverEnrichmentCalls;
         private List<String> requestedFundFlowSymbols = List.of();
@@ -2224,6 +2337,15 @@ class ShortTermServiceTest {
                 }
             });
             return result;
+        }
+
+        @Override
+        public List<EastMoneyIndustryFundFlowSnapshot> fetchIndustryFundFlows() {
+            industryFundFlowCalls++;
+            if (industryFundFlowFailure != null) {
+                throw industryFundFlowFailure;
+            }
+            return industryFundFlows;
         }
     }
 

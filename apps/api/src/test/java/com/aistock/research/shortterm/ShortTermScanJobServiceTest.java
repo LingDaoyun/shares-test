@@ -5,8 +5,11 @@ import com.aistock.research.shortterm.schedule.ShortTermFinalResultGate;
 import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
 import com.aistock.research.trading.TradingClockService;
 import com.aistock.research.trading.TradingSessionSnapshot;
+import org.springframework.boot.test.util.TestPropertyValues;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -28,11 +31,33 @@ import static org.mockito.Mockito.when;
 class ShortTermScanJobServiceTest {
 
     @Test
+    void shouldUseConfiguredScanTimeoutFromSpringProperties() throws Exception {
+        AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
+        TestPropertyValues.of("research.short-term.scan-job-timeout=PT15M").applyTo(context);
+        context.registerBean(ShortTermService.class, () -> mock(ShortTermService.class));
+        context.registerBean(ResearchHistoryService.class, () -> mock(ResearchHistoryService.class));
+        context.registerBean(TradingClockService.class, () -> mock(TradingClockService.class));
+        context.registerBean(ShortTermFinalResultGate.class, () -> mock(ShortTermFinalResultGate.class));
+        context.register(ShortTermScanJobService.class);
+
+        try {
+            context.refresh();
+
+            assertThat(configuredTimeout(context.getBean(ShortTermScanJobService.class)))
+                    .isEqualTo(Duration.ofMinutes(15));
+        } finally {
+            context.close();
+        }
+    }
+
+    @Test
     void shouldRunScanJobAndExposeSucceededReport() throws Exception {
         ShortTermService shortTermService = mock(ShortTermService.class);
         ResearchHistoryService researchHistoryService = mock(ResearchHistoryService.class);
         ShortTermReport report = sampleReport();
         ShortTermScanJobService service = service(shortTermService, researchHistoryService);
+        CountDownLatch running = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
 
         try {
             ShortTermScanRequest request = new ShortTermScanRequest(
@@ -48,12 +73,18 @@ class ShortTermScanJobServiceTest {
                     new BigDecimal("60"),
                     true
             );
-            when(shortTermService.report(eq(request))).thenReturn(report);
+            when(shortTermService.report(eq(request))).thenAnswer(invocation -> {
+                running.countDown();
+                release.await(10, TimeUnit.SECONDS);
+                return report;
+            });
             ShortTermScanJobStatus started = service.start(request);
 
+            assertThat(running.await(2, TimeUnit.SECONDS)).isTrue();
             assertThat(started.status()).isEqualTo("RUNNING");
             assertThat(started.resultStatus()).isEqualTo(
                     com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.RUNNING);
+            release.countDown();
             ShortTermScanJobStatus finished = awaitFinished(service, started.jobId());
 
             assertThat(finished.status()).isEqualTo("SUCCEEDED");
@@ -65,6 +96,7 @@ class ShortTermScanJobServiceTest {
             verify(shortTermService).report(eq(request));
             verify(researchHistoryService).recordShortTermReport(report);
         } finally {
+            release.countDown();
             service.shutdown();
         }
     }
@@ -151,6 +183,12 @@ class ShortTermScanJobServiceTest {
             Thread.sleep(50);
         }
         throw new AssertionError("scan job did not finish in time");
+    }
+
+    private Duration configuredTimeout(ShortTermScanJobService service) throws Exception {
+        Field field = ShortTermScanJobService.class.getDeclaredField("scanTimeout");
+        field.setAccessible(true);
+        return (Duration) field.get(service);
     }
 
     private ShortTermScanJobService service(

@@ -44,9 +44,11 @@ public class EastMoneyClient {
     private static final String FUND_FLOW_MINUTE_FIELDS = "f51,f52,f53,f54,f55,f56,f57";
     private static final String FUND_FLOW_DAY_FIELDS = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65";
     private static final String EASTMONEY_FUND_FLOW_DAY_URL = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get";
+    private static final String INDUSTRY_FUND_FLOW_FIELDS = "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f104,f105,f124,f152";
     private static final String INDUSTRY_BOARD_FIELDS = "f12,f14";
     static final String A_SHARE_FILTER = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048";
     private static final String INDUSTRY_BOARD_FILTER = "m:90 t:2 f:!50";
+    private static final String INDUSTRY_FUND_FLOW_FILTER = "m:90+t:2+f:!50";
     private static final int MAX_QUOTE_PAGE_SIZE = 100;
     private static final int EASTMONEY_ATTEMPTS = 1;
     private static final int EASTMONEY_REMOTE_ATTEMPTS = 3;
@@ -452,6 +454,30 @@ public class EastMoneyClient {
         }
     }
 
+    public List<EastMoneyIndustryFundFlowSnapshot> fetchIndustryFundFlows() {
+        String url = industryFundFlowUrl();
+        try {
+            JsonNode diff = fetchQuoteRoot(url).path("data").path("diff");
+            return readIndustryFundFlows(diff, Instant.now(), url);
+        } catch (Exception exception) {
+            throw new IllegalStateException("东方财富行业资金流数据获取失败", exception);
+        }
+    }
+
+    String industryFundFlowUrl() {
+        return "https://push2delay.eastmoney.com/api/qt/clist/get"
+                + "?pn=1"
+                + "&pz=500"
+                + "&po=1"
+                + "&np=1"
+                + "&ut=bd1d9ddb04089700cf9c27f6f7426281"
+                + "&fltt=2"
+                + "&invt=2"
+                + "&fid=f62"
+                + "&fs=" + encodeQueryValue(INDUSTRY_FUND_FLOW_FILTER)
+                + "&fields=" + encodeQueryValue(INDUSTRY_FUND_FLOW_FIELDS);
+    }
+
     String fundFlowBatchUrl(List<String> symbols) {
         List<String> secIds = symbols == null ? List.of() : symbols.stream()
                 .map(this::secId)
@@ -479,6 +505,14 @@ public class EastMoneyClient {
                     .ifPresent(snapshot -> snapshots.put(snapshot.symbol(), snapshot));
         }
         return Map.copyOf(snapshots);
+    }
+
+    List<EastMoneyIndustryFundFlowSnapshot> readIndustryFundFlows(JsonNode diff, Instant fetchedAt, String sourceUrl) {
+        List<EastMoneyIndustryFundFlowSnapshot> snapshots = new ArrayList<>();
+        for (JsonNode item : diffItems(diff)) {
+            readIndustryFundFlow(item, fetchedAt, sourceUrl).ifPresent(snapshots::add);
+        }
+        return List.copyOf(snapshots);
     }
 
     public List<EastMoneyFundFlowPoint> fetchFundFlowMinutes(String symbol, int limit) {
@@ -1499,6 +1533,36 @@ public class EastMoneyClient {
         ));
     }
 
+    Optional<EastMoneyIndustryFundFlowSnapshot> readIndustryFundFlow(JsonNode item, Instant fetchedAt, String sourceUrl) {
+        String code = text(item, "f12");
+        String name = text(item, "f14");
+        BigDecimal mainNetInflow = decimal(item, "f62");
+        if (code == null || !code.startsWith("BK") || name == null || mainNetInflow == null) {
+            return Optional.empty();
+        }
+        Instant marketTimestamp = epochSecond(item, "f124");
+        int advancing = integer(item, "f104");
+        int declining = integer(item, "f105");
+        return Optional.of(new EastMoneyIndustryFundFlowSnapshot(
+                code,
+                name,
+                mainNetInflow,
+                decimal(item, "f184"),
+                decimal(item, "f66"),
+                decimal(item, "f69"),
+                decimal(item, "f72"),
+                decimal(item, "f75"),
+                advancing,
+                declining,
+                Math.max(0, advancing + declining),
+                "东方财富行业资金流",
+                sourceUrl,
+                fetchedAt,
+                tradeDate(marketTimestamp),
+                marketTimestamp
+        ));
+    }
+
     Optional<EastMoneyFundFlowPoint> readFundFlowPoint(String symbol, String rawLine) {
         if (rawLine == null || rawLine.isBlank()) {
             return Optional.empty();
@@ -1753,6 +1817,14 @@ public class EastMoneyClient {
             return null;
         }
         return BigDecimal.valueOf(value.asDouble()).setScale(4, RoundingMode.HALF_UP).stripTrailingZeros();
+    }
+
+    private int integer(JsonNode node, String field) {
+        JsonNode value = node.path(field);
+        if (value.isMissingNode() || value.isNull() || "-".equals(value.asText())) {
+            return 0;
+        }
+        return value.asInt(0);
     }
 
     private BigDecimal percent(JsonNode node, String field) {

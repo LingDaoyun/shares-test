@@ -151,11 +151,27 @@ class ShortTermManualResultGateTest {
     }
 
     @Test
-    void blocksStaleQuotes() {
+    void allowsManualReportWhenScanCompletesAfterFreshnessWindow() {
         ShortTermFinalResultGate.Result result = gate.evaluateManual(
                 report(
                         Instant.parse("2026-07-23T06:45:00Z"), true,
+                        new BigDecimal("0.99"), true,
+                        List.of(mock(com.aistock.research.shortterm.ShortTermCandidate.class))),
+                DECISION_AT);
+
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.FINAL_READY);
+        assertThat(result.message()).isEqualTo("手动分析已完成，已生成当前时点候选");
+        assertThat(result.blockedReasons()).isEmpty();
+    }
+
+    @Test
+    void blocksScheduledResultWhenQuotesAreStale() {
+        ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
+                TRADE_DATE,
+                report(
+                        Instant.parse("2026-07-23T06:45:00Z"), true,
                         new BigDecimal("0.99"), true, List.of()),
+                DECISION_AT,
                 DECISION_AT);
 
         assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);

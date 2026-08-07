@@ -6,6 +6,7 @@ import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
 import com.aistock.research.trading.TradingClockService;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -35,7 +36,7 @@ public class ShortTermScanJobService {
 
     private static final Logger logger = LoggerFactory.getLogger(ShortTermScanJobService.class);
     private static final Duration FINISHED_JOB_RETENTION = Duration.ofMinutes(30);
-    private static final Duration DEFAULT_SCAN_TIMEOUT = Duration.ofMinutes(5);
+    private static final Duration DEFAULT_SCAN_TIMEOUT = Duration.ofMinutes(15);
     private static final int MAX_JOB_COUNT = 80;
     private static final int WORKER_COUNT = 2;
     private static final int QUEUE_CAPACITY = 4;
@@ -56,12 +57,13 @@ public class ShortTermScanJobService {
             ShortTermService shortTermService,
             ResearchHistoryService researchHistoryService,
             TradingClockService tradingClockService,
-            ShortTermFinalResultGate finalResultGate
+            ShortTermFinalResultGate finalResultGate,
+            @Value("${research.short-term.scan-job-timeout:PT15M}") String scanTimeout
     ) {
         this(
                 shortTermService, researchHistoryService, tradingClockService, finalResultGate,
                 Clock.system(TradingClockService.CHINA_MARKET_ZONE),
-                DEFAULT_SCAN_TIMEOUT);
+                parseScanTimeout(scanTimeout));
     }
 
     ShortTermScanJobService(
@@ -206,6 +208,19 @@ public class ShortTermScanJobService {
         return cursor.getMessage() == null || cursor.getMessage().isBlank()
                 ? exception.getMessage()
                 : cursor.getMessage();
+    }
+
+    private static Duration parseScanTimeout(String value) {
+        if (value == null || value.isBlank()) {
+            return DEFAULT_SCAN_TIMEOUT;
+        }
+        try {
+            return Duration.parse(value.trim());
+        } catch (RuntimeException exception) {
+            logger.warn("Invalid refreshed setting research.short-term.scan-job-timeout={}, using default {}",
+                    value, DEFAULT_SCAN_TIMEOUT);
+            return DEFAULT_SCAN_TIMEOUT;
+        }
     }
 
     private static final class MutableJob {

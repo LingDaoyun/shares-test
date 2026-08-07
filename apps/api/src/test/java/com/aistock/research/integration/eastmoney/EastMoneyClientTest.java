@@ -285,6 +285,68 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void shouldParseIndustryFundFlowSnapshotsFromBoardBatchResponse() throws Exception {
+        JsonNode diff = objectMapper.readTree("""
+                [
+                  {
+                    "f12": "BK1201",
+                    "f14": "电子",
+                    "f62": 25470566400,
+                    "f184": 3.75,
+                    "f66": 18464870400,
+                    "f69": 2.72,
+                    "f72": 7005696000,
+                    "f75": 1.03,
+                    "f104": 411,
+                    "f105": 102,
+                    "f124": 1786083165
+                  },
+                  {
+                    "f12": "GC001",
+                    "f14": "非行业样本",
+                    "f62": 999999,
+                    "f124": 1786083165
+                  },
+                  {
+                    "f12": "BK1036",
+                    "f14": "半导体",
+                    "f62": 9668880640,
+                    "f184": 2.84,
+                    "f66": 6056454400,
+                    "f69": 1.78,
+                    "f72": 3612426240,
+                    "f75": 1.06,
+                    "f104": 171,
+                    "f105": 11,
+                    "f124": 1786083165
+                  }
+                ]
+                """);
+
+        List<EastMoneyIndustryFundFlowSnapshot> snapshots = client.readIndustryFundFlows(
+                diff,
+                Instant.parse("2026-08-07T06:15:00Z"),
+                "https://push2delay.eastmoney.com/api/qt/clist/get"
+        );
+
+        assertThat(snapshots).hasSize(2);
+        assertThat(snapshots).extracting(EastMoneyIndustryFundFlowSnapshot::code)
+                .containsExactly("BK1201", "BK1036");
+        EastMoneyIndustryFundFlowSnapshot electronics = snapshots.get(0);
+        assertThat(electronics.name()).isEqualTo("电子");
+        assertThat(electronics.mainNetInflow()).isEqualByComparingTo("25470566400");
+        assertThat(electronics.mainNetInflowRatio()).isEqualByComparingTo("3.75");
+        assertThat(electronics.superLargeNetInflow()).isEqualByComparingTo("18464870400");
+        assertThat(electronics.largeNetInflow()).isEqualByComparingTo("7005696000");
+        assertThat(electronics.advancing()).isEqualTo(411);
+        assertThat(electronics.declining()).isEqualTo(102);
+        assertThat(electronics.constituentCount()).isEqualTo(513);
+        assertThat(electronics.marketTimestamp()).isEqualTo(Instant.parse("2026-08-07T06:12:45Z"));
+        assertThat(electronics.tradeDate()).isEqualTo(LocalDate.parse("2026-08-07"));
+        assertThat(electronics.sourceUrl()).isEqualTo("https://push2delay.eastmoney.com/api/qt/clist/get");
+    }
+
+    @Test
     void shouldPreferStablePush2DelayHostAndKeepFallbackQuery() {
         String url = "https://29.push2.eastmoney.com/api/qt/clist/get?pn=1&fs=m:0+t:6,m:1+t:2&fields=f2,f3,f12";
 

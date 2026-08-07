@@ -1,5 +1,6 @@
 research:
   short-term:
+    scan-job-timeout: PT15M
     schedule:
       enabled: true
       zone: Asia/Shanghai
@@ -10,12 +11,12 @@ research:
       freshness-seconds: 180
       limit: 8
       scan-limit: 6000
-      kline-limit: 60
+      kline-limit: 120
       min-amount: 80000000
       max-pe: 100
       max-pb: 15
       min-volume-ratio: 1.20
-      max-entry-rise: 4
+      max-entry-rise: 6.5
       max-distance-to-ma20: 8
       min-financial-score: 58
     overnight:
