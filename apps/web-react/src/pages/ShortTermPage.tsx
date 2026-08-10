@@ -20,6 +20,8 @@ import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
 import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCounterEvidenceTone, goldenCrossDisplayLabel, goldenCrossSpreadLabel, goldenCrossSpreadTrendLabel, goldenCrossTone, goldenCrossV2Context } from '../lib/shortTermGoldenCross'
+import { loadShortTermViewPreferences, saveShortTermViewPreferences } from '../lib/shortTermViewPreferences'
+import type { ShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import type { ChipVerificationStatus, OvernightBacktestReport, OvernightBacktestSummary, ShortTermCandidate, ShortTermChipSnapshot, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermScanJobStatus, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
@@ -81,6 +83,7 @@ const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'n
 
 export function ShortTermPage() {
   const [draft, setDraft] = useState<DraftParams>(DEFAULT_DRAFT)
+  const [viewPreferences, setViewPreferences] = useState<ShortTermViewPreferences>(() => loadShortTermViewPreferences())
   const [snapshot, setSnapshot] = useState<ShortTermScheduledSnapshot | null>(null)
   const [scheduledSnapshot, setScheduledSnapshot] = useState<ShortTermScheduledSnapshot | null>(null)
   const [origin, setOrigin] = useState<ReportOrigin>('SCHEDULED')
@@ -339,6 +342,14 @@ export function ShortTermPage() {
     ? scheduledSnapshot
     : null
 
+  useEffect(() => {
+    saveShortTermViewPreferences(viewPreferences)
+  }, [viewPreferences])
+
+  function updateViewPreference(key: keyof ShortTermViewPreferences, checked: boolean) {
+    setViewPreferences((current) => ({ ...current, [key]: checked }))
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <SectionBanner
@@ -430,46 +441,33 @@ export function ShortTermPage() {
 
       {report ? (
         <>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-            <Card title="方法">
-              <div className="flex flex-col gap-2 text-sm leading-relaxed text-ink-600">
-                {report.methodology.map((item) => <p key={item}>{item}</p>)}
-              </div>
-            </Card>
-            <Card title="市场情绪">
-              <div className="flex flex-col gap-2 text-sm text-ink-600">
-                <div className="flex items-baseline justify-between"><span>阶段</span><b>{report.marketSentiment.phase}</b></div>
-                <div className="flex items-baseline justify-between"><span>情绪分</span><b>{formatNumber(report.marketSentiment.score)}</b></div>
-                <div className="flex items-baseline justify-between"><span>上涨/下跌</span><b>{report.marketSentiment.advancing} / {report.marketSentiment.declining}</b></div>
-                <div className="flex items-baseline justify-between"><span>涨停近似/跌停近似</span><b>{report.marketSentiment.limitUpLike} / {report.marketSentiment.limitDownLike}</b></div>
-                <p className="text-xs leading-relaxed text-ink-500">{report.marketSentiment.explanation}</p>
-              </div>
-            </Card>
-            <MarketFundDirectionCard direction={report.marketFundDirection} />
-            <Card title="扫描快照">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <Metric label="全市场样本" value={report.universeCount} />
-                <Metric label="K线复核" value={`${report.klineReviewedCount}/${report.reviewedCount}`} />
-                <Metric label="候选数" value={report.candidateCount} />
-                <Metric label="更新时间" value={formatDateTime(report.generatedAt)} />
-                <Metric label="交易时钟" value={report.tradingSession.phaseLabel} />
-                <Metric label="决策窗口" value={report.tradingSession.decisionTimeLabel} />
-                <Metric label="强加仓" value={`${diagnostics.addCount}/${report.candidateCount}`} />
-                <Metric label="轻仓试错" value={diagnostics.lightTrialCount} />
-                <Metric label="次日关注" value={diagnostics.nextWatchCount} />
-                <Metric label="尾盘确认" value={diagnostics.tailConfirmedCount} />
-                <Metric label="等回踩" value={diagnostics.pullbackAdviceCount} />
-                <Metric label="创业板" value={report.ruleSet?.allowChiNext ? '纳入' : '剔除'} />
-              </div>
-              {report.tradingSession.warnings.length ? (
-                <p className="mt-3 border-t border-line-soft pt-3 text-xs leading-relaxed text-amber-700">
-                  {report.tradingSession.warnings[0]}
-                </p>
-              ) : null}
-              <p className="mt-3 border-t border-line-soft pt-3 text-xs leading-relaxed text-ink-500">{report.quoteNote}</p>
-            </Card>
-            <HotDirectionsCard directions={report.hotDirections} />
+          <ResultViewControls
+            preferences={viewPreferences}
+            onChange={updateViewPreference}
+          />
+
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3" data-testid="short-term-horizontal-summary">
+            {viewPreferences.marketSentimentVisible ? (
+              <MarketSentimentSummaryCard report={report} />
+            ) : null}
+            {viewPreferences.snapshotVisible ? (
+              <ScanSnapshotSummaryCard report={report} diagnostics={diagnostics} />
+            ) : null}
+            {viewPreferences.hotDirectionsVisible ? (
+              <HotDirectionsCard directions={report.hotDirections} />
+            ) : null}
           </div>
+
+          {viewPreferences.methodologyVisible || viewPreferences.fundFlowVisible ? (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {viewPreferences.methodologyVisible ? (
+                <MethodologyCard methodology={report.methodology} />
+              ) : null}
+              {viewPreferences.fundFlowVisible ? (
+                <MarketFundDirectionCard direction={report.marketFundDirection} />
+              ) : null}
+            </div>
+          ) : null}
 
           {report.candidates.length ? (
             <BacktestSummaryPanel
@@ -517,30 +515,191 @@ export function ShortTermPage() {
   )
 }
 
-function HotDirectionsCard({ directions }: { directions: ShortTermHotDirection[] }) {
+const resultViewOptions: Array<{
+  key: keyof ShortTermViewPreferences
+  label: string
+  description: string
+}> = [
+  { key: 'methodologyVisible', label: '方法', description: '策略口径' },
+  { key: 'marketSentimentVisible', label: '市场情绪', description: '今日宽度' },
+  { key: 'fundFlowVisible', label: '今日资金去向', description: '行业流向' },
+  { key: 'snapshotVisible', label: '扫描快照', description: '覆盖与结果' },
+  { key: 'hotDirectionsVisible', label: '热门方向', description: '方向热度' }
+]
+
+function ResultViewControls({
+  preferences,
+  onChange
+}: {
+  preferences: ShortTermViewPreferences
+  onChange: (key: keyof ShortTermViewPreferences, checked: boolean) => void
+}) {
+  const visibleCount = resultViewOptions.filter((option) => preferences[option.key]).length
   return (
-    <Card title="热门方向">
-      {directions.length ? (
-        <div className="flex flex-col gap-2">
-          {directions.slice(0, 5).map((direction) => (
-            <div key={direction.code} className="rounded-lg border border-line-soft px-3 py-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-sm font-semibold text-ink-900">{direction.label}</span>
-                <ScoreBadge value={direction.heatScore} />
-              </div>
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                <Tag tone="neutral">涨跌 {formatSignedPercent(direction.averageChangePercent)}</Tag>
-                <Tag tone="neutral">上涨 {formatPercent(direction.positiveRatioPercent)}</Tag>
-                <Tag tone="neutral">{direction.sampleCount} 只</Tag>
-              </div>
-              {direction.leaders.length ? (
-                <p className="mt-1 truncate text-xs text-ink-400">领涨：{direction.leaders.join('、')}</p>
-              ) : null}
-            </div>
+    <Card className="border-brand-100 bg-gradient-to-r from-white via-brand-50/40 to-sky-50/50">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <div className="eyebrow mb-1">RESULT VIEW</div>
+          <h3 className="text-base font-semibold text-ink-900">结果视图</h3>
+          <p className="mt-1 text-xs leading-relaxed text-ink-500">
+            已展示 {visibleCount}/{resultViewOptions.length} 个模块，勾选状态会在本机浏览器记住。
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {resultViewOptions.map((option) => (
+            <label
+              key={option.key}
+              className={`group flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm transition ${preferences[option.key] ? 'border-brand-200 bg-white text-ink-900 shadow-sm' : 'border-line-soft bg-white/60 text-ink-500 hover:bg-white'}`}
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-brand-600"
+                checked={preferences[option.key]}
+                onChange={(event) => onChange(option.key, event.target.checked)}
+                aria-label={`展示${option.label}`}
+              />
+              <span>
+                <span className="block font-semibold">{option.label}</span>
+                <span className="block text-[11px] text-ink-400">{option.description}</span>
+              </span>
+            </label>
           ))}
         </div>
+      </div>
+    </Card>
+  )
+}
+
+function MethodologyCard({ methodology }: { methodology: string[] }) {
+  return (
+    <Card title="方法">
+      <div className="grid grid-cols-1 gap-2 text-sm leading-relaxed text-ink-600 sm:grid-cols-2">
+        {methodology.map((item) => (
+          <p key={item} className="rounded-lg border border-line-soft bg-line-soft/30 px-3 py-2">{item}</p>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function MarketSentimentSummaryCard({ report }: { report: ShortTermReport }) {
+  const sentiment = report.marketSentiment
+  return (
+    <Card className="min-h-full border-red-100 bg-gradient-to-br from-white to-red-50/40">
+      <div className="flex h-full flex-col justify-between gap-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="eyebrow mb-1 text-red-600">MARKET MOOD</div>
+            <h3 className="text-base font-semibold text-ink-900">市场情绪</h3>
+          </div>
+          <Tag tone={sentiment.score >= 70 ? 'success' : sentiment.score >= 50 ? 'brand' : 'warning'}>
+            {sentiment.phase}
+          </Tag>
+        </div>
+        <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
+          <div>
+            <p className="text-xs text-ink-400">情绪分</p>
+            <p className="tabular text-3xl font-semibold text-ink-900">{formatNumber(sentiment.score)}</p>
+          </div>
+          <div className="flex flex-1 flex-wrap gap-2 text-xs">
+            <InlineMetric label="上涨 / 下跌" value={`${sentiment.advancing} / ${sentiment.declining}`} />
+            <InlineMetric label="涨停 / 跌停" value={`${sentiment.limitUpLike} / ${sentiment.limitDownLike}`} />
+            <InlineMetric label="市场宽度" value={formatPercent(sentiment.breadthPercent)} />
+          </div>
+        </div>
+        <p className="line-clamp-2 text-xs leading-relaxed text-ink-500">{sentiment.explanation}</p>
+      </div>
+    </Card>
+  )
+}
+
+function ScanSnapshotSummaryCard({
+  report,
+  diagnostics
+}: {
+  report: ShortTermReport
+  diagnostics: ReturnType<typeof shortTermDiagnostics>
+}) {
+  return (
+    <Card className="min-h-full border-sky-100 bg-gradient-to-br from-white to-sky-50/50">
+      <div className="flex h-full flex-col justify-between gap-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="eyebrow mb-1 text-sky-600">SCAN SNAPSHOT</div>
+            <h3 className="text-base font-semibold text-ink-900">扫描快照</h3>
+          </div>
+          <Tag tone={report.ruleSet?.allowChiNext ? 'brand' : 'neutral'}>
+            创业板{report.ruleSet?.allowChiNext ? '纳入' : '剔除'}
+          </Tag>
+        </div>
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+          <div>
+            <p className="text-xs text-ink-400">候选数</p>
+            <p className="tabular text-3xl font-semibold text-ink-900">{report.candidateCount}</p>
+          </div>
+          <div className="flex flex-1 flex-wrap gap-2 text-xs">
+            <InlineMetric label="全市场样本" value={report.universeCount} />
+            <InlineMetric label="K线复核" value={`${report.klineReviewedCount}/${report.reviewedCount}`} />
+            <InlineMetric label="尾盘确认" value={diagnostics.tailConfirmedCount} />
+            <InlineMetric label="强加仓" value={`${diagnostics.addCount}/${report.candidateCount}`} />
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <Tag tone="neutral">{report.tradingSession.phaseLabel}</Tag>
+          <Tag tone="neutral">{report.tradingSession.decisionTimeLabel}</Tag>
+          <Tag tone="neutral">{formatDateTime(report.generatedAt)}</Tag>
+        </div>
+        {report.tradingSession.warnings.length ? (
+          <p className="border-l-2 border-amber-300 pl-3 text-xs leading-relaxed text-amber-700">
+            {report.tradingSession.warnings[0]}
+          </p>
+        ) : (
+          <p className="text-xs leading-relaxed text-ink-500">{report.quoteNote}</p>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+function HotDirectionsCard({ directions }: { directions: ShortTermHotDirection[] }) {
+  return (
+    <Card className="min-h-full border-amber-100 bg-gradient-to-br from-white to-amber-50/50">
+      {directions.length ? (
+        <div className="flex h-full flex-col gap-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="eyebrow mb-1 text-amber-600">HOT LANES</div>
+              <h3 className="text-base font-semibold text-ink-900">热门方向</h3>
+            </div>
+            <Tag tone="warning">{directions.length} 组</Tag>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
+            {directions.slice(0, 5).map((direction) => (
+              <div key={direction.code} className="rounded-xl border border-amber-100 bg-white/80 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-semibold text-ink-900">{direction.label}</span>
+                  <ScoreBadge value={direction.heatScore} />
+                </div>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  <Tag tone="neutral">涨跌 {formatSignedPercent(direction.averageChangePercent)}</Tag>
+                  <Tag tone="neutral">上涨 {formatPercent(direction.positiveRatioPercent)}</Tag>
+                  <Tag tone="neutral">{direction.sampleCount} 只</Tag>
+                </div>
+                {direction.leaders.length ? (
+                  <p className="mt-1 truncate text-xs text-ink-400">领涨：{direction.leaders.join('、')}</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
       ) : (
-        <p className="text-sm leading-relaxed text-ink-500">本轮实时行情没有形成足够集中的热门方向。</p>
+        <div className="flex h-full flex-col justify-between gap-4">
+          <div>
+            <div className="eyebrow mb-1 text-amber-600">HOT LANES</div>
+            <h3 className="text-base font-semibold text-ink-900">热门方向</h3>
+          </div>
+          <p className="text-sm leading-relaxed text-ink-500">本轮实时行情没有形成足够集中的热门方向。</p>
+        </div>
       )}
     </Card>
   )
@@ -612,16 +771,20 @@ function MarketFundDirectionCard({ direction }: { direction?: ShortTermMarketFun
 
   return (
     <Card title="今日资金去向">
-      <div className="flex flex-col gap-3 text-sm text-ink-600">
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <Metric label="数据日" value={direction?.tradeDate ?? '待确认'} />
-          <Metric label="覆盖" value={coverage} />
+      <div className="grid grid-cols-1 gap-3 text-sm text-ink-600 xl:grid-cols-[220px_1fr]">
+        <div className="rounded-xl border border-line-soft bg-line-soft/30 p-3">
+          <div className="eyebrow mb-1">FUND FLOW</div>
+          <h3 className="text-base font-semibold text-ink-900">行业资金流</h3>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            <InlineMetric label="数据日" value={direction?.tradeDate ?? '待确认'} />
+            <InlineMetric label="覆盖" value={coverage} />
+          </div>
+          <p className="mt-3 text-xs leading-relaxed text-ink-500">
+            覆盖 {coverage} · {direction?.sourceName ?? '行业资金流未返回'}
+          </p>
         </div>
-        <p className="truncate text-xs text-ink-400">
-          覆盖 {coverage} · {direction?.sourceName ?? '行业资金流未返回'}
-        </p>
         {hasRows ? (
-          <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             <FundDirectionList title="主力流入" items={topInflows} tone="success" />
             <FundDirectionList title="主力流出" items={topOutflows} tone="danger" />
           </div>
@@ -631,7 +794,7 @@ function MarketFundDirectionCard({ direction }: { direction?: ShortTermMarketFun
           </p>
         )}
         {direction?.dataGaps?.length ? (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 xl:col-span-2">
             {direction.dataGaps.slice(0, 2).join('；')}
           </div>
         ) : null}
@@ -1312,6 +1475,15 @@ function Metric({ label, value, compact = false }: { label: string; value: React
     <div className={`rounded-lg border border-line-soft bg-line-soft/40 ${compact ? 'px-2.5 py-2' : 'px-3 py-2'}`}>
       <div className="text-xs text-ink-400">{label}</div>
       <div className="mt-1 break-words tabular text-sm font-semibold text-ink-900">{value}</div>
+    </div>
+  )
+}
+
+function InlineMetric({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="min-w-[120px] rounded-xl border border-line-soft bg-white px-3 py-2">
+      <div className="text-[11px] text-ink-400">{label}</div>
+      <div className="mt-0.5 break-words tabular text-sm font-semibold text-ink-900">{value}</div>
     </div>
   )
 }

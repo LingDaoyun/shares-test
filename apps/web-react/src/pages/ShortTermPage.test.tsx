@@ -11,6 +11,7 @@ import {
   startShortTermScanJob
 } from '../api/client'
 import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
+import { SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY } from '../lib/shortTermViewPreferences'
 import type { OvernightBacktestReport, ShortTermScheduledSnapshot, ShortTermSnapshotStatus } from '../types'
 import { ScheduledScanPulse, ShortTermPage } from './ShortTermPage'
 
@@ -305,6 +306,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
 
   beforeEach(() => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    window.localStorage.removeItem(SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY)
     host = document.createElement('div')
     document.body.append(host)
     root = createRoot(host)
@@ -317,6 +319,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
     host.remove()
     vi.useRealTimers()
     vi.clearAllMocks()
+    window.localStorage.removeItem(SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY)
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
   })
 
@@ -330,14 +333,45 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(document.body.textContent).toContain('计划任务')
   })
 
-  it('keeps the current-rule card removed from the summary area', async () => {
+  it('defaults to the remembered compact result view after a prepared snapshot loads', async () => {
     await renderPage(root)
 
+    expect((document.querySelector('input[aria-label="展示方法"]') as HTMLInputElement | null)?.checked).toBe(false)
+    expect((document.querySelector('input[aria-label="展示今日资金去向"]') as HTMLInputElement | null)?.checked).toBe(false)
+    expect((document.querySelector('input[aria-label="展示市场情绪"]') as HTMLInputElement | null)?.checked).toBe(true)
+    expect((document.querySelector('input[aria-label="展示扫描快照"]') as HTMLInputElement | null)?.checked).toBe(true)
+    expect((document.querySelector('input[aria-label="展示热门方向"]') as HTMLInputElement | null)?.checked).toBe(true)
+    expect(document.querySelector('[data-testid="short-term-horizontal-summary"]')).not.toBeNull()
+    expect(document.body.textContent).not.toContain('只使用当天行情')
+    expect(document.body.textContent).not.toContain('行业资金流暂不可用')
     expect(document.body.textContent).toContain('方法')
     expect(document.body.textContent).toContain('市场情绪')
     expect(document.body.textContent).toContain('扫描快照')
     expect(document.body.textContent).toContain('热门方向')
     expect(document.body.textContent).not.toContain('当前规则')
+  })
+
+  it('persists result view toggles across remounts', async () => {
+    await renderPage(root)
+
+    const methodologyToggle = document.querySelector('input[aria-label="展示方法"]') as HTMLInputElement | null
+    expect(methodologyToggle?.checked).toBe(false)
+    await act(async () => {
+      methodologyToggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+    })
+
+    expect(document.body.textContent).toContain('只使用当天行情')
+    expect(JSON.parse(window.localStorage.getItem(SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY) ?? '{}')).toEqual(expect.objectContaining({
+      methodologyVisible: true
+    }))
+
+    act(() => root.unmount())
+    root = createRoot(host)
+    await renderPage(root)
+
+    expect((document.querySelector('input[aria-label="展示方法"]') as HTMLInputElement | null)?.checked).toBe(true)
+    expect(document.body.textContent).toContain('只使用当天行情')
   })
 
   it('renders today market fund direction with explicit inflow and outflow sections', async () => {
@@ -384,6 +418,7 @@ describe('ShortTermPage prepared snapshot mount', () => {
     })
 
     await renderPage(root)
+    await toggleResultView('展示今日资金去向')
 
     expect(document.body.textContent).toContain('今日资金去向')
     expect(document.body.textContent).toContain('主力流入')
@@ -395,6 +430,8 @@ describe('ShortTermPage prepared snapshot mount', () => {
 
   it('renders an explicit unavailable state for legacy reports without market fund direction', async () => {
     await renderPage(root)
+    expect(document.body.textContent).not.toContain('行业资金流暂不可用')
+    await toggleResultView('展示今日资金去向')
 
     expect(document.body.textContent).toContain('今日资金去向')
     expect(document.body.textContent).toContain('行业资金流暂不可用')
@@ -1114,6 +1151,15 @@ async function clickButton(label: string) {
   expect(button).toBeDefined()
   await act(async () => {
     button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+  })
+}
+
+async function toggleResultView(label: string) {
+  const checkbox = document.querySelector(`input[aria-label="${label}"]`) as HTMLInputElement | null
+  expect(checkbox).not.toBeNull()
+  await act(async () => {
+    checkbox?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
   })
 }
