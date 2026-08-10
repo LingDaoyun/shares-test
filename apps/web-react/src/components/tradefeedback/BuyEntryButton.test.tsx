@@ -124,7 +124,8 @@ describe('BuyEntryButton', () => {
       status: 'HOLDING'
     }))
     expect(document.querySelector('[role="dialog"]')).toBeNull()
-    expect(useToastStore.getState().toasts.at(-1)?.message).toContain('买入已记录')
+    const toasts = useToastStore.getState().toasts
+    expect(toasts[toasts.length - 1]?.message).toContain('买入已记录')
   })
 
   it('keeps user input and reports validation before touching the network', async () => {
