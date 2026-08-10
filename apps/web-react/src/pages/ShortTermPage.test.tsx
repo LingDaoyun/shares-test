@@ -228,6 +228,7 @@ function reportWithCandidates(
     ...emptyReport,
     ruleSet: { ...emptyReport.ruleSet, ...technicalRules },
     candidateCount: symbols.length,
+    tradeCaptureTokens: Object.fromEntries(symbols.map((symbol) => [symbol, `token-${symbol}`])),
     candidates: symbols.map((symbol) => ({
       ...candidate(symbol),
       tradePlan: {
@@ -421,6 +422,18 @@ describe('ShortTermPage prepared snapshot mount', () => {
     expect(document.body.textContent).toContain('上影线中位数')
     expect(document.body.textContent).toContain('18.00%')
     expect(document.body.textContent).toContain('盘中暂定')
+  })
+
+  it('shows a confirmed buy entry action in the short-term candidate detail', async () => {
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600795'])
+    })
+
+    await renderPage(root)
+    await clickButton('候选600795')
+
+    expect(document.querySelector('button[aria-label="买入 候选600795 600795"]')).not.toBeNull()
   })
 
   it('shows verified chip diagnostics as standalone evidence in the row and detail', async () => {

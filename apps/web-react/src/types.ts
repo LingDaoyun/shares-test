@@ -510,6 +510,7 @@ export interface MarketScanReport {
   stageStats: UniversalScreenStageStats[]
   candidates: MarketScanCandidate[]
   exclusionsSample: UniversalScreenExclusion[]
+  tradeCaptureTokens: Record<string, string>
   generatedAt: string
 }
 

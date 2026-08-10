@@ -11,6 +11,7 @@ import { Loader } from '../components/ui/Loader'
 import { RecommendationEvidenceBundlePanel } from '../components/recommendation/EvidenceBundlePanel'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { LongTermCandidateContextPanel } from '../components/longterm/LongTermCandidateContextPanel'
+import { BuyEntryButton } from '../components/tradefeedback/BuyEntryButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { SectionBanner } from '../components/ui/SectionBanner'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
@@ -236,6 +237,7 @@ export function MarketScanPage() {
                 context={candidateContextSymbol === selected.symbol ? candidateContext : null}
                 contextLoading={candidateContextSymbol === selected.symbol ? candidateContextLoading : true}
                 contextError={candidateContextSymbol === selected.symbol ? candidateContextError : ''}
+                tradeCaptureToken={report.tradeCaptureTokens?.[selected.symbol] ?? null}
               />
             ) : null}
           </DetailOverlay>
@@ -330,12 +332,14 @@ function CandidateDetail({
   candidate,
   context,
   contextLoading,
-  contextError
+  contextError,
+  tradeCaptureToken
 }: {
   candidate: MarketScanCandidate
   context: LongTermCandidateContext | null
   contextLoading: boolean
   contextError: string
+  tradeCaptureToken: string | null
 }) {
   return (
     <div className="flex flex-col gap-4">
@@ -344,7 +348,16 @@ function CandidateDetail({
             <ScoreBadge value={candidate.score.finalScore} />
             <Tag tone={adviceTone(candidate.todayAdvice.action)}>今日：{candidate.todayAdvice.actionLabel}</Tag>
           </div>
-          <WatchButton symbol={candidate.symbol} />
+          <div className="flex flex-wrap items-center gap-2">
+            <BuyEntryButton
+              symbol={candidate.symbol}
+              companyName={candidate.name}
+              latestPrice={candidate.latestPrice}
+              recommendedAt={candidate.marketTimestamp}
+              attestationToken={tradeCaptureToken}
+            />
+            <WatchButton symbol={candidate.symbol} />
+          </div>
         </div>
 
         <p className="text-sm leading-relaxed text-ink-600">{candidate.reason}</p>

@@ -14,6 +14,7 @@ import { ChipDistributionChart } from '../components/shortterm/ChipDistributionC
 import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
 import type { ReportOrigin } from '../components/shortterm/ScheduledSnapshotStatus'
 import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
+import { BuyEntryButton } from '../components/tradefeedback/BuyEntryButton'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
@@ -792,6 +793,13 @@ function CandidateDetail({
             <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <BuyEntryButton
+              symbol={candidate.symbol}
+              companyName={candidate.name}
+              latestPrice={candidate.latestPrice}
+              recommendedAt={candidate.quoteFreshness.marketTimestamp}
+              attestationToken={tradeCaptureToken}
+            />
             <WatchButton symbol={candidate.symbol} />
             <TradeReviewButton
               symbol={candidate.symbol}

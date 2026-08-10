@@ -81,6 +81,24 @@ describe('MarketScanPage long-term assessment', () => {
     expect(text).toContain('季度轻审计')
   })
 
+  it('shows a confirmed buy entry action in the long-term candidate detail', async () => {
+    await act(async () => {
+      root.render(<MarketScanPage />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const candidateButton = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('航民股份'))
+
+    await act(async () => {
+      candidateButton?.click()
+      await Promise.resolve()
+    })
+
+    expect(document.querySelector('button[aria-label="买入 航民股份 600987"]')).not.toBeNull()
+  })
+
   it('defaults long-term value scanning to twelve quality undervaluation candidates', async () => {
     await act(async () => {
       root.render(<MarketScanPage />)
@@ -343,6 +361,9 @@ const report = {
   stageStats: [],
   exclusionsSample: [],
   generatedAt: '2026-07-29T07:01:00Z',
+  tradeCaptureTokens: {
+    '600987': 'token-long-term-600987'
+  },
   candidates: [{
     rank: 1,
     symbol: '600987',
