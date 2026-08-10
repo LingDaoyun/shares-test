@@ -88,6 +88,18 @@ class MarketScanServiceTest {
     }
 
     @Test
+    void rawMarketScanReportStartsWithoutConsumableTradeTokens() {
+        eastMoneyClient.baseQuotes = List.of(
+                quote("601166", "兴业银行", "银行", "17.45", "-0.11", "3.87", "0.45", "1800000000")
+        );
+        eastMoneyClient.tencentQuotes = eastMoneyClient.baseQuotes;
+
+        MarketScanReport report = service.report(1, 10, null, null, null, null, true, true, "VALUE");
+
+        assertThat(report.tradeCaptureTokens()).isEmpty();
+    }
+
+    @Test
     void shouldPrioritizeLongTermLeaderAssetsOverHighTurnoverMediocreNames() {
         eastMoneyClient.baseQuotes = List.of(
                 quote("600987", "航民股份", "纺织制造", "7.20", "0.10", "11.80", "1.02", "90000000"),

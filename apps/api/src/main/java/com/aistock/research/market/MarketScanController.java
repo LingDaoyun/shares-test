@@ -1,5 +1,6 @@
 package com.aistock.research.market;
 
+import com.aistock.research.tradefeedback.RecommendationAttestationService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -12,9 +13,14 @@ import java.math.BigDecimal;
 public class MarketScanController {
 
     private final MarketScanService marketScanService;
+    private final RecommendationAttestationService attestationService;
 
-    public MarketScanController(MarketScanService marketScanService) {
+    public MarketScanController(
+            MarketScanService marketScanService,
+            RecommendationAttestationService attestationService
+    ) {
         this.marketScanService = marketScanService;
+        this.attestationService = attestationService;
     }
 
     @GetMapping("/report")
@@ -30,7 +36,7 @@ public class MarketScanController {
             @RequestParam(required = false) String mode,
             @RequestParam(required = false) Boolean allowChiNext
     ) {
-        return marketScanService.report(
+        return attestationService.attest(marketScanService.report(
                 limit,
                 scanLimit,
                 minAmount,
@@ -41,6 +47,6 @@ public class MarketScanController {
                 includeNorthExchange,
                 mode,
                 allowChiNext
-        );
+        ));
     }
 }

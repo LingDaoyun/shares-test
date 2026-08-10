@@ -6,6 +6,9 @@ import com.aistock.research.cycle.CycleTrialService;
 import com.aistock.research.dailysignal.DailySignalController;
 import com.aistock.research.dailysignal.DailySignalReport;
 import com.aistock.research.dailysignal.DailySignalService;
+import com.aistock.research.market.MarketScanController;
+import com.aistock.research.market.MarketScanReport;
+import com.aistock.research.market.MarketScanService;
 import com.aistock.research.mispricing.MispricingController;
 import com.aistock.research.mispricing.MispricingReport;
 import com.aistock.research.mispricing.MispricingService;
@@ -193,6 +196,21 @@ class RecommendationControllerAttestationTest {
 
         assertThat(result).isSameAs(report);
         verify(attestations).attest(report);
+    }
+
+    @Test
+    void marketScanResponseIsAttestedForLongTermBuyEntry() {
+        MarketScanService service = mock(MarketScanService.class);
+        MarketScanReport raw = mock(MarketScanReport.class);
+        MarketScanReport attested = mock(MarketScanReport.class);
+        when(service.report(null, null, null, null, null, null, null, null, null, null)).thenReturn(raw);
+        when(attestations.attest(raw)).thenReturn(attested);
+
+        MarketScanReport result = new MarketScanController(service, attestations)
+                .report(null, null, null, null, null, null, null, null, null, null);
+
+        assertThat(result).isSameAs(attested);
+        verify(attestations).attest(raw);
     }
 
     private ShortTermReport attestableReport(

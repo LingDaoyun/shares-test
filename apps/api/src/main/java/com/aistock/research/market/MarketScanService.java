@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.IntStream;
 
 @Service
@@ -134,6 +135,7 @@ public class MarketScanService {
                 universal.stageStats(),
                 candidates,
                 universal.exclusionsSample(),
+                Map.of(),
                 universal.generatedAt()
         );
     }

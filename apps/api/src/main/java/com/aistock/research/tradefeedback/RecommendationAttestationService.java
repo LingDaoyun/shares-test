@@ -4,6 +4,8 @@ import com.aistock.research.cycle.CycleTrialCandidate;
 import com.aistock.research.cycle.CycleTrialReport;
 import com.aistock.research.dailysignal.DailyDecisionSignal;
 import com.aistock.research.dailysignal.DailySignalReport;
+import com.aistock.research.market.MarketScanCandidate;
+import com.aistock.research.market.MarketScanReport;
 import com.aistock.research.mispricing.MispricedAsset;
 import com.aistock.research.mispricing.MispricingReport;
 import com.aistock.research.shortterm.ShortTermCandidate;
@@ -198,6 +200,43 @@ public class RecommendationAttestationService {
                 status.jobId(), status.status(), status.tradeDate(), status.resultStatus(),
                 status.blockedReasons(), status.createdAt(), status.startedAt(), status.finishedAt(),
                 status.message(), attest(status.report()));
+    }
+
+    public MarketScanReport attest(MarketScanReport report) {
+        if (report == null || report.generatedAt() == null) {
+            return report;
+        }
+        Map<String, String> tokens = new LinkedHashMap<>();
+        for (MarketScanCandidate candidate : safe(report.candidates())) {
+            String token = registerIfFactual(
+                    RecommendationSource.LONG_TERM_VALUE,
+                    candidate.symbol(),
+                    candidate.name(),
+                    firstNonBlank(
+                            candidate.todayAdvice() == null ? null : candidate.todayAdvice().actionLabel(),
+                            candidate.screeningActionLabel(),
+                            candidate.screeningAction()),
+                    candidate.score() == null ? null : candidate.score().finalScore(),
+                    candidate.latestPrice(),
+                    candidate.marketTimestamp(),
+                    candidate);
+            putToken(tokens, candidate.symbol(), token);
+        }
+        return new MarketScanReport(
+                report.scope(),
+                report.universeCount(),
+                report.reviewedCount(),
+                report.candidateCount(),
+                report.quoteNote(),
+                report.coverage(),
+                report.methodology(),
+                report.ruleSet(),
+                report.stageStats(),
+                report.candidates(),
+                report.exclusionsSample(),
+                Map.copyOf(tokens),
+                report.generatedAt()
+        );
     }
 
     public TechTrackingReport attest(TechTrackingReport report) {
