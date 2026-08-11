@@ -45,8 +45,7 @@ class TradeFeedbackCriticalServiceTest {
             attestations,
             new TradeLedgerCalculator(),
             transactions,
-            Clock.fixed(NOW, ZoneOffset.UTC),
-            Duration.ofMinutes(5));
+            Clock.fixed(NOW, ZoneOffset.UTC));
 
     @BeforeEach
     void transactionSupport() {
@@ -121,16 +120,19 @@ class TradeFeedbackCriticalServiceTest {
     }
 
     @Test
-    void rejectsExecutionTimestampsBeyondTheExplicitClockSkewAllowance() {
+    void acceptsExecutionTimestampsWithoutClockSkewLimit() {
         TradeCaseEntity tradeCase = trustedCase("PLANNED");
         when(cases.findByIdForUpdate("case-1")).thenReturn(Optional.of(tradeCase));
+        when(cases.save(any(TradeCaseEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc("case-1")).thenReturn(List.of());
+        when(revisions.findByCaseIdOrderByRevisionSequenceAsc("case-1")).thenReturn(List.of());
+        when(fills.save(any(TradeFillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        assertThatThrownBy(() -> service.addFill(
-                "case-1", fill("35", 100, NOW.plus(Duration.ofMinutes(5)).plusSeconds(1))))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("未来");
+        TradeCaseEntity updated = service.addFill(
+                "case-1", fill("35", 100, NOW.plus(Duration.ofMinutes(5)).plusSeconds(1)));
 
-        verify(fills, never()).save(any());
+        assertThat(updated.getStatus()).isEqualTo("HOLDING");
+        verify(fills).save(any());
     }
 
     private VerifiedRecommendationSnapshot snapshot() {

@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -27,4 +28,18 @@ public interface TradeCaseRepository extends JpaRepository<TradeCaseEntity, Stri
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select tradeCase from TradeCaseEntity tradeCase where tradeCase.caseId = :caseId")
     Optional<TradeCaseEntity> findByIdForUpdate(@Param("caseId") String caseId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select tradeCase
+            from TradeCaseEntity tradeCase
+            where tradeCase.symbol = :symbol
+              and tradeCase.status in :statuses
+            order by tradeCase.updatedAt desc, tradeCase.caseId asc
+            """)
+    List<TradeCaseEntity> findOpenCasesBySymbolForUpdate(
+            @Param("symbol") String symbol,
+            @Param("statuses") Collection<String> statuses,
+            Pageable pageable
+    );
 }

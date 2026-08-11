@@ -236,6 +236,28 @@ class TradeFeedbackControllerTest {
     }
 
     @Test
+    void manuallyRecordsABuyWithoutARecommendationToken() throws Exception {
+        mockMvc.perform(post("/api/trade-cases/manual-fills")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "symbol":"600367",
+                                  "companyName":"红星发展",
+                                  "fill":{"side":"BUY","executedAt":"2026-08-11T02:35:00Z","price":18.80,"quantity":100}
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.symbol").value("600367"))
+                .andExpect(jsonPath("$.companyName").value("红星发展"))
+                .andExpect(jsonPath("$.sourceModule").value("MANUAL"))
+                .andExpect(jsonPath("$.recommendationAction").value("手工录入"))
+                .andExpect(jsonPath("$.recommendationVerified").value(false))
+                .andExpect(jsonPath("$.status").value("HOLDING"))
+                .andExpect(jsonPath("$.ledger.positionQuantity").value(100))
+                .andExpect(jsonPath("$.fills[0].side").value("BUY"));
+    }
+
+    @Test
     void hidesStaleExecutionOutcomesImmediatelyAfterAFillCorrection() throws Exception {
         String caseId = createCase();
         mockMvc.perform(post("/api/trade-cases/{id}/fills", caseId)

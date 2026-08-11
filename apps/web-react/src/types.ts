@@ -1430,6 +1430,12 @@ export interface CreateTradeCaseRequest {
   attestationToken: string
 }
 
+export interface ManualTradeFillRequest {
+  symbol: string
+  companyName: string
+  fill: UpsertTradeFillRequest
+}
+
 export interface UpsertTradeFillRequest {
   side: TradeSide
   executedAt: string

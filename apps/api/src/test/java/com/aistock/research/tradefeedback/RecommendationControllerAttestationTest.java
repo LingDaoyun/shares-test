@@ -18,16 +18,11 @@ import com.aistock.research.shortterm.ShortTermReport;
 import com.aistock.research.shortterm.ShortTermScanJobService;
 import com.aistock.research.shortterm.ShortTermScanJobStatus;
 import com.aistock.research.shortterm.ShortTermService;
-import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
-import com.aistock.research.shortterm.schedule.ShortTermScheduledSnapshot;
-import com.aistock.research.shortterm.schedule.ShortTermScheduledSnapshotStore;
-import com.aistock.research.shortterm.schedule.ShortTermSnapshotStage;
 import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
 import com.aistock.research.tech.TechTrackingController;
 import com.aistock.research.tech.TechTrackingReport;
 import com.aistock.research.tech.TechTrackingService;
 import com.aistock.research.trading.QuoteFreshnessSnapshot;
-import com.aistock.research.trading.TradingClockService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.Test;
@@ -40,7 +35,6 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -64,10 +58,7 @@ class RecommendationControllerAttestationTest {
         ShortTermController controller = new ShortTermController(
                 service,
                 jobs,
-                attestations,
-                mock(TradingClockService.class),
-                mock(ShortTermScheduledSnapshotStore.class),
-                mock(ShortTermAutomationSettings.class)
+                attestations
         );
 
         assertThat(controller.report(null, null, null, null, null, null, null, null, null, null, null)).isSameAs(report);
@@ -75,47 +66,6 @@ class RecommendationControllerAttestationTest {
 
         verify(attestations).attest(report);
         verify(attestations).attest(status);
-    }
-
-    @Test
-    void preparedSnapshotReceivesConsumableAttestationWithoutPersistingToken() {
-        Instant now = Instant.parse("2026-07-23T06:53:00Z");
-        LocalDate tradeDate = LocalDate.parse("2026-07-23");
-        RecommendationAttestationService service = new RecommendationAttestationService(
-                new ObjectMapper().registerModule(new JavaTimeModule()),
-                Clock.fixed(now, ZoneOffset.UTC),
-                Duration.ofMinutes(30),
-                Duration.ofDays(7),
-                100
-        );
-        ShortTermReport report = attestableReport(
-                now, tradeDate, Map.of("600000", "persisted-token-must-not-be-used"));
-        ShortTermScheduledSnapshot stored = new ShortTermScheduledSnapshot(
-                "snapshot-1", tradeDate, ShortTermSnapshotStage.FINAL,
-                ShortTermSnapshotStatus.FINAL_READY, 1, "fingerprint", "{}",
-                now.minusSeconds(60), now.minusSeconds(120), now,
-                "尾盘最终结果已就绪", List.of(), report
-        );
-        ShortTermScheduledSnapshotStore store = mock(ShortTermScheduledSnapshotStore.class);
-        TradingClockService tradingClock = mock(TradingClockService.class);
-        when(tradingClock.currentMarketDate()).thenReturn(tradeDate);
-        when(store.latest(tradeDate)).thenReturn(Optional.of(stored));
-        ShortTermController controller = new ShortTermController(
-                mock(ShortTermService.class),
-                mock(ShortTermScanJobService.class),
-                service,
-                tradingClock,
-                store,
-                mock(ShortTermAutomationSettings.class)
-        );
-
-        ShortTermScheduledSnapshot response = controller.latestScheduledSnapshot();
-        String token = response.report().tradeCaptureTokens().get("600000");
-
-        assertThat(token).isNotBlank().isNotEqualTo("persisted-token-must-not-be-used");
-        assertThat(service.require(token).symbol()).isEqualTo("600000");
-        assertThat(stored.report().tradeCaptureTokens())
-                .containsEntry("600000", "persisted-token-must-not-be-used");
     }
 
     @Test

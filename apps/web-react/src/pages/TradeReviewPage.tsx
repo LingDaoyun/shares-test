@@ -6,6 +6,7 @@ import {
   deleteTradeCase,
   deleteTradeFill,
   refreshTradeCase,
+  recordManualTradeFill,
   updateTradeFill
 } from '../api/client'
 import { Tag } from '../components/ui/Badge'
@@ -24,6 +25,7 @@ import {
 } from '../lib/tradeReview'
 import { useTradeFeedbackStore } from '../store/tradeFeedbackStore'
 import type {
+  ManualTradeFillRequest,
   TradeCaseDetail,
   TradeCaseStatus,
   TradeCaseSummary,
@@ -78,6 +80,8 @@ export function TradeReviewPage() {
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null)
   const [mutation, setMutation] = useState<CaseMutation | null>(null)
   const [fillModal, setFillModal] = useState<{ fill?: TradeFillView; returnFocus: HTMLElement | null } | null>(null)
+  const [manualModal, setManualModal] = useState<{ returnFocus: HTMLElement | null } | null>(null)
+  const [manualSaving, setManualSaving] = useState(false)
   const [cancelDialog, setCancelDialog] = useState<{ caseId: string; symbol: string; returnFocus: HTMLElement | null } | null>(null)
   const mutationSequenceRef = useRef(0)
   const activeMutationIdRef = useRef<number | null>(null)
@@ -330,6 +334,20 @@ export function TradeReviewPage() {
     return result.response
   }
 
+  const saveManualFill = async (request: ManualTradeFillRequest) => {
+    if (manualSaving) return undefined
+    setManualSaving(true)
+    try {
+      const response = await recordManualTradeFill(request)
+      upsertCase(response)
+      selectedIdRef.current = response.caseId
+      setSelectedId(response.caseId)
+      return response
+    } finally {
+      setManualSaving(false)
+    }
+  }
+
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <header className="border-b border-line pb-4">
@@ -339,15 +357,26 @@ export function TradeReviewPage() {
             <h1 className="text-2xl font-semibold text-ink-900">交易复盘</h1>
             <p className="mt-1 text-sm text-ink-500">连接推荐现场、真实分批成交与后续策略表现。</p>
           </div>
-          <Button
-            type="button"
-            variant="secondary"
-            loading={loading}
-            icon={<RefreshCw className="h-4 w-4" />}
-            onClick={() => void refreshList()}
-          >
-            刷新列表
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="primary"
+              aria-label="独立录入成交"
+              icon={<Plus className="h-4 w-4" />}
+              onClick={(event) => setManualModal({ returnFocus: event.currentTarget })}
+            >
+              独立录入
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              loading={loading}
+              icon={<RefreshCw className="h-4 w-4" />}
+              onClick={() => void refreshList()}
+            >
+              刷新列表
+            </Button>
+          </div>
           {loaded && loading ? <span role="status" className="sr-only">复盘列表刷新中</span> : null}
         </div>
       </header>
@@ -440,6 +469,19 @@ export function TradeReviewPage() {
           onSubmit={(request) => saveFill(selected.caseId, fillModal.fill?.fillId, request)}
           onSaved={() => {
             setFillModal(null)
+          }}
+        />
+      ) : null}
+
+      {manualModal ? (
+        <ManualTradeModal
+          returnFocus={manualModal.returnFocus}
+          busy={manualSaving}
+          onClose={() => setManualModal(null)}
+          onSubmit={saveManualFill}
+          onSaved={() => {
+            setManualModal(null)
+            toast.success('手工成交已记录')
           }}
         />
       ) : null}
@@ -668,6 +710,222 @@ function CancelPlanDialog({ symbol, returnFocus, busy, onClose, onConfirm }: {
             <Button data-cancel-plan-confirm type="button" variant="danger" loading={busy} disabled={busy} onClick={onConfirm}>确认取消</Button>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function ManualTradeModal({ returnFocus, busy, onClose, onSubmit, onSaved }: {
+  returnFocus: HTMLElement | null
+  busy: boolean
+  onClose: () => void
+  onSubmit: (request: ManualTradeFillRequest) => Promise<TradeCaseDetail | undefined>
+  onSaved: () => void
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const firstFieldRef = useRef<HTMLInputElement>(null)
+  const [symbol, setSymbol] = useState('')
+  const [companyName, setCompanyName] = useState('')
+  const [side, setSide] = useState<TradeSide>('BUY')
+  const [executedAt, setExecutedAt] = useState(() => formatShanghaiDateTimeLocal(new Date().toISOString()))
+  const [price, setPrice] = useState('')
+  const [quantity, setQuantity] = useState('100')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const releaseScrollLock = acquireBodyScrollLock(document.body)
+    firstFieldRef.current?.focus()
+    return () => {
+      releaseScrollLock()
+      returnFocus?.focus()
+    }
+  }, [returnFocus])
+
+  const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation()
+      if (!busy) {
+        event.preventDefault()
+        onClose()
+      }
+      return
+    }
+    if (event.key !== 'Tab') return
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+    if (!focusable?.length) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    setError('')
+    const normalizedSymbol = symbol.trim()
+    const normalizedCompanyName = companyName.trim()
+    const numericPrice = Number(price)
+    const numericQuantity = Number(quantity)
+    const timestamp = parseShanghaiDateTimeLocal(executedAt)
+    if (!/^\d{6}$/.test(normalizedSymbol)) {
+      setError('股票代码必须是 6 位数字')
+      return
+    }
+    if (!normalizedCompanyName) {
+      setError('公司名称不能为空')
+      return
+    }
+    if (!timestamp) {
+      setError('请输入有效的成交时间')
+      return
+    }
+    if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+      setError('成交价必须大于 0')
+      return
+    }
+    if (!Number.isInteger(numericQuantity) || numericQuantity <= 0) {
+      setError('成交股数必须为正整数')
+      return
+    }
+    try {
+      const response = await onSubmit({
+        symbol: normalizedSymbol,
+        companyName: normalizedCompanyName,
+        fill: {
+          side,
+          executedAt: timestamp,
+          price: numericPrice,
+          quantity: numericQuantity
+        }
+      })
+      if (!response) return
+      onSaved()
+    } catch (submitError) {
+      const message = extractTradeMutationError(submitError)
+      setError(message)
+      toast.error(`手工成交保存失败：${message}`)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-ink-900/40 p-0 sm:items-center sm:p-4" onMouseDown={(event) => {
+      event.stopPropagation()
+      if (event.target === event.currentTarget && !busy) onClose()
+    }}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="manual-trade-dialog-title"
+        className="max-h-[92dvh] w-full overflow-y-auto rounded-t-xl border border-line bg-white shadow-float sm:max-w-lg sm:rounded-xl"
+        onKeyDown={handleDialogKeyDown}
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-white px-4 py-3">
+          <div>
+            <h2 id="manual-trade-dialog-title" className="text-base font-semibold text-ink-900">独立录入成交</h2>
+            <p className="mt-0.5 text-xs text-ink-500">不依赖推荐凭证，直接记录真实买入或卖出。</p>
+          </div>
+          <IconButton label="关闭独立录入" disabled={busy} onClick={onClose} icon={<X className="h-4 w-4" />} />
+        </div>
+        <form onSubmit={(event) => void submit(event)} className="space-y-4 px-4 py-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="block">
+              <span className="field-label">股票代码</span>
+              <input
+                ref={firstFieldRef}
+                className="field tabular"
+                aria-label="股票代码"
+                placeholder="600367"
+                maxLength={6}
+                inputMode="numeric"
+                required
+                value={symbol}
+                onChange={(event) => setSymbol(event.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="field-label">公司名称</span>
+              <input
+                className="field"
+                aria-label="公司名称"
+                placeholder="红星发展"
+                required
+                value={companyName}
+                onChange={(event) => setCompanyName(event.target.value)}
+              />
+            </label>
+          </div>
+          <fieldset>
+            <legend className="field-label">成交方向</legend>
+            <div className="grid grid-cols-2 rounded-lg border border-line p-1">
+              {(['BUY', 'SELL'] as TradeSide[]).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={side === value}
+                  className={`rounded-md px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${side === value ? (value === 'BUY' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700') : 'text-ink-500 hover:bg-line-soft'}`}
+                  onClick={() => setSide(value)}
+                >
+                  {value === 'BUY' ? '买入 BUY' : '卖出 SELL'}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <label className="block">
+            <span className="field-label">成交时间</span>
+            <input
+              className="field"
+              aria-label="成交时间"
+              type="datetime-local"
+              step="1"
+              required
+              value={executedAt}
+              onChange={(event) => setExecutedAt(event.target.value)}
+            />
+          </label>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="block">
+              <span className="field-label">成交价</span>
+              <input
+                className="field tabular"
+                aria-label="成交价"
+                type="number"
+                min="0.01"
+                step="0.01"
+                inputMode="decimal"
+                required
+                value={price}
+                onChange={(event) => setPrice(event.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="field-label">成交股数</span>
+              <input
+                className="field tabular"
+                aria-label="成交股数"
+                type="number"
+                min="1"
+                step="1"
+                inputMode="numeric"
+                required
+                value={quantity}
+                onChange={(event) => setQuantity(event.target.value)}
+              />
+            </label>
+          </div>
+          {error ? <div role="alert" className="border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
+          <div className="flex flex-col-reverse gap-2 border-t border-line-soft pt-4 sm:flex-row sm:justify-end">
+            <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>取消</Button>
+            <Button type="submit" variant="primary" loading={busy} disabled={busy}>保存成交</Button>
+          </div>
+        </form>
       </div>
     </div>
   )

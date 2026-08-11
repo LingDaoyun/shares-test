@@ -9,7 +9,6 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -44,8 +43,7 @@ class TradeFeedbackServiceTest {
             attestations,
             new TradeLedgerCalculator(),
             transactionManager,
-            Clock.fixed(Instant.parse("2026-07-14T00:00:00Z"), ZoneOffset.UTC),
-            Duration.ofMinutes(5)
+            Clock.fixed(Instant.parse("2026-07-14T00:00:00Z"), ZoneOffset.UTC)
     );
 
     @BeforeEach
@@ -203,14 +201,18 @@ class TradeFeedbackServiceTest {
     }
 
     @Test
-    void rejectsFillsBeforeTheRecommendationAndOnCancelledCases() {
+    void acceptsFillsBeforeTheRecommendationButStillRejectsCancelledCases() {
         TradeCaseEntity planned = plannedCase("PLANNED");
         when(cases.findByIdForUpdate(planned.getCaseId())).thenReturn(Optional.of(planned));
+        when(cases.save(any(TradeCaseEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc(planned.getCaseId())).thenReturn(List.of());
+        when(fills.save(any(TradeFillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        assertThatThrownBy(() -> service.addFill(
+        TradeCaseEntity filled = service.addFill(
                 planned.getCaseId(), fill(TradeSide.BUY, "2026-07-12T23:59:59Z", "35", 100)
-        )).isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("不能早于推荐时间");
+        );
+
+        assertThat(filled.getStatus()).isEqualTo("HOLDING");
 
         planned.updateStatus("CANCELLED", Instant.parse("2026-07-13T02:00:00Z"));
         assertThatThrownBy(() -> service.addFill(

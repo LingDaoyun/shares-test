@@ -1,8 +1,8 @@
 package com.aistock.research.tradefeedback;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -14,7 +14,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -30,9 +29,16 @@ import java.util.stream.Collectors;
 @Service
 public class TradeFeedbackService {
 
-    private static final Duration DEFAULT_FILL_CLOCK_SKEW = Duration.ofMinutes(5);
     private static final int DEFAULT_PAGE_SIZE = 50;
     private static final int MAX_PAGE_SIZE = 200;
+    private static final String MANUAL_SOURCE_MODULE = "MANUAL";
+    private static final String MANUAL_RECOMMENDATION_ACTION = "手工录入";
+    private static final String MANUAL_RULE_VERSION = "manual-v1";
+    private static final String MANUAL_RECOMMENDATION_PAYLOAD = "{\"source\":\"manual\"}";
+    private static final List<String> OPEN_CASE_STATUSES = List.of(
+            TradeCaseStatus.PLANNED.name(),
+            TradeCaseStatus.HOLDING.name()
+    );
 
     private final TradeCaseRepository caseRepository;
     private final TradeFillRepository fillRepository;
@@ -43,7 +49,6 @@ public class TradeFeedbackService {
     private final TradeLedgerCalculator ledgerCalculator;
     private final TransactionTemplate createCaseTransaction;
     private final Clock clock;
-    private final Duration fillClockSkew;
 
     @Autowired
     public TradeFeedbackService(
@@ -54,8 +59,7 @@ public class TradeFeedbackService {
             TradeFillProjector fillProjector,
             RecommendationAttestationService attestationService,
             TradeLedgerCalculator ledgerCalculator,
-            PlatformTransactionManager transactionManager,
-            @Value("${trade-feedback.fill-clock-skew:PT5M}") Duration fillClockSkew
+            PlatformTransactionManager transactionManager
     ) {
         this(
                 caseRepository,
@@ -66,8 +70,7 @@ public class TradeFeedbackService {
                 attestationService,
                 ledgerCalculator,
                 transactionManager,
-                Clock.systemUTC(),
-                fillClockSkew);
+                Clock.systemUTC());
     }
 
     TradeFeedbackService(
@@ -79,8 +82,7 @@ public class TradeFeedbackService {
             RecommendationAttestationService attestationService,
             TradeLedgerCalculator ledgerCalculator,
             PlatformTransactionManager transactionManager,
-            Clock clock,
-            Duration fillClockSkew
+            Clock clock
     ) {
         this.caseRepository = caseRepository;
         this.fillRepository = fillRepository;
@@ -90,10 +92,6 @@ public class TradeFeedbackService {
         this.attestationService = attestationService;
         this.ledgerCalculator = ledgerCalculator;
         this.clock = clock;
-        if (fillClockSkew == null || fillClockSkew.isNegative()) {
-            throw new IllegalArgumentException("成交时间容差不能为负数");
-        }
-        this.fillClockSkew = fillClockSkew;
         this.createCaseTransaction = new TransactionTemplate(transactionManager);
         this.createCaseTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -148,30 +146,43 @@ public class TradeFeedbackService {
     public TradeCaseEntity addFill(String caseId, UpsertTradeFillRequest request) {
         TradeCaseEntity tradeCase = requireCaseForUpdate(caseId);
         ensureFillAllowed(tradeCase);
-        validateFillRequest(tradeCase, request);
+        validateFillRequest(request);
+        return appendFill(tradeCase, request);
+    }
 
-        Instant now = clock.instant();
-        TradeFillEntity newFill = TradeFillEntity.create(
-                UUID.randomUUID().toString(),
-                tradeCase.getCaseId(),
-                request.side().name(),
-                request.executedAt(),
-                request.price(),
-                request.quantity(),
-                now);
-        List<TradeFillSnapshot> prospective = new ArrayList<>(activeFills(tradeCase.getCaseId()));
-        prospective.add(snapshot(newFill));
-        TradeLedgerSummary ledger = calculateLedger(prospective, null);
+    @Transactional
+    public TradeCaseEntity recordManualFill(ManualTradeFillRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("手工成交请求不能为空");
+        }
+        String symbol = requiredText(request.symbol(), "股票代码不能为空");
+        if (!symbol.matches("\\d{6}")) {
+            throw new IllegalArgumentException("股票代码必须是 6 位数字");
+        }
+        String companyName = requiredText(request.companyName(), "公司名称不能为空");
+        UpsertTradeFillRequest fill = request.fill();
+        validateFillRequest(fill);
 
-        fillRepository.save(newFill);
-        return saveStatus(tradeCase, ledger, prospective.size(), now);
+        TradeCaseEntity tradeCase = caseRepository
+                .findOpenCasesBySymbolForUpdate(symbol, OPEN_CASE_STATUSES, PageRequest.of(0, 1))
+                .stream()
+                .findFirst()
+                .orElse(null);
+        if (tradeCase == null) {
+            if (fill.side() != TradeSide.BUY) {
+                throw new TradeFeedbackConflictException("未找到该股票可卖出的复盘持仓，请先录入买入");
+            }
+            tradeCase = createManualCase(symbol, companyName, fill);
+        }
+        ensureFillAllowed(tradeCase);
+        return appendFill(tradeCase, fill);
     }
 
     @Transactional
     public TradeCaseEntity updateFill(String caseId, String fillId, UpsertTradeFillRequest request) {
         TradeCaseEntity tradeCase = requireCaseForUpdate(caseId);
         ensureFillAllowed(tradeCase);
-        validateFillRequest(tradeCase, request);
+        validateFillRequest(request);
         List<TradeFillSnapshot> current = activeFills(tradeCase.getCaseId());
         TradeFillSnapshot existing = requireActiveFill(current, fillId);
 
@@ -348,6 +359,44 @@ public class TradeFeedbackService {
         return ledgerCalculator.calculate(fills.stream().map(TradeFillSnapshot::toLedgerFill).toList(), latestPrice);
     }
 
+    private TradeCaseEntity createManualCase(String symbol, String companyName, UpsertTradeFillRequest fill) {
+        Instant now = clock.instant();
+        TradeCaseEntity entity = TradeCaseEntity.planned(
+                UUID.randomUUID().toString(),
+                fingerprint("manual:" + symbol + ":" + UUID.randomUUID()),
+                null,
+                symbol,
+                companyName,
+                MANUAL_SOURCE_MODULE,
+                MANUAL_RECOMMENDATION_ACTION,
+                null,
+                MANUAL_RULE_VERSION,
+                fill.price(),
+                fill.executedAt(),
+                MANUAL_RECOMMENDATION_PAYLOAD,
+                now
+        );
+        return caseRepository.saveAndFlush(entity);
+    }
+
+    private TradeCaseEntity appendFill(TradeCaseEntity tradeCase, UpsertTradeFillRequest request) {
+        Instant now = clock.instant();
+        TradeFillEntity newFill = TradeFillEntity.create(
+                UUID.randomUUID().toString(),
+                tradeCase.getCaseId(),
+                request.side().name(),
+                request.executedAt(),
+                request.price(),
+                request.quantity(),
+                now);
+        List<TradeFillSnapshot> prospective = new ArrayList<>(activeFills(tradeCase.getCaseId()));
+        prospective.add(snapshot(newFill));
+        TradeLedgerSummary ledger = calculateLedger(prospective, null);
+
+        fillRepository.save(newFill);
+        return saveStatus(tradeCase, ledger, prospective.size(), now);
+    }
+
     private TradeCaseEntity saveStatus(
             TradeCaseEntity tradeCase,
             TradeLedgerSummary ledger,
@@ -391,7 +440,7 @@ public class TradeFeedbackService {
         }
     }
 
-    private void validateFillRequest(TradeCaseEntity tradeCase, UpsertTradeFillRequest request) {
+    private void validateFillRequest(UpsertTradeFillRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("成交请求不能为空");
         }
@@ -400,12 +449,6 @@ public class TradeFeedbackService {
         }
         if (request.executedAt() == null) {
             throw new IllegalArgumentException("成交时间不能为空");
-        }
-        if (request.executedAt().isBefore(tradeCase.getRecommendedAt())) {
-            throw new IllegalArgumentException("成交时间不能早于推荐时间");
-        }
-        if (request.executedAt().isAfter(clock.instant().plus(fillClockSkew))) {
-            throw new IllegalArgumentException("成交时间不能超过当前时间允许的未来容差");
         }
         if (request.price() == null || request.price().signum() <= 0) {
             throw new IllegalArgumentException("成交价格必须大于零");

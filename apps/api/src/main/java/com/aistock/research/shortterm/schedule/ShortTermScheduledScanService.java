@@ -13,11 +13,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
-import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -46,7 +41,6 @@ import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.NO
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.PRESELECT_READY;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.RUNNING;
 
-@Service
 public class ShortTermScheduledScanService {
 
     private static final Logger log = LoggerFactory.getLogger(ShortTermScheduledScanService.class);
@@ -65,7 +59,6 @@ public class ShortTermScheduledScanService {
     private final Duration staleRunTimeout;
     private final ShortTermFinalResultGate finalResultGate;
 
-    @Autowired
     public ShortTermScheduledScanService(
             ShortTermAutomationSettings settings,
             TradingClockService tradingClock,
@@ -74,7 +67,7 @@ public class ShortTermScheduledScanService {
             ResearchHistoryService historyService,
             RecommendationAttestationService attestationService,
             ObjectMapper objectMapper,
-            @Qualifier("shortTermScheduledExecutor") ExecutorService executor
+            ExecutorService executor
     ) {
         this(
                 settings, tradingClock, store, shortTermService, historyService, attestationService,
@@ -117,7 +110,6 @@ public class ShortTermScheduledScanService {
         enqueue(List.of(prepared.orElseThrow()));
     }
 
-    @EventListener(ApplicationReadyEvent.class)
     public void recoverCurrentDayAfterStartup() {
         LocalDate tradeDate = tradingClock.currentMarketDate();
         Optional<ShortTermScheduledSnapshot> latestFinal = store.latest(tradeDate, FINAL);

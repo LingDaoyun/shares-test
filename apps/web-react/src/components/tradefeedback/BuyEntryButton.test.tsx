@@ -152,7 +152,7 @@ describe('BuyEntryButton', () => {
       response: {
         data: {
           fields: {
-            executedAt: '成交时间不能早于推荐时间'
+            executedAt: '成交时间格式错误'
           }
         }
       }
@@ -166,7 +166,7 @@ describe('BuyEntryButton', () => {
       await flushPromises()
     })
 
-    expect(dialogText()).toContain('成交时间不能早于推荐时间')
+    expect(dialogText()).toContain('成交时间格式错误')
     expect(input('买入股数')?.value).toBe('300')
     expect(document.querySelector('[role="dialog"]')).not.toBeNull()
   })

@@ -44,6 +44,12 @@ public class TradeFeedbackController {
         return detail(translate(() -> tradeFeedbackService.createCase(request)));
     }
 
+    @PostMapping("/manual-fills")
+    @ResponseStatus(HttpStatus.CREATED)
+    public TradeCaseDetail recordManualFill(@Valid @RequestBody ManualTradeFillRequest request) {
+        return detail(translate(() -> tradeFeedbackService.recordManualFill(request)));
+    }
+
     @GetMapping
     public List<TradeCaseSummary> list(
             @RequestParam(required = false) String status,

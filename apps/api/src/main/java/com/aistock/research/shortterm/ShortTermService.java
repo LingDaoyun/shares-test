@@ -363,13 +363,14 @@ public class ShortTermService {
                 allowClosedMarketCachePreview
         );
         Set<String> unstableIndustrySymbols = fetchUnstableIndustrySymbols();
+        Map<String, IndustryLeadershipSnapshot> industryLeadershipMap = industryLeadershipSnapshots(quoteUniverse);
         List<ShortTermRiskExclusion> quoteExclusions = quoteUniverse.stream()
-                .map(quote -> preFilterExclusion(quote, ruleSet, unstableIndustrySymbols))
+                .map(quote -> preFilterExclusion(quote, ruleSet, unstableIndustrySymbols, industryLeadershipMap))
                 .filter(exclusion -> exclusion != null)
                 .limit(40)
                 .toList();
         List<EastMoneyQuote> preFilteredQuotes = quoteUniverse.stream()
-                .filter(quote -> passesQuotePreFilter(quote, ruleSet, unstableIndustrySymbols))
+                .filter(quote -> passesQuotePreFilter(quote, ruleSet, unstableIndustrySymbols, industryLeadershipMap))
                 .toList();
         ShortTermMarketSentiment marketSentiment = marketSentiment(quoteUniverse, coverage);
         ShortTermMarketFundDirection marketFundDirection = marketFundDirection(quoteUniverse);
@@ -509,7 +510,7 @@ public class ShortTermService {
                         + marketFundDirectionNote(marketFundDirection),
                 tradingClockService.currentSession(),
                 List.of(
-                        "第一层用全 A 股行情做流动性、非 ST、热门方向和追涨风险排序，PE/PB 只占预选分的 10%。",
+                        "第一层先筛行业龙头、流动性、非 ST、热门方向和追涨风险，PE/PB 只占预选分的 10%。",
                         "第二层拉取候选近一年 K 线，优先确认 MA5/MA10 金叉及其形成阶段，并计算实时换手率和收盘强度。",
                         "第三层技术底分固定为金叉 45%、放量上涨 30%、换手适配 15%、K 线收盘强度 10%。",
                         "筹码结构是独立证据层，只展示成本分布、上方筹码和前高残余筹码；不与金叉、量能、换手率混算主分。",
@@ -2622,14 +2623,20 @@ public class ShortTermService {
         return "等待右侧";
     }
 
-    private boolean passesQuotePreFilter(EastMoneyQuote quote, ShortTermRuleSet ruleSet, Set<String> unstableIndustrySymbols) {
-        return preFilterExclusion(quote, ruleSet, unstableIndustrySymbols) == null;
+    private boolean passesQuotePreFilter(
+            EastMoneyQuote quote,
+            ShortTermRuleSet ruleSet,
+            Set<String> unstableIndustrySymbols,
+            Map<String, IndustryLeadershipSnapshot> industryLeadershipSnapshots
+    ) {
+        return preFilterExclusion(quote, ruleSet, unstableIndustrySymbols, industryLeadershipSnapshots) == null;
     }
 
     private ShortTermRiskExclusion preFilterExclusion(
             EastMoneyQuote quote,
             ShortTermRuleSet ruleSet,
-            Set<String> unstableIndustrySymbols
+            Set<String> unstableIndustrySymbols,
+            Map<String, IndustryLeadershipSnapshot> industryLeadershipSnapshots
     ) {
         if (isShortTermUnstableIndustry(quote, unstableIndustrySymbols)) {
             return riskExclusion(
@@ -2647,15 +2654,88 @@ public class ShortTermService {
                     RecommendationQuality.liquidityRiskText()
             );
         }
-        if (quote.changePercent() != null && quote.changePercent().compareTo(ruleSet.maxEntryRisePercent().add(new BigDecimal("5"))) > 0) {
+        IndustryLeadershipSnapshot leaderSnapshot = industryLeadershipSnapshots == null
+                ? null
+                : industryLeadershipSnapshots.get(industryKey(quote.industry()));
+        if (leaderSnapshot == null || !leaderSnapshot.isLeader(quote.symbol())) {
+            return riskExclusion(
+                    quote,
+                    "INDUSTRY_LEADER_REQUIRED",
+                    "非行业龙头",
+                    industryLeaderEvidence(quote, leaderSnapshot)
+            );
+        }
+        if (quote.changePercent() == null) {
+            return riskExclusion(
+                    quote,
+                    "CHANGE_DATA_MISSING",
+                    "当日涨跌幅缺失",
+                    "缺少当日实时涨跌幅，无法确认当前是否处于上升状态，不进入短线推荐候选。"
+            );
+        }
+        if (quote.changePercent().compareTo(BigDecimal.ZERO) <= 0) {
+            return riskExclusion(
+                    quote,
+                    "NON_POSITIVE_DAILY_CHANGE",
+                    "当日未上涨",
+                    "当日涨跌幅 " + valueText(quote.changePercent())
+                            + "% 不为正，短线只保留当前正在上涨的候选，不进入推荐候选。"
+            );
+        }
+        if (quote.changePercent() != null && quote.changePercent().compareTo(ruleSet.maxEntryRisePercent()) > 0) {
             return riskExclusion(
                     quote,
                     "CHASE_RISK",
-                    "单日急拉",
-                    "单日涨幅超过追涨上限 5 个百分点以上，右侧信号可能已经过热，先从候选池剔除。"
+                    "超过追涨上限 " + valueText(ruleSet.maxEntryRisePercent()) + "%",
+                    "当日涨幅 " + valueText(quote.changePercent()) + "% 超过追涨上限 "
+                            + valueText(ruleSet.maxEntryRisePercent()) + "%，不进入短线推荐候选。"
             );
         }
         return null;
+    }
+
+    private Map<String, IndustryLeadershipSnapshot> industryLeadershipSnapshots(List<EastMoneyQuote> quotes) {
+        if (quotes == null || quotes.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, List<EastMoneyQuote>> grouped = quotes.stream()
+                .filter(quote -> industryKey(quote.industry()) != null)
+                .collect(Collectors.groupingBy(
+                        quote -> industryKey(quote.industry()),
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+        Map<String, IndustryLeadershipSnapshot> snapshots = new LinkedHashMap<>();
+        for (Map.Entry<String, List<EastMoneyQuote>> entry : grouped.entrySet()) {
+            List<String> orderedSymbols = entry.getValue().stream()
+                    .filter(quote -> quote.symbol() != null && !quote.symbol().isBlank())
+                    .sorted(Comparator.comparing((EastMoneyQuote quote) -> nullToZero(quote.amount())).reversed()
+                            .thenComparing((EastMoneyQuote quote) -> nullToZero(quote.changePercent()), Comparator.reverseOrder())
+                            .thenComparing(EastMoneyQuote::symbol))
+                    .map(EastMoneyQuote::symbol)
+                    .toList();
+            snapshots.put(entry.getKey(), new IndustryLeadershipSnapshot(entry.getKey(), orderedSymbols));
+        }
+        return snapshots;
+    }
+
+    private String industryLeaderEvidence(EastMoneyQuote quote, IndustryLeadershipSnapshot leaderSnapshot) {
+        String industry = industryKey(quote.industry());
+        if (industry == null) {
+            return "行业分类缺失，无法确认行业龙头，不能进入短线技术分析。";
+        }
+        if (leaderSnapshot == null || leaderSnapshot.orderedSymbols().isEmpty()) {
+            return "当前行业 " + industry + " 没有足够可用样本，无法确认前 3 龙头。";
+        }
+        int rank = leaderSnapshot.rankOf(quote.symbol());
+        if (rank <= 0) {
+            return "当前行业 " + industry + " 的成交额前 3 未包含该票，不能作为行业龙头进入短线技术分析。";
+        }
+        return "当前行业 " + industry + " 的成交额排名第 " + rank + "，前 3 龙头才进入短线技术分析。";
+    }
+
+    private String industryKey(String industry) {
+        return industry == null || industry.isBlank() ? null : industry.trim();
     }
 
     private ShortTermRiskExclusion technicalHardExclusion(TechnicalCandidate candidate) {
@@ -3653,5 +3733,23 @@ public class ShortTermService {
     }
 
     private record ScoredShortTerm(ShortTermCandidate candidate) {
+    }
+
+    private record IndustryLeadershipSnapshot(
+            String industry,
+            List<String> orderedSymbols
+    ) {
+        private boolean isLeader(String symbol) {
+            int rank = rankOf(symbol);
+            return rank > 0 && rank <= 3;
+        }
+
+        private int rankOf(String symbol) {
+            if (symbol == null || orderedSymbols == null) {
+                return -1;
+            }
+            int index = orderedSymbols.indexOf(symbol);
+            return index < 0 ? -1 : index + 1;
+        }
     }
 }

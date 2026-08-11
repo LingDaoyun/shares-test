@@ -559,11 +559,11 @@ class ShortTermServiceTest {
     @Test
     void shouldReturnUpToEightShortTermRecommendationsByDefault() {
         eastMoneyClient.quotes = List.of(
-                quoteWithIndustry("600101", "光通信甲", "光通信", "10.62", "1.60", "35", "4.2", "900000000"),
-                quoteWithIndustry("600102", "光通信乙", "光通信", "10.62", "1.50", "42", "4.6", "860000000"),
-                quoteWithIndustry("600103", "光通信丙", "光通信", "10.62", "1.40", "48", "5.1", "820000000"),
-                quoteWithIndustry("600104", "光通信丁", "光通信", "10.62", "1.30", "55", "5.5", "780000000"),
-                quoteWithIndustry("600105", "光通信戊", "光通信", "10.62", "1.20", "60", "5.9", "740000000")
+                quoteWithIndustry("600101", "光通信甲", "光通信A", "10.62", "1.60", "35", "4.2", "900000000"),
+                quoteWithIndustry("600102", "光通信乙", "光通信B", "10.62", "1.50", "42", "4.6", "860000000"),
+                quoteWithIndustry("600103", "光通信丙", "光通信C", "10.62", "1.40", "48", "5.1", "820000000"),
+                quoteWithIndustry("600104", "光通信丁", "光通信D", "10.62", "1.30", "55", "5.5", "780000000"),
+                quoteWithIndustry("600105", "光通信戊", "光通信E", "10.62", "1.20", "60", "5.9", "740000000")
         );
         for (EastMoneyQuote quote : eastMoneyClient.quotes) {
             eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "180000"));
@@ -904,10 +904,10 @@ class ShortTermServiceTest {
     @Test
     void shouldRankActionPriorityBeforeRightSideMaturity() {
         eastMoneyClient.quotes = List.of(
-                quote("600605", "等回踩确认样本", "10.62", "7.20", "18", "1.6", "600000000"),
+                quote("600605", "等回踩确认样本", "12.90", "1.20", "18", "1.6", "600000000"),
                 quote("600606", "右侧观察样本", "10.62", "1.20", "18", "1.6", "600000000")
         );
-        eastMoneyClient.klines.put("600605", rightEarlyKLines("600605", "10.62", "180000"));
+        eastMoneyClient.klines.put("600605", rightEarlyKLines("600605", "12.90", "180000"));
         eastMoneyClient.klines.put("600606", rightEarlyKLines("600606", "10.62", "105000"));
         eastMoneyClient.quotes.forEach(quote ->
                 eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
@@ -922,7 +922,7 @@ class ShortTermServiceTest {
 
         ShortTermCandidate pullback = find(report, "600605");
         ShortTermCandidate observation = find(report, "600606");
-        assertThat(pullback.technical().rightSideSignal()).isEqualTo("右侧早期确认");
+        assertThat(pullback.technical().rightSideSignal()).isEqualTo("右侧已拉开");
         assertThat(pullback.action()).isEqualTo("WAIT_PULLBACK");
         assertThat(observation.technical().rightSideSignal()).isEqualTo("右侧早期观察");
         assertThat(observation.action()).isEqualTo("WATCH_RIGHT_SIDE");
@@ -1121,7 +1121,7 @@ class ShortTermServiceTest {
         quotes.add(quote("600213", "右侧丙", "10.62", "1.30", "60", "5.5", "90000000"));
         quotes.add(quoteWithIndustry("600399", "高分未右侧", "机器人", "9.60", "0.80", "18", "1.6", "3600000000"));
         for (int index = 0; index < 8; index++) {
-            quotes.add(quote("6007" + index, "下跌样本" + index, "10.00", "-1.50", "18", "1.6", "300000000"));
+            quotes.add(quote("6007" + index, "下跌样本" + index, "10.00", "-1.50", "18", "1.6", "1000000"));
         }
         eastMoneyClient.quotes = quotes;
         for (String symbol : List.of("600211", "600212", "600213")) {
@@ -1326,7 +1326,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldAvoidChasingAfterSharpRightSideMove() {
+    void shouldExcludeQuotesAboveConfiguredEntryRiseLimitFromRecommendations() {
         eastMoneyClient.quotes = List.of(
                 quote("600002", "急拉股份", "12.90", "6.60", "18.00", "1.80", "260000000")
         );
@@ -1335,11 +1335,61 @@ class ShortTermServiceTest {
 
         ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
 
-        ShortTermCandidate candidate = find(report, "600002");
-        assertThat(candidate.action()).isEqualTo("WAIT_PULLBACK");
-        assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT_PULLBACK");
-        assertThat(candidate.todayAdvice().actionLabel()).isEqualTo("等回踩");
-        assertThat(candidate.risks()).anySatisfy(risk -> assertThat(risk).contains("单日涨幅"));
+        assertThat(report.ruleSet().maxEntryRisePercent()).isEqualByComparingTo("6.5");
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("600002");
+        assertThat(report.exclusions()).filteredOn(exclusion -> "600002".equals(exclusion.symbol()))
+                .singleElement()
+                .satisfies(exclusion -> {
+                    assertThat(exclusion.category()).isEqualTo("CHASE_RISK");
+                    assertThat(exclusion.reason()).contains("追涨上限", "6.5%");
+                });
+    }
+
+    @Test
+    void shouldExcludeNonPositiveDailyChangeFromShortTermRecommendations() {
+        eastMoneyClient.quotes = List.of(
+                quote("600009", "下跌候选", "14.96", "-2.35", "18.00", "1.60", "260000000")
+        );
+        eastMoneyClient.klines.put("600009", rightEarlyKLines("600009", "14.96", "420000"));
+        eastMoneyClient.financials.put("600009", goodFinancial("600009"));
+
+        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("600009");
+        assertThat(report.exclusions()).filteredOn(exclusion -> "600009".equals(exclusion.symbol()))
+                .singleElement()
+                .satisfies(exclusion -> {
+                    assertThat(exclusion.category()).isEqualTo("NON_POSITIVE_DAILY_CHANGE");
+                    assertThat(exclusion.reason()).isEqualTo("当日未上涨");
+                    assertThat(exclusion.evidence()).contains("当日涨跌幅", "-2.35%");
+                });
+        assertThat(eastMoneyClient.requestedKlineSymbols).doesNotContain("600009");
+    }
+
+    @Test
+    void shouldRequireIndustryLeaderBeforeTechnicalReview() {
+        eastMoneyClient.quotes = List.of(
+                quoteWithIndustry("600701", "行业龙头A", "光伏设备", "10.62", "1.20", "18.00", "1.60", "1800000000"),
+                quoteWithIndustry("600702", "行业龙头B", "光伏设备", "10.62", "1.10", "18.00", "1.60", "1500000000"),
+                quoteWithIndustry("600703", "行业龙头C", "光伏设备", "10.62", "1.00", "18.00", "1.60", "1200000000"),
+                quoteWithIndustry("600704", "跟随样本", "光伏设备", "10.62", "0.90", "18.00", "1.60", "700000000")
+        );
+        eastMoneyClient.quotes.forEach(quote -> {
+            eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "230000"));
+            eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
+        });
+
+        ShortTermReport report = service.report(4, 100, 5, null, null, null, null, null, null, null);
+
+        assertThat(report.reviewedSymbols()).containsExactlyInAnyOrder("600701", "600702", "600703");
+        assertThat(report.reviewedSymbols()).doesNotContain("600704");
+        assertThat(report.exclusions()).filteredOn(exclusion -> "600704".equals(exclusion.symbol()))
+                .singleElement()
+                .satisfies(exclusion -> {
+                    assertThat(exclusion.category()).isEqualTo("INDUSTRY_LEADER_REQUIRED");
+                    assertThat(exclusion.reason()).contains("行业龙头");
+                });
+        assertThat(eastMoneyClient.requestedKlineSymbols).doesNotContain("600704");
     }
 
     @Test
@@ -1470,9 +1520,10 @@ class ShortTermServiceTest {
     void shouldReturnEightCandidatesByDefaultWithoutManufacturingExecutableAdvice() {
         eastMoneyClient.quotes = IntStream.range(0, 10)
                 .mapToObj(index -> withTurnover(
-                        quote(
+                        quoteWithIndustry(
                                 String.format("600%03d", 100 + index),
                                 "八只候选" + index,
+                                "行业" + index,
                                 "10.62",
                                 "1.60",
                                 "18.00",
@@ -1539,10 +1590,10 @@ class ShortTermServiceTest {
 
     @Test
     void shouldHideHardRiskCandidatesAndWriteTheirReasonsToTheExclusionAudit() {
-        EastMoneyQuote eligible = quote("600034", "合格样本", "10.62", "1.60", "18", "1.6", "900000000");
-        EastMoneyQuote financialRisk = quote("600035", "财务红旗", "10.62", "1.60", "18", "1.6", "900000000");
-        EastMoneyQuote volumeMissing = quote("600036", "量能缺失", "10.62", "1.60", "18", "1.6", "900000000");
-        EastMoneyQuote noGoldenCross = quote("600037", "无金叉", "9.60", "1.60", "18", "1.6", "900000000");
+        EastMoneyQuote eligible = quoteWithIndustry("600034", "合格样本", "智能制造", "10.62", "1.60", "18", "1.6", "900000000");
+        EastMoneyQuote financialRisk = quoteWithIndustry("600035", "财务红旗", "工业软件", "10.62", "1.60", "18", "1.6", "900000000");
+        EastMoneyQuote volumeMissing = quoteWithIndustry("600036", "量能缺失", "机器人", "10.62", "1.60", "18", "1.6", "900000000");
+        EastMoneyQuote noGoldenCross = quoteWithIndustry("600037", "无金叉", "电力设备", "9.60", "1.60", "18", "1.6", "900000000");
         eastMoneyClient.quotes = List.of(eligible, financialRisk, volumeMissing, noGoldenCross);
         eastMoneyClient.klines.put("600034", rightEarlyKLines("600034", "10.62", "230000"));
         eastMoneyClient.klines.put("600035", rightEarlyKLines("600035", "10.62", "230000"));
@@ -1645,8 +1696,16 @@ class ShortTermServiceTest {
     @Test
     void shouldReportAllSuccessfullyReviewedKLinesBeforeCandidateTruncation() {
         List<EastMoneyQuote> quotes = IntStream.range(0, 35)
-                .mapToObj(index -> quote(String.format("60%04d", 700 + index), "复核样本" + index,
-                        "10.62", "1.20", "18", "1.6", "600000000"))
+                .mapToObj(index -> quoteWithIndustry(
+                        String.format("60%04d", 700 + index),
+                        "复核样本" + index,
+                        "复核行业" + index,
+                        "10.62",
+                        "1.20",
+                        "18",
+                        "1.6",
+                        "600000000"
+                ))
                 .toList();
         eastMoneyClient.quotes = quotes;
         quotes.forEach(quote -> {

@@ -1,28 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CandlestickChart, RefreshCw, SlidersHorizontal } from 'lucide-react'
-import { fetchLatestShortTermScheduledSnapshot, fetchOvernightBacktest, fetchShortTermScanJob, startShortTermScanJob } from '../api/client'
 import type { ShortTermParams } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOverlay'
 import { Loader } from '../components/ui/Loader'
-import { SectionBanner } from '../components/ui/SectionBanner'
 import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
 import { ChipDistributionChart } from '../components/shortterm/ChipDistributionChart'
-import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
-import type { ReportOrigin } from '../components/shortterm/ScheduledSnapshotStatus'
 import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
 import { BuyEntryButton } from '../components/tradefeedback/BuyEntryButton'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
-import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
+import { changeClass, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
 import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCounterEvidenceTone, goldenCrossDisplayLabel, goldenCrossSpreadLabel, goldenCrossSpreadTrendLabel, goldenCrossTone, goldenCrossV2Context } from '../lib/shortTermGoldenCross'
 import { loadShortTermViewPreferences, saveShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import type { ShortTermViewPreferences } from '../lib/shortTermViewPreferences'
-import type { ChipVerificationStatus, OvernightBacktestReport, OvernightBacktestSummary, ShortTermCandidate, ShortTermChipSnapshot, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermScanJobStatus, ShortTermScheduledSnapshot, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import { useShortTermScanStore } from '../store/shortTermScanStore'
+import type { ChipVerificationStatus, ShortTermCandidate, ShortTermChipSnapshot, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -54,23 +51,6 @@ const DEFAULT_DRAFT: DraftParams = {
   allowChiNext: false
 }
 
-const SCHEDULED_SCAN_POLL_MS = 10_000
-
-const OVERNIGHT_DEFAULT_RULES = {
-  lookbackDays: 900,
-  firstTargetPercent: 2.5,
-  secondTargetPercent: 4.5,
-  hardStopPercent: 3.5,
-  maxHoldingTradingDays: 2,
-  commissionPercent: 0.03,
-  stampDutyPercent: 0.05,
-  slippagePercent: 0.05,
-  limitMovePercent: 9.8,
-  minVolumeRatio: 1.2,
-  maxDistanceToMa20Percent: 8,
-  trailingDrawdownPercent: 2
-} as const
-
 const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'neutral' | 'sky'> = {
   RIGHT_EARLY_ADD: 'success',
   WATCH_RIGHT_SIDE: 'brand',
@@ -84,214 +64,14 @@ const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'n
 export function ShortTermPage() {
   const [draft, setDraft] = useState<DraftParams>(DEFAULT_DRAFT)
   const [viewPreferences, setViewPreferences] = useState<ShortTermViewPreferences>(() => loadShortTermViewPreferences())
-  const [snapshot, setSnapshot] = useState<ShortTermScheduledSnapshot | null>(null)
-  const [scheduledSnapshot, setScheduledSnapshot] = useState<ShortTermScheduledSnapshot | null>(null)
-  const [origin, setOrigin] = useState<ReportOrigin>('SCHEDULED')
-  const [report, setReport] = useState<ShortTermReport | null>(null)
+  const origin = useShortTermScanStore((state) => state.origin)
+  const report = useShortTermScanStore((state) => state.report)
+  const loading = useShortTermScanStore((state) => state.loading)
+  const error = useShortTermScanStore((state) => state.error)
+  const scanMessage = useShortTermScanStore((state) => state.scanMessage)
+  const activeJobId = useShortTermScanStore((state) => state.activeJobId)
+  const runManualScan = useShortTermScanStore((state) => state.runManualScan)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
-  const [backtestReport, setBacktestReport] = useState<OvernightBacktestReport | null>(null)
-  const [backtestLoading, setBacktestLoading] = useState(false)
-  const [backtestError, setBacktestError] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [scanMessage, setScanMessage] = useState('')
-  const [activeJobId, setActiveJobId] = useState('')
-  const manualRunGeneration = useRef(0)
-  const backtestRequestGeneration = useRef(0)
-  const pollTimer = useRef<number | undefined>(undefined)
-  const preparedSnapshotRequest = useRef<ReturnType<typeof fetchLatestShortTermScheduledSnapshot> | null>(null)
-  const manualScanRequested = useRef(false)
-  const overnightSymbols = useMemo(
-    () => [...new Set((report?.candidates ?? []).map((candidate) => candidate.symbol))].sort().join(','),
-    [report?.candidates]
-  )
-  const overnightRules = useMemo(() => ({
-    ...OVERNIGHT_DEFAULT_RULES,
-    minVolumeRatio: report?.ruleSet?.minVolumeRatio ?? OVERNIGHT_DEFAULT_RULES.minVolumeRatio,
-    maxDistanceToMa20Percent: report?.ruleSet?.maxDistanceToMa20Percent
-      ?? OVERNIGHT_DEFAULT_RULES.maxDistanceToMa20Percent,
-    trailingDrawdownPercent: report?.candidates
-      .map((candidate) => candidate.tradePlan?.trailingDrawdownPercent)
-      .find((value): value is number => value !== null && value !== undefined)
-      ?? OVERNIGHT_DEFAULT_RULES.trailingDrawdownPercent
-  }), [
-    report?.ruleSet?.minVolumeRatio,
-    report?.ruleSet?.maxDistanceToMa20Percent,
-    report?.candidates
-  ])
-  const overnightRequestKey = `${overnightSymbols}|${Object.entries(overnightRules)
-    .map(([key, value]) => `${key}:${value}`)
-    .join('|')}`
-
-  useEffect(() => {
-    let alive = true
-    setLoading(true)
-    setError('')
-    setScanMessage('读取当日计划快照')
-    const request = preparedSnapshotRequest.current ?? fetchLatestShortTermScheduledSnapshot()
-    const requestGeneration = manualRunGeneration.current
-    const ownsRequest = () => alive
-      && manualRunGeneration.current === requestGeneration
-      && !manualScanRequested.current
-    preparedSnapshotRequest.current = request
-    request
-      .then((prepared) => {
-        if (alive) setScheduledSnapshot(prepared)
-        if (!ownsRequest()) return
-        setSnapshot(prepared)
-        setOrigin('SCHEDULED')
-        setReport(visibleSnapshotReport(prepared))
-      })
-      .catch((e) => {
-        if (ownsRequest()) setError(extractErrorMessage(e))
-      })
-      .finally(() => {
-        if (ownsRequest()) setLoading(false)
-      })
-    return () => {
-      alive = false
-      manualRunGeneration.current += 1
-      if (pollTimer.current !== undefined) window.clearTimeout(pollTimer.current)
-    }
-  }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    const refresh = async () => {
-      try {
-        const prepared = await fetchLatestShortTermScheduledSnapshot()
-        if (cancelled) return
-        setScheduledSnapshot(prepared)
-        if (!manualScanRequested.current && origin === 'SCHEDULED') {
-          setSnapshot(prepared)
-          setReport(visibleSnapshotReport(prepared))
-        }
-      } catch {
-        // Background polling should not replace the explicit page error.
-      }
-    }
-    const interval = window.setInterval(() => void refresh(), SCHEDULED_SCAN_POLL_MS)
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-    }
-  }, [origin])
-
-  async function runManualScan(nextParams: DraftParams) {
-    manualScanRequested.current = true
-    const generation = manualRunGeneration.current + 1
-    manualRunGeneration.current = generation
-    if (pollTimer.current !== undefined) window.clearTimeout(pollTimer.current)
-
-    setOrigin('MANUAL')
-    setLoading(true)
-    setError('')
-    setReport(null)
-    setSelectedSymbol(null)
-    setScanMessage('提交实时扫描任务')
-    setActiveJobId('')
-    setSnapshot((current) => ({
-      tradeDate: current?.tradeDate ?? currentShanghaiDate(),
-      stage: 'MANUAL',
-      status: 'RUNNING',
-      strategyVersion: current?.strategyVersion ?? '',
-      message: '提交实时扫描任务',
-      dataCutoffAt: null,
-      completedAt: null,
-      blockedReasons: [],
-      report: null
-    }))
-
-    try {
-      const started = await startShortTermScanJob(toApiParams(nextParams))
-      if (manualRunGeneration.current !== generation) return
-      setActiveJobId(started.jobId)
-      setScanMessage(started.message || '短线右侧实时扫描中')
-      setSnapshot((current) => current ? {
-        ...current,
-        tradeDate: started.tradeDate,
-        status: started.resultStatus,
-        strategyVersion: started.strategyVersion,
-        blockedReasons: started.blockedReasons,
-        message: started.message || '短线右侧实时扫描中'
-      } : current)
-
-      const poll = async () => {
-        try {
-          const job = await fetchShortTermScanJob(started.jobId)
-          if (manualRunGeneration.current !== generation) return
-          setScanMessage(job.message || '短线右侧实时扫描中')
-          if (job.status === 'SUCCEEDED') {
-            if (job.report) {
-              const manualSnapshot = snapshotFromManualJob(job)
-              setSnapshot(manualSnapshot)
-              setReport(visibleSnapshotReport(manualSnapshot))
-              setError('')
-            } else {
-              setSnapshot((current) => current ? {
-                ...current,
-                status: 'FAILED',
-                blockedReasons: job.blockedReasons,
-                message: '短线扫描任务已完成，但没有返回报告。',
-                completedAt: job.finishedAt
-              } : current)
-              setError('短线扫描任务已完成，但没有返回报告。')
-            }
-            setLoading(false)
-            return
-          }
-          if (job.status === 'FAILED') {
-            const message = job.message || '短线右侧实时扫描失败'
-            setSnapshot((current) => current ? {
-              ...current,
-              status: 'FAILED',
-              strategyVersion: job.strategyVersion,
-              blockedReasons: job.blockedReasons,
-              message,
-              completedAt: job.finishedAt
-            } : current)
-            setError(message)
-            setLoading(false)
-            return
-          }
-          setSnapshot((current) => current ? {
-            ...current,
-            status: job.resultStatus,
-            strategyVersion: job.strategyVersion,
-            blockedReasons: job.blockedReasons,
-            message: job.message || '短线右侧实时扫描中'
-          } : current)
-          pollTimer.current = window.setTimeout(() => void poll(), 1500)
-        } catch (e) {
-          if (manualRunGeneration.current === generation) {
-            const message = extractErrorMessage(e)
-            setSnapshot((current) => current ? {
-              ...current,
-              status: 'FAILED',
-              message,
-              completedAt: new Date().toISOString()
-            } : current)
-            setError(message)
-            setLoading(false)
-          }
-        }
-      }
-
-      await poll()
-    } catch (e) {
-      if (manualRunGeneration.current === generation) {
-        const message = extractErrorMessage(e)
-        setSnapshot((current) => current ? {
-          ...current,
-          status: 'FAILED',
-          message,
-          completedAt: new Date().toISOString()
-        } : current)
-        setError(message)
-        setLoading(false)
-      }
-    }
-  }
 
   useEffect(() => {
     if (selectedSymbol && !report?.candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
@@ -299,48 +79,11 @@ export function ShortTermPage() {
     }
   }, [report, selectedSymbol])
 
-  useEffect(() => {
-    const generation = backtestRequestGeneration.current + 1
-    backtestRequestGeneration.current = generation
-    const ownsRequest = () => backtestRequestGeneration.current === generation
-    if (!overnightSymbols) {
-      setBacktestReport(null)
-      setBacktestError('')
-      setBacktestLoading(false)
-      return
-    }
-    setBacktestLoading(true)
-    setBacktestError('')
-    setBacktestReport(null)
-    fetchOvernightBacktest({
-      symbols: overnightSymbols,
-      ...overnightRules
-    })
-      .then((data) => {
-        if (ownsRequest()) setBacktestReport(data)
-      })
-      .catch((e) => {
-        if (ownsRequest()) {
-          setBacktestReport(null)
-          setBacktestError(extractErrorMessage(e))
-        }
-      })
-      .finally(() => {
-        if (ownsRequest()) setBacktestLoading(false)
-      })
-    return () => {
-      if (ownsRequest()) backtestRequestGeneration.current += 1
-    }
-  }, [overnightRequestKey])
-
   const selected = useMemo(() => {
     return resolveDetailSelection(report?.candidates ?? [], selectedSymbol, (candidate) => candidate.symbol)
   }, [report, selectedSymbol])
 
   const diagnostics = useMemo(() => shortTermDiagnostics(report), [report])
-  const runningScheduledSnapshot = scheduledSnapshot && isScheduledScanRunning(scheduledSnapshot)
-    ? scheduledSnapshot
-    : null
 
   useEffect(() => {
     saveShortTermViewPreferences(viewPreferences)
@@ -352,33 +95,37 @@ export function ShortTermPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <SectionBanner
-        eyebrow="SHORT TERM"
-        title="短线右侧"
-        description="从全 A 股里寻找右侧启动前期、热门方向优先、流动性充足且财报质量不拖后腿的候选。"
-        extra={
-          <Button
-            variant="primary"
-            icon={<RefreshCw className="h-4 w-4" />}
-            loading={origin === 'MANUAL' && loading}
-            onClick={() => void runManualScan({ ...draft })}
-          >
-            重新扫描
-          </Button>
-        }
-      />
-
-      {snapshot ? <ScheduledSnapshotStatus snapshot={snapshot} origin={origin} /> : null}
-      {runningScheduledSnapshot ? (
-        <ScheduledScanPulse snapshot={runningScheduledSnapshot} />
-      ) : null}
-
       <Card
         title={
           <span className="inline-flex items-center gap-2">
             <SlidersHorizontal className="h-4 w-4 text-brand-500" />
             右侧启动阈值
           </span>
+        }
+        extra={
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="primary"
+              icon={<RefreshCw className="h-4 w-4" />}
+              loading={origin === 'MANUAL' && loading}
+              onClick={() => {
+                setSelectedSymbol(null)
+                void runManualScan(toApiParams({ ...draft }))
+              }}
+            >
+              重新扫描
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={origin === 'MANUAL' && loading}
+              onClick={() => {
+                setSelectedSymbol(null)
+                void runManualScan(toApiParams({ ...draft }))
+              }}
+            >
+              应用阈值
+            </Button>
+          </div>
         }
       >
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -427,7 +174,6 @@ export function ShortTermPage() {
           <p className="text-xs leading-relaxed text-ink-500">
             参考带只影响估值语境分和风险提示，不决定股票是否入选；低流动性、长期横盘、急拉和离均线过远仍受约束。
           </p>
-          <Button variant="secondary" disabled={origin === 'MANUAL' && loading} onClick={() => void runManualScan({ ...draft })}>应用阈值</Button>
         </div>
       </Card>
 
@@ -467,14 +213,6 @@ export function ShortTermPage() {
                 <MarketFundDirectionCard direction={report.marketFundDirection} />
               ) : null}
             </div>
-          ) : null}
-
-          {report.candidates.length ? (
-            <BacktestSummaryPanel
-              report={backtestReport}
-              loading={backtestLoading}
-              error={backtestError}
-            />
           ) : null}
 
           <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧候选</span>} flush>
@@ -705,34 +443,6 @@ function HotDirectionsCard({ directions }: { directions: ShortTermHotDirection[]
   )
 }
 
-export function ScheduledScanPulse({ snapshot }: { snapshot: ShortTermScheduledSnapshot }) {
-  return (
-    <section className="overflow-hidden rounded-lg border border-sky-200 bg-sky-50/70 px-4 py-3 text-sky-900">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="relative flex h-9 w-9 items-center justify-center rounded-full border border-sky-300 bg-white">
-            <span className="absolute h-9 w-9 animate-ping rounded-full bg-sky-200 opacity-40" />
-            <RefreshCw className="relative h-4 w-4 animate-spin" aria-hidden="true" />
-          </span>
-          <div>
-            <p className="text-sm font-semibold">14:45 自动扫描正在执行</p>
-            <p className="mt-0.5 text-xs leading-relaxed text-sky-700">
-              页面正在跟随后台计划任务刷新，完成后会自动切换到最新候选。
-            </p>
-          </div>
-        </div>
-        <div className="text-right text-xs text-sky-700">
-          <p className="font-mono">{snapshot.tradeDate}</p>
-          <p>{snapshot.message || '后台扫描中'}</p>
-        </div>
-      </div>
-      <div className="mt-3 h-1 overflow-hidden rounded-full bg-sky-100">
-        <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-500" />
-      </div>
-    </section>
-  )
-}
-
 function toApiParams(params: DraftParams): ShortTermParams {
   return {
     limit: params.limit,
@@ -748,17 +458,6 @@ function toApiParams(params: DraftParams): ShortTermParams {
     allowStaticCachePreview: params.allowStaticCachePreview,
     allowChiNext: params.allowChiNext
   }
-}
-
-function isScheduledScanRunning(snapshot: ShortTermScheduledSnapshot) {
-  return snapshot.status === 'RUNNING' && !snapshot.message.includes('等待 ')
-}
-
-function visibleSnapshotReport(snapshot: ShortTermScheduledSnapshot) {
-  if (snapshot.status === 'DATA_BLOCKED' || snapshot.status === 'FAILED' || snapshot.status === 'RUNNING') {
-    return null
-  }
-  return snapshot.report
 }
 
 function MarketFundDirectionCard({ direction }: { direction?: ShortTermMarketFundDirection | null }) {
@@ -842,24 +541,6 @@ function FundDirectionList({
       </div>
     </div>
   )
-}
-
-function snapshotFromManualJob(job: ShortTermScanJobStatus): ShortTermScheduledSnapshot {
-  return {
-    tradeDate: job.tradeDate,
-    stage: 'MANUAL',
-    status: job.resultStatus,
-    strategyVersion: job.strategyVersion,
-    message: job.message,
-    dataCutoffAt: job.report?.dataCutoffAt ?? null,
-    completedAt: job.finishedAt,
-    blockedReasons: job.blockedReasons,
-    report: job.report
-  }
-}
-
-function currentShanghaiDate() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
 }
 
 function shortTermDiagnostics(report: ShortTermReport | null) {
@@ -1273,90 +954,6 @@ function EvidenceCompletenessPanel({ completeness }: { completeness: ShortTermCa
   )
 }
 
-function BacktestSummaryPanel({
-  report,
-  loading,
-  error
-}: {
-  report: OvernightBacktestReport | null
-  loading: boolean
-  error: string
-}) {
-  if (loading && !report) {
-    return (
-      <div className="rounded-lg border border-line-soft bg-line-soft/30 p-3">
-        <Loader text="技术信号历史验证中" />
-      </div>
-    )
-  }
-  if (error && !report) {
-    return (
-      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-700">
-        技术信号历史验证暂不可用：{error}
-      </div>
-    )
-  }
-  if (!report) {
-    return (
-      <div className="rounded-lg border border-line-soft bg-line-soft/30 p-3">
-        <Tag tone="neutral">技术信号历史验证</Tag>
-        <p className="mt-2 text-xs leading-relaxed text-ink-500">暂无可用技术信号历史样本。</p>
-      </div>
-    )
-  }
-  if (report.status === 'DATA_BLOCKED') {
-    return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-3">
-        <Tag tone="danger">技术验证数据阻断</Tag>
-        <p className="mt-2 text-xs leading-relaxed text-red-700">{report.message}</p>
-      </div>
-    )
-  }
-  const { summary } = report
-  const gaps = report.results.filter((result) =>
-    result.status === 'SOURCE_FAILED' || result.status === 'INSUFFICIENT_HISTORY')
-  return (
-    <div className="rounded-lg border border-line-soft bg-line-soft/30 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Tag tone="neutral">技术信号历史验证</Tag>
-          <Tag tone={backtestTone(summary)}>{backtestSupportLabel(summary)}</Tag>
-        </div>
-        <span className="tabular text-xs font-semibold text-ink-500">{summary.sampleCount} 笔隔夜样本</span>
-      </div>
-      {report.status === 'PARTIAL' ? (
-        <div className="mt-3 border-l-2 border-amber-300 pl-3 text-xs leading-relaxed text-amber-700">
-          <p>{report.message}</p>
-          {gaps.map((result) => (
-            <p key={result.symbol} className="mt-1">
-              <span className="font-mono font-semibold">{result.symbol}</span>
-              {' · '}
-              {result.dataGaps[0] ?? result.status}
-            </p>
-          ))}
-        </div>
-      ) : null}
-      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3">
-        <Metric label="正收益率" value={formatPercent(summary.positiveRatePercent)} compact />
-        <Metric label="均值收益" value={<span className={changeClass(summary.averageReturnPercent)}>{formatPercent(summary.averageReturnPercent)}</span>} compact />
-        <Metric label="中位收益" value={<span className={changeClass(summary.medianReturnPercent)}>{formatPercent(summary.medianReturnPercent)}</span>} compact />
-        <Metric label="均值回撤" value={formatPercent(summary.averageDrawdownPercent)} compact />
-        <Metric label="第一目标" value={formatPercent(summary.firstTargetRatePercent)} compact />
-        <Metric label="第二目标" value={formatPercent(summary.secondTargetRatePercent)} compact />
-        <Metric label="硬止损" value={formatPercent(summary.hardStopRatePercent)} compact />
-        <Metric label="时间退出" value={formatPercent(summary.timeStopRatePercent)} compact />
-        <Metric label="次日低开" value={formatPercent(summary.gapDownRatePercent)} compact />
-      </div>
-      <p className="mt-2 text-xs leading-relaxed text-ink-500">
-        已回放：{report.validationScope.join('；')}。仅表示技术信号历史验证，不代表完整生产策略表现。
-      </p>
-      <p className="mt-1 text-xs leading-relaxed text-ink-500">
-        未回放：{report.unreplayedGates.join('、')}。
-      </p>
-    </div>
-  )
-}
-
 function shortTermFactorContext(
   candidate: ShortTermCandidate,
   recommendationToken: string | null
@@ -1422,21 +1019,6 @@ function turnoverBandLabel(band: string | null | undefined) {
   if (band === 'INSUFFICIENT') return '活跃不足'
   if (band === 'OVERHEATED') return '换手过热'
   return '待补充'
-}
-
-function backtestTone(summary: OvernightBacktestSummary): 'success' | 'brand' | 'warning' | 'neutral' {
-  if (summary.conclusion.includes('支持')) return 'success'
-  if (summary.conclusion.includes('正收益')) return 'brand'
-  if (summary.conclusion.includes('偏弱')) return 'warning'
-  return 'neutral'
-}
-
-function backtestSupportLabel(summary: OvernightBacktestSummary) {
-  if (summary.sampleCount < 5) return '样本少'
-  if (summary.conclusion.includes('支持')) return '支持'
-  if (summary.conclusion.includes('正收益')) return '可参考'
-  if (summary.conclusion.includes('偏弱')) return '偏弱'
-  return '波动大'
 }
 
 function NumberField({

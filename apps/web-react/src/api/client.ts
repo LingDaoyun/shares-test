@@ -10,11 +10,11 @@ import type {
   InvestmentDecisionReport,
   LongTermCandidateContext,
   MarketScanReport,
+  ManualTradeFillRequest,
   MispricingReport,
   PolicyTheme,
   RecommendationEvidenceBundle,
   ShortTermReport,
-  ShortTermScheduledSnapshot,
   ShortTermScanJobStatus,
   RuleDefinition,
   PolicySourceConfig,
@@ -126,10 +126,6 @@ export interface ShortTermParams {
 
 export function fetchShortTermReport(params: ShortTermParams = {}) {
   return http.get<ShortTermReport>('/short-term/report', { params }).then((res) => res.data)
-}
-
-export function fetchLatestShortTermScheduledSnapshot() {
-  return http.get<ShortTermScheduledSnapshot>('/short-term/scheduled-snapshots/latest').then((res) => res.data)
 }
 
 export function startShortTermScanJob(params: ShortTermParams = {}) {
@@ -261,6 +257,10 @@ export function fetchTradeCase(caseId: string) {
 
 export function createTradeCase(request: CreateTradeCaseRequest) {
   return http.post<TradeCaseDetail>('/trade-cases', request).then((res) => res.data)
+}
+
+export function recordManualTradeFill(request: ManualTradeFillRequest) {
+  return http.post<TradeCaseDetail>('/trade-cases/manual-fills', request).then((res) => res.data)
 }
 
 export function addTradeFill(caseId: string, request: UpsertTradeFillRequest) {
