@@ -465,8 +465,7 @@ class EastMoneyClientTest {
                 false,
                 12,
                 2,
-                6,
-                List.of()
+                6
         );
     }
 

@@ -1,7 +1,7 @@
 package com.aistock.research.integration.gov;
 
-import com.aistock.research.config.LiveDataProperties;
-import com.aistock.research.config.LiveDataProperties.PolicySourceProperties;
+import com.aistock.research.configuration.PolicySourceConfig;
+import com.aistock.research.configuration.RuntimeConfigStore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jsoup.Jsoup;
@@ -30,12 +30,16 @@ public class GovPolicyClient {
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
-    private final LiveDataProperties properties;
+    private final RuntimeConfigStore runtimeConfigStore;
 
-    public GovPolicyClient(RestClient restClient, ObjectMapper objectMapper, LiveDataProperties properties) {
+    public GovPolicyClient(
+            RestClient restClient,
+            ObjectMapper objectMapper,
+            RuntimeConfigStore runtimeConfigStore
+    ) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
-        this.properties = properties;
+        this.runtimeConfigStore = runtimeConfigStore;
     }
 
     public List<GovPolicyItem> fetchLatestPolicies(int limit) {
@@ -49,9 +53,9 @@ public class GovPolicyClient {
     public GovPolicyFetchResult fetchLatestPoliciesWithStatus(int limit) {
         Map<String, GovPolicyItem> items = new LinkedHashMap<>();
         List<String> failedSources = new ArrayList<>();
-        List<PolicySourceProperties> sources = policySources();
+        List<PolicySourceConfig> sources = List.copyOf(runtimeConfigStore.readPolicySources());
         int perSourceLimit = Math.max(8, (int) Math.ceil(limit / (double) Math.max(sources.size(), 1)));
-        for (PolicySourceProperties source : sources) {
+        for (PolicySourceConfig source : sources) {
             try {
                 for (GovPolicyItem item : fetchFromSource(source, perSourceLimit)) {
                     items.putIfAbsent(dedupKey(item), item);
@@ -67,7 +71,7 @@ public class GovPolicyClient {
         );
     }
 
-    private List<GovPolicyItem> fetchFromSource(PolicySourceProperties source, int limit) {
+    private List<GovPolicyItem> fetchFromSource(PolicySourceConfig source, int limit) {
         String body = restClient.get()
                 .uri(URI.create(source.url()))
                 .header("User-Agent", "Mozilla/5.0 AI-Stock-Research/0.1")
@@ -82,7 +86,7 @@ public class GovPolicyClient {
         return parseHtmlSource(source, body, limit);
     }
 
-    private List<GovPolicyItem> parseJsonSource(PolicySourceProperties source, String body, int limit) {
+    private List<GovPolicyItem> parseJsonSource(PolicySourceConfig source, String body, int limit) {
         try {
             JsonNode root = objectMapper.readTree(body);
             List<GovPolicyItem> items = new ArrayList<>();
@@ -112,7 +116,7 @@ public class GovPolicyClient {
         }
     }
 
-    private List<GovPolicyItem> parseHtmlSource(PolicySourceProperties source, String body, int limit) {
+    private List<GovPolicyItem> parseHtmlSource(PolicySourceConfig source, String body, int limit) {
         Document document = Jsoup.parse(body, source.url());
         List<GovPolicyItem> items = new ArrayList<>();
         for (Element link : document.select("a[href]")) {
@@ -135,13 +139,6 @@ public class GovPolicyClient {
             ));
         }
         return items;
-    }
-
-    private List<PolicySourceProperties> policySources() {
-        if (properties.policySources() != null && !properties.policySources().isEmpty()) {
-            return properties.policySources();
-        }
-        return List.of(new PolicySourceProperties("中国政府网", "json", properties.govPolicyUrl(), 100));
     }
 
     private String firstText(JsonNode node, String... fields) {
@@ -183,11 +180,11 @@ public class GovPolicyClient {
 
     private List<GovPolicyItem> selectDiversePolicies(
             List<GovPolicyItem> items,
-            List<PolicySourceProperties> sources,
+            List<PolicySourceConfig> sources,
             int limit
     ) {
         Map<String, List<GovPolicyItem>> bySource = new LinkedHashMap<>();
-        for (PolicySourceProperties source : sources) {
+        for (PolicySourceConfig source : sources) {
             bySource.put(source.name(), new ArrayList<>());
         }
         for (GovPolicyItem item : items) {
@@ -261,7 +258,7 @@ public class GovPolicyClient {
         return value.length() == 1 ? "0" + value : value;
     }
 
-    private int sourceWeight(PolicySourceProperties source) {
+    private int sourceWeight(PolicySourceConfig source) {
         return source.weight() <= 0 ? 60 : source.weight();
     }
 
