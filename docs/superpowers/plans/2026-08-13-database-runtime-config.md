@@ -701,25 +701,18 @@ git commit -m "feat: show database-backed runtime settings"
 - Consumes: completed database configuration runtime.
 - Produces: API startup and Compose operation with no Nacos process, client, profile, or current operational instruction.
 
-- [ ] **Step 1: Add a dependency/deployment contract test**
+- [ ] **Step 1: Capture the current runtime/dependency evidence**
 
-Create or extend a small resource-level test (for example `RuntimeConfigurationContractTest`) that reads the module POM, `application.yml`, and repository Compose file and asserts:
-
-```java
-assertThat(apiPom).doesNotContain("nacos-config", "nacos-discovery");
-assertThat(applicationYaml).doesNotContain("profiles:\n    default: nacos", "spring.cloud.nacos");
-assertThat(compose).doesNotContain("NACOS_SERVER_ADDR", "ai-stock-nacos", "nacos-data");
-```
-
-- [ ] **Step 2: Run the contract test and verify RED**
+Run the real build/deployment consumers before editing:
 
 ```bash
-mvn -pl apps/api -Dtest=RuntimeConfigurationContractTest test
+mvn -pl apps/api dependency:tree -Dincludes=com.alibaba.cloud
+docker compose config
 ```
 
-Expected: test fails on the current Nacos dependencies and Compose content.
+Expected before removal: Maven resolves both Alibaba Nacos starters and rendered Compose contains the Nacos variables/service. This is diagnostic evidence, not a source-text unit test.
 
-- [ ] **Step 3: Remove Nacos runtime code and resources**
+- [ ] **Step 2: Remove Nacos runtime code and resources**
 
 Remove both Alibaba dependencies from `apps/api/pom.xml`, remove `@EnableDiscoveryClient`, delete `application-nacos.yml`, and remove the Nacos default Profile and cloud block from `application.yml`.
 
@@ -727,7 +720,7 @@ Delete the Nacos service, environment variables, and volume from Compose. Keep t
 
 Before deleting `infra/nacos`, compare every short-term value against the effective `application.yml` and Java defaults. Do not copy dormant values that differ from the currently effective runtime. Specifically, do not change the active V4 financial-score threshold merely because the unused local Nacos file contains another value.
 
-- [ ] **Step 4: Replace current operations documentation**
+- [ ] **Step 3: Replace current operations documentation**
 
 Write `docs/runtime-config.md` with:
 
@@ -741,17 +734,18 @@ Diagnostics: GET /api/runtime-config and GET /api/ai/llm-config
 
 Update README and architecture to describe the modular monolith and database runtime configuration. Delete `docs/nacos-config.md`. Do not rewrite old dated specs/plans.
 
-- [ ] **Step 5: Run contracts and repository scans**
+- [ ] **Step 4: Run build/deployment consumers and repository scans**
 
 ```bash
-mvn -pl apps/api -Dtest=RuntimeConfigurationContractTest,SchemaCompatibilityTest test
+mvn -pl apps/api -Dtest=SchemaCompatibilityTest test
+mvn -pl apps/api dependency:tree -Dincludes=com.alibaba.cloud
 docker compose config > /tmp/shares-test-compose.txt
 rg -n -i "nacos" apps/api/src/main apps/web-react/src apps/web/src docker-compose.yml scripts infra README.md docs/architecture.md docs/runtime-config.md
 ```
 
-Expected: tests pass; Compose renders; the final `rg` returns no current runtime reference. Historical `docs/superpowers` references are intentionally outside this scan.
+Expected: schema tests pass; dependency output contains no Alibaba Nacos artifact; Compose renders; the final `rg` returns no current runtime reference. Historical `docs/superpowers` references are intentionally outside this scan.
 
-- [ ] **Step 6: Commit Nacos removal**
+- [ ] **Step 5: Commit Nacos removal**
 
 ```bash
 git add apps/api/pom.xml apps/api/src/main apps/api/src/test \
@@ -775,7 +769,7 @@ git commit -m "refactor: remove nacos from modular monolith"
 - [ ] **Step 1: Run the focused backend suite**
 
 ```bash
-mvn -pl apps/api -Dtest='RuntimeConfig*Test,LlmSettingsProviderTest,LlmTrendAnalysisServiceTest,GovPolicyClientTest,SchemaCompatibilityTest,RuntimeConfigurationContractTest' test
+mvn -pl apps/api -Dtest='RuntimeConfig*Test,LlmSettingsProviderTest,LlmTrendAnalysisServiceTest,GovPolicyClientTest,SchemaCompatibilityTest' test
 ```
 
 Expected: all focused tests pass with no warnings containing a key value.
