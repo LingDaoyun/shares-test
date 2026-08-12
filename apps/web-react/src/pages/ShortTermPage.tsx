@@ -698,6 +698,18 @@ function CandidateDetail({
           {candidate.score.fundFlowAdjustment != null ? (
             <ScoreMetric label="资金流微调（最多±2）" value={candidate.score.fundFlowAdjustment} />
           ) : null}
+          {candidate.score.marketHeatContribution != null ? (
+            <ScoreMetric label="热点方向修正（最多±2）" value={candidate.score.marketHeatContribution} />
+          ) : null}
+          {candidate.score.relativeStrengthContribution != null ? (
+            <ScoreMetric label="相对强度修正（最多±4）" value={candidate.score.relativeStrengthContribution} />
+          ) : null}
+          {candidate.score.industryLeadershipContribution != null ? (
+            <ScoreMetric label="行业地位修正（最多±2）" value={candidate.score.industryLeadershipContribution} />
+          ) : null}
+          {candidate.score.crossSectionAdjustment != null ? (
+            <ScoreMetric label="横截面合计（最多±8）" value={candidate.score.crossSectionAdjustment} />
+          ) : null}
           <ScoreMetric label="排序分" value={candidate.score.rankingScore ?? candidate.score.finalScore} />
         </div>
 
@@ -717,6 +729,30 @@ function CandidateDetail({
           <Metric label="60/120日位置" value={`${formatNumber(candidate.technical.rangePosition60)}% / ${formatNumber(candidate.technical.rangePosition120)}%`} />
           <Metric label="120日高点回撤" value={`${formatNumber(candidate.technical.drawdownFrom120HighPercent)}%`} />
           <Metric label="站上20日线天数" value={candidate.technical.consecutiveAboveMa20Days} />
+          <Metric
+            label="5/10/20日涨幅"
+            value={candidate.relativeStrength
+              ? `${formatSignedPercent(candidate.relativeStrength.return5)} / ${formatSignedPercent(candidate.relativeStrength.return10)} / ${formatSignedPercent(candidate.relativeStrength.return20)}`
+              : '待补充'}
+          />
+          <Metric
+            label="市场5/10/20分位"
+            value={candidate.relativeStrength
+              ? `${formatNumber(candidate.relativeStrength.marketPercentile5)} / ${formatNumber(candidate.relativeStrength.marketPercentile10)} / ${formatNumber(candidate.relativeStrength.marketPercentile20)}`
+              : '待补充'}
+          />
+          <Metric
+            label="同行5/10/20分位"
+            value={candidate.relativeStrength
+              ? `${formatNumber(candidate.relativeStrength.industryPercentile5)} / ${formatNumber(candidate.relativeStrength.industryPercentile10)} / ${formatNumber(candidate.relativeStrength.industryPercentile20)}`
+              : '待补充'}
+          />
+          <Metric
+            label="行业成交额地位"
+            value={candidate.industryLeadership && candidate.industryLeadership.amountRank > 0
+              ? `${candidate.industryLeadership.amountRank}/${candidate.industryLeadership.cohortSize} · 分位 ${formatNumber(candidate.industryLeadership.percentile)}`
+              : '同行样本不足'}
+          />
           <Metric label="换手率" value={`${formatNumber(candidate.technical.momentumQuality?.turnoverRatePercent)}% · ${turnoverBandLabel(candidate.technical.momentumQuality?.turnoverBand)}`} />
           <Metric label="最新上影线" value={`${formatNumber(candidate.technical.momentumQuality?.latestUpperShadowPercent)}%`} />
           <Metric label="上影线中位数" value={`${formatNumber(candidate.technical.momentumQuality?.bullishUpperShadowMedian3Percent)}%`} />

@@ -155,15 +155,27 @@ class ShortTermManualResultGateTest {
     }
 
     @Test
-    void blocksUnreliableCoverage() {
+    void blocksCoverageBelowNinetyFiveEvenWhenSourceMarksItReliable() {
         ShortTermFinalResultGate.Result result = gate.evaluateManual(
                 report(
                         Instant.parse("2026-07-23T06:51:00Z"), true,
-                        new BigDecimal("0.99"), false, List.of()),
+                        new BigDecimal("0.9499"), true, List.of()),
                 DECISION_AT);
 
         assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
-        assertThat(result.blockedReasons()).containsExactly("COVERAGE_BELOW_90");
+        assertThat(result.blockedReasons()).containsExactly("COVERAGE_BELOW_95");
+    }
+
+    @Test
+    void acceptsCoverageAtExactNinetyFivePercentBoundary() {
+        ShortTermFinalResultGate.Result result = gate.evaluateManual(
+                report(
+                        Instant.parse("2026-07-23T06:51:00Z"), true,
+                        new BigDecimal("0.9500"), true, List.of()),
+                DECISION_AT);
+
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.NO_TRADE);
+        assertThat(result.blockedReasons()).isEmpty();
     }
 
     @Test

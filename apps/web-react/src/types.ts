@@ -649,7 +649,37 @@ export interface ShortTermScoreBreakdown {
   v2Rank?: number | null
   v3Rank?: number | null
   rankDelta?: number | null
+  relativeStrengthContribution?: number | null
+  industryLeadershipContribution?: number | null
+  marketHeatContribution?: number | null
+  crossSectionAdjustment?: number | null
   rankingScore?: number
+}
+
+export interface ShortTermRelativeStrength {
+  return5: number | null
+  return10: number | null
+  return20: number | null
+  marketPercentile5: number | null
+  marketPercentile10: number | null
+  marketPercentile20: number | null
+  industryPercentile5: number | null
+  industryPercentile10: number | null
+  industryPercentile20: number | null
+  marketSampleCount: number
+  industrySampleCount: number
+  compositeScore: number | null
+  contribution: number
+  dataGaps: string[]
+}
+
+export interface ShortTermIndustryLeadership {
+  industry: string | null
+  cohortSize: number
+  amountRank: number
+  percentile: number | null
+  contribution: number
+  evidence: string
 }
 
 export type ChipVerificationStatus =
@@ -857,6 +887,24 @@ export interface ShortTermCandidate {
   evidence: ShortTermEvidence[]
   tradePlan: ShortTermTradePlan | null
   chip?: ShortTermChipSnapshot | null
+  relativeStrength?: ShortTermRelativeStrength | null
+  industryLeadership?: ShortTermIndustryLeadership | null
+}
+
+export interface ShortTermTechnicalReviewCoverage {
+  quotePreselectedCount: number
+  requestedCount: number
+  sufficientCount: number
+  missingCount: number
+  coverageRatio: number
+}
+
+export interface ShortTermCrossSectionContext {
+  marketUniverseCount: number
+  industryCount: number
+  relativeStrengthSampleCount: number
+  basis: string
+  dataGaps: string[]
 }
 
 export interface ShortTermReport {
@@ -880,6 +928,8 @@ export interface ShortTermReport {
   reviewedSymbols: string[]
   dataCutoffAt: string | null
   generatedAt: string
+  technicalReviewCoverage?: ShortTermTechnicalReviewCoverage | null
+  crossSectionContext?: ShortTermCrossSectionContext | null
 }
 
 export type ShortTermSnapshotStatus =

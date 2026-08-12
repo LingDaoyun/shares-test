@@ -243,6 +243,36 @@ class ShortTermServiceTest {
 
         assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9000");
         assertThat(report.coverage().executionReliable()).isFalse();
+        assertThat(report.candidates()).isNotEmpty();
+        assertThat(report.candidates()).allSatisfy(candidate -> {
+            assertThat(candidate.action()).isIn("MARKET_RISK_WAIT", "DATA_REVIEW");
+            assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
+            assertThat(candidate.tradePlan().status()).isEqualTo("BLOCKED");
+        });
+    }
+
+    @Test
+    void invalidQuotesNeverCountTowardTheNinetyFivePercentCoverageGate() {
+        List<EastMoneyQuote> valid = IntStream.range(0, 94)
+                .mapToObj(index -> quote(
+                        String.format("600%03d", index), "有效样本" + index,
+                        "10.62", "1.20", "18", "1.60", "600000000"))
+                .toList();
+        List<EastMoneyQuote> invalid = IntStream.range(94, 100)
+                .mapToObj(index -> quote(
+                        String.format("600%03d", index), "无价格样本" + index,
+                        "0", "1.20", "18", "1.60", "600000000"))
+                .toList();
+        eastMoneyClient.quotes = java.util.stream.Stream.concat(valid.stream(), invalid.stream()).toList();
+        eastMoneyClient.snapshotExpectedCount = 100;
+
+        ShortTermReport report = service.report(
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null)
+        );
+
+        assertThat(report.coverage().fetchedCount()).isEqualTo(94);
+        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9400");
+        assertThat(report.coverage().executionReliable()).isFalse();
     }
 
     @Test
@@ -354,9 +384,9 @@ class ShortTermServiceTest {
 
     @Test
     void shouldExposeCoverageAndKeepAbsentCompatibilityCoverageUnreliable() {
-        eastMoneyClient.quotes = IntStream.range(0, 9)
+        eastMoneyClient.quotes = IntStream.range(0, 19)
                 .mapToObj(index -> quote(
-                        "6001" + index,
+                        String.format("6001%02d", index),
                         "覆盖样本" + index,
                         "10.62",
                         "1.20",
@@ -365,18 +395,18 @@ class ShortTermServiceTest {
                         "600000000"
                 ))
                 .toList();
-        eastMoneyClient.snapshotExpectedCount = 10;
+        eastMoneyClient.snapshotExpectedCount = 20;
         eastMoneyClient.snapshotComplete = false;
         eastMoneyClient.quotes.forEach(quote ->
                 eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "180000")));
 
         ShortTermReport report = service.report(
-                new ShortTermScanRequest(3, 100, 9, null, null, null, null, null, null, null, null)
+                new ShortTermScanRequest(3, 100, 19, null, null, null, null, null, null, null, null)
         );
 
-        assertThat(report.coverage().expectedCount()).isEqualTo(10);
-        assertThat(report.coverage().fetchedCount()).isEqualTo(9);
-        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9000");
+        assertThat(report.coverage().expectedCount()).isEqualTo(20);
+        assertThat(report.coverage().fetchedCount()).isEqualTo(19);
+        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9500");
         assertThat(report.coverage().executionReliable()).isTrue();
         assertThat(report.reviewedSymbols()).containsExactlyInAnyOrderElementsOf(eastMoneyClient.requestedKlineSymbols);
         assertThat(report.dataCutoffAt()).isEqualTo(Instant.parse("2026-07-07T06:58:00Z"));
@@ -1422,7 +1452,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldRequireIndustryLeaderBeforeTechnicalReview() {
+    void shouldKeepNonTopThreeIndustryStockAndApplySoftLeadershipPenalty() {
         eastMoneyClient.quotes = List.of(
                 quoteWithIndustry("600701", "行业龙头A", "光伏设备", "10.62", "1.20", "18.00", "1.60", "1800000000"),
                 quoteWithIndustry("600702", "行业龙头B", "光伏设备", "10.62", "1.10", "18.00", "1.60", "1500000000"),
@@ -1436,15 +1466,72 @@ class ShortTermServiceTest {
 
         ShortTermReport report = service.report(4, 100, 5, null, null, null, null, null, null, null);
 
-        assertThat(report.reviewedSymbols()).containsExactlyInAnyOrder("600701", "600702", "600703");
-        assertThat(report.reviewedSymbols()).doesNotContain("600704");
-        assertThat(report.exclusions()).filteredOn(exclusion -> "600704".equals(exclusion.symbol()))
-                .singleElement()
-                .satisfies(exclusion -> {
-                    assertThat(exclusion.category()).isEqualTo("INDUSTRY_LEADER_REQUIRED");
-                    assertThat(exclusion.reason()).contains("行业龙头");
-                });
-        assertThat(eastMoneyClient.requestedKlineSymbols).doesNotContain("600704");
+        assertThat(report.reviewedSymbols()).containsExactlyInAnyOrder("600701", "600702", "600703", "600704");
+        assertThat(report.exclusions()).filteredOn(exclusion -> "600704".equals(exclusion.symbol())).isEmpty();
+        assertThat(eastMoneyClient.requestedKlineSymbols).contains("600704");
+        ShortTermCandidate follower = find(report, "600704");
+        assertThat(follower.industryLeadership().amountRank()).isEqualTo(4);
+        assertThat(follower.industryLeadership().contribution()).isNegative();
+    }
+
+    @Test
+    void hotDirectionUsesFullQuoteUniverseBeforeLiquidityAndChaseFilters() {
+        eastMoneyClient.quotes = List.of(
+                quoteWithIndustry("600711", "热点可交易", "新材料", "10.62", "1.20", "18", "1.6", "600000000"),
+                quoteWithIndustry("600712", "热点低流动", "新材料", "10.62", "2.50", "18", "1.6", "1000000"),
+                quoteWithIndustry("600713", "热点过热", "新材料", "10.62", "8.50", "18", "1.6", "800000000"),
+                quoteWithIndustry("300711", "创业板背景样本", "新材料", "10.62", "2.10", "18", "1.6", "500000000")
+        );
+        eastMoneyClient.klines.put("600711", rightEarlyKLines("600711", "10.62", "180000"));
+        eastMoneyClient.financials.put("600711", goodFinancial("600711"));
+
+        ShortTermReport report = service.report(3, 100, 10, null, null, null, null, null, null, null);
+
+        assertThat(report.hotDirections()).filteredOn(direction -> "新材料".equals(direction.label()))
+                .singleElement().satisfies(direction -> assertThat(direction.sampleCount()).isEqualTo(4));
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("300711");
+        assertThat(find(report, "600711").score().marketHeatContribution()).isNotZero();
+    }
+
+    @Test
+    void reportsMarketAndTechnicalCoverageSeparatelyWithoutAllowingSubstitution() {
+        eastMoneyClient.quotes = IntStream.range(0, 95)
+                .mapToObj(index -> quoteWithIndustry(
+                        String.format("600%03d", index), "样本" + index, "行业" + index,
+                        "10.62", "1.20", "18", "1.6", "600000000"))
+                .toList();
+        eastMoneyClient.snapshotExpectedCount = 100;
+        eastMoneyClient.quotes.forEach(quote ->
+                eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "180000")));
+
+        ShortTermReport report = service.report(
+                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null));
+
+        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9500");
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.technicalReviewCoverage().quotePreselectedCount()).isEqualTo(95);
+        assertThat(report.technicalReviewCoverage().requestedCount()).isEqualTo(10);
+        assertThat(report.technicalReviewCoverage().sufficientCount()).isEqualTo(10);
+        assertThat(report.technicalReviewCoverage().coverageRatio()).isEqualByComparingTo("0.1053");
+    }
+
+    @Test
+    void removesFutureKLinesFromBothTechnicalAndRelativeStrengthAnalysis() {
+        eastMoneyClient.quotes = List.of(
+                quote("600721", "点时样本", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        List<EastMoneyKLine> rows = new ArrayList<>(rightEarlyKLines("600721", "10.62", "180000"));
+        rows.add(kline("600721", LocalDate.parse("2026-07-08"), new BigDecimal("88.00"), "999999"));
+        eastMoneyClient.klines.put("600721", rows);
+        eastMoneyClient.financials.put("600721", goodFinancial("600721"));
+
+        ShortTermCandidate candidate = find(
+                service.report(3, 100, 10, null, null, null, null, null, null, null),
+                "600721"
+        );
+
+        assertThat(candidate.technical().tradeDate()).isBeforeOrEqualTo(LocalDate.parse("2026-07-07"));
+        assertThat(candidate.relativeStrength().dataGaps()).anyMatch(gap -> gap.contains("未来K线"));
     }
 
     @Test

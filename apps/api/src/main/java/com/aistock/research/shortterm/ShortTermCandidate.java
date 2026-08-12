@@ -42,8 +42,19 @@ public record ShortTermCandidate(
         EvidenceCompleteness evidenceCompleteness,
         List<ShortTermEvidence> evidence,
         ShortTermTradePlan tradePlan,
-        ShortTermChipSnapshot chip
+        ShortTermChipSnapshot chip,
+        ShortTermRelativeStrength relativeStrength,
+        ShortTermIndustryLeadership industryLeadership
 ) {
+    public ShortTermCandidate {
+        relativeStrength = relativeStrength == null
+                ? ShortTermRelativeStrength.unavailable("历史报告未包含相对强度快照")
+                : relativeStrength;
+        industryLeadership = industryLeadership == null
+                ? ShortTermIndustryLeadership.unavailable(industry, "历史报告未包含行业领导力快照")
+                : industryLeadership;
+    }
+
     public ShortTermCandidate(
             int rank,
             String symbol,
@@ -84,7 +95,9 @@ public record ShortTermCandidate(
                 phase, phaseLabel, action, actionLabel, reason, todayAdvice, tailSignal,
                 score, technical, financial, buyZoneLow, buyZoneHigh, stopPrice,
                 strengths, risks, entryRules, exitRules, evidenceCompleteness, evidence,
-                tradePlan, null
+                tradePlan, null,
+                ShortTermRelativeStrength.unavailable("历史报告未包含相对强度快照"),
+                ShortTermIndustryLeadership.unavailable(industry, "历史报告未包含行业领导力快照")
         );
     }
 }

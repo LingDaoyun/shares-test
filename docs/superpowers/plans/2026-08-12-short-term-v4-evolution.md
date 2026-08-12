@@ -50,16 +50,16 @@
 - create `ShortTermRelativeStrength.java`
 - modify `ShortTermService.java`, report/score records, and tests
 
-- [ ] Calculate market/industry heat from the unfiltered quote universe.
-- [ ] Replace industry-turnover top-three hard exclusion with a soft leadership percentile.
-- [ ] Calculate 5/10/20-day candidate relative strength without optimistic missing-data defaults.
-- [ ] Add bounded, visible cross-section contributions to ranking.
-- [ ] Preserve full-universe coverage counts separately from K-line-reviewed counts.
-- [ ] Assert `marketQuoteCoverage = valid unique in-scope quotes / source-reported in-scope total`; assert `technicalReviewCoverage = technically reviewed / quote-preselected` and never reuse one as the other.
-- [ ] Assert market quote coverage below 95% remains `DATA_BLOCKED/NO_TRADE` regardless of technical-review coverage.
-- [ ] Add tests for circular-filter prevention, small early leaders, missing cohorts, and deterministic ties.
-- [ ] Reviewer Agent checks universe chronology, look-ahead safety, ranking stability, and explainability.
-- [ ] Fix findings, re-run tests, and commit the phase.
+- [x] Calculate market/industry heat from the unfiltered quote universe.
+- [x] Replace industry-turnover top-three hard exclusion with a soft leadership percentile.
+- [x] Calculate 5/10/20-day candidate relative strength without optimistic missing-data defaults.
+- [x] Add bounded, visible cross-section contributions to ranking.
+- [x] Preserve full-universe coverage counts separately from K-line-reviewed counts.
+- [x] Assert `marketQuoteCoverage = valid unique in-scope quotes / source-reported in-scope total`; assert `technicalReviewCoverage = technically reviewed / quote-preselected` and never reuse one as the other.
+- [x] Assert market quote coverage below 95% remains `DATA_BLOCKED/NO_TRADE` regardless of technical-review coverage.
+- [x] Add tests for circular-filter prevention, small early leaders, missing cohorts, and deterministic ties.
+- [x] Reviewer Agent checks universe chronology, look-ahead safety, ranking stability, and explainability.
+- [x] Fix findings, re-run tests, and commit the phase.
 
 ## Phase 3: Volatility Normalization And Market Regime
 

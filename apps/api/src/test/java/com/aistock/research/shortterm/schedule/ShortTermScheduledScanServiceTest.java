@@ -226,7 +226,7 @@ class ShortTermScheduledScanServiceTest {
         assertFinalBlocked(
                 finalReport(List.of(mock(ShortTermCandidate.class)), NOW.minusSeconds(20),
                         reliableCoverage("0.89")),
-                "COVERAGE_BELOW_90");
+                "COVERAGE_BELOW_95");
         assertFinalBlocked(
                 finalReport(List.of(mock(ShortTermCandidate.class)),
                         Instant.parse("2026-07-22T06:50:00Z"), reliableCoverage("0.95")),

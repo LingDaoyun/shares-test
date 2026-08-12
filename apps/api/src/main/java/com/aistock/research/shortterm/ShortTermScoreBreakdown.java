@@ -27,6 +27,10 @@ public record ShortTermScoreBreakdown(
         Integer v2Rank,
         Integer v3Rank,
         Integer rankDelta,
+        BigDecimal relativeStrengthContribution,
+        BigDecimal industryLeadershipContribution,
+        BigDecimal marketHeatContribution,
+        BigDecimal crossSectionAdjustment,
         BigDecimal rankingScore
 ) {
     public ShortTermScoreBreakdown(
@@ -68,6 +72,10 @@ public record ShortTermScoreBreakdown(
                 null,
                 null,
                 null,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
                 rankingScore
         );
     }
@@ -106,6 +114,10 @@ public record ShortTermScoreBreakdown(
                 null,
                 null,
                 null,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
                 finalScore
         );
     }

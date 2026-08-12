@@ -18,7 +18,7 @@ import java.util.Optional;
 @Component
 public class ShortTermFinalResultGate {
 
-    private static final BigDecimal MINIMUM_COVERAGE = new BigDecimal("0.90");
+    private static final BigDecimal MINIMUM_COVERAGE = new BigDecimal("0.95");
 
     private final ShortTermAutomationSettings settings;
     private final TradingClockService tradingClock;
@@ -118,7 +118,7 @@ public class ShortTermFinalResultGate {
         if (coverage == null || !coverage.executionReliable()
                 || coverage.coverageRatio() == null
                 || coverage.coverageRatio().compareTo(MINIMUM_COVERAGE) < 0) {
-            return Optional.of(new Failure("COVERAGE_BELOW_90", "全市场行情覆盖率低于90%"));
+            return Optional.of(new Failure("COVERAGE_BELOW_95", "全市场行情覆盖率低于95%"));
         }
         Instant cutoff = report.dataCutoffAt();
         if (cutoff == null) {

@@ -26,7 +26,9 @@ public record ShortTermReport(
         ShortTermCoverageSnapshot coverage,
         List<String> reviewedSymbols,
         Instant dataCutoffAt,
-        Instant generatedAt
+        Instant generatedAt,
+        ShortTermTechnicalReviewCoverage technicalReviewCoverage,
+        ShortTermCrossSectionContext crossSectionContext
 ) {
     public ShortTermReport {
         methodology = methodology == null ? List.of() : List.copyOf(methodology);
@@ -39,6 +41,44 @@ public record ShortTermReport(
         tradeCaptureTokens = tradeCaptureTokens == null ? Map.of() : Map.copyOf(tradeCaptureTokens);
         coverage = coverage == null ? ShortTermCoverageSnapshot.unreliable() : coverage;
         reviewedSymbols = reviewedSymbols == null ? List.of() : List.copyOf(reviewedSymbols);
+        technicalReviewCoverage = technicalReviewCoverage == null
+                ? ShortTermTechnicalReviewCoverage.unavailable()
+                : technicalReviewCoverage;
+        crossSectionContext = crossSectionContext == null
+                ? ShortTermCrossSectionContext.unavailable()
+                : crossSectionContext;
+    }
+
+    public ShortTermReport(
+            String scope,
+            int universeCount,
+            int reviewedCount,
+            int klineReviewedCount,
+            int candidateCount,
+            String quoteNote,
+            TradingSessionSnapshot tradingSession,
+            List<String> methodology,
+            ShortTermRuleSet ruleSet,
+            ShortTermWeightProfile weightProfile,
+            List<ShortTermCandidate> candidates,
+            List<ShortTermHotDirection> hotDirections,
+            ShortTermMarketSentiment marketSentiment,
+            ShortTermMarketFundDirection marketFundDirection,
+            List<ShortTermRiskExclusion> exclusions,
+            Map<String, String> tradeCaptureTokens,
+            ShortTermCoverageSnapshot coverage,
+            List<String> reviewedSymbols,
+            Instant dataCutoffAt,
+            Instant generatedAt
+    ) {
+        this(
+                scope, universeCount, reviewedCount, klineReviewedCount, candidateCount,
+                quoteNote, tradingSession, methodology, ruleSet, weightProfile, candidates,
+                hotDirections, marketSentiment, marketFundDirection, exclusions, tradeCaptureTokens,
+                coverage, reviewedSymbols, dataCutoffAt, generatedAt,
+                ShortTermTechnicalReviewCoverage.unavailable(),
+                ShortTermCrossSectionContext.unavailable()
+        );
     }
 
     public ShortTermReport(

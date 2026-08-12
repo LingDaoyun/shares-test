@@ -173,6 +173,10 @@ const candidate = (symbol: string, name = `候选${symbol}`) => ({
     finalScore: 74,
     stageAdjustment: 11,
     fundFlowAdjustment: 1.2,
+    marketHeatContribution: 1,
+    relativeStrengthContribution: 2.4,
+    industryLeadershipContribution: -0.4,
+    crossSectionAdjustment: 3,
     rankingScore: 85
   },
   technical: {
@@ -226,7 +230,31 @@ const candidate = (symbol: string, name = `候选${symbol}`) => ({
     riskControls: []
   },
   evidence: [],
-  tradePlan: null
+  tradePlan: null,
+  relativeStrength: {
+    return5: 3.2,
+    return10: 6.8,
+    return20: 12.5,
+    marketPercentile5: 72,
+    marketPercentile10: 80,
+    marketPercentile20: 88,
+    industryPercentile5: 66,
+    industryPercentile10: 75,
+    industryPercentile20: 84,
+    marketSampleCount: 120,
+    industrySampleCount: 12,
+    compositeScore: 82,
+    contribution: 2.4,
+    dataGaps: []
+  },
+  industryLeadership: {
+    industry: '电力',
+    cohortSize: 20,
+    amountRank: 7,
+    percentile: 68,
+    contribution: -0.4,
+    evidence: '当前成交额排名 7/20'
+  }
 })
 
 function reportWithCandidates(
@@ -400,6 +428,10 @@ describe('ShortTermPage manual scan flow', () => {
     expect(document.body.textContent).toContain('四因子原始分')
     expect(document.body.textContent).toContain('阶段校准')
     expect(document.body.textContent).toContain('资金流微调（最多±2）')
+    expect(document.body.textContent).toContain('热点方向修正（最多±2）')
+    expect(document.body.textContent).toContain('相对强度修正（最多±4）')
+    expect(document.body.textContent).toContain('行业地位修正（最多±2）')
+    expect(document.body.textContent).toContain('横截面合计（最多±8）')
     expect(document.body.textContent).toContain('排序分')
     expect(document.body.textContent).not.toContain('综合分')
     expect(document.body.textContent).toContain('换手率')
@@ -407,6 +439,11 @@ describe('ShortTermPage manual scan flow', () => {
     expect(document.body.textContent).toContain('上影线中位数')
     expect(document.body.textContent).toContain('18.00%')
     expect(document.body.textContent).toContain('盘中暂定')
+    expect(document.body.textContent).toContain('5/10/20日涨幅')
+    expect(document.body.textContent).toContain('市场5/10/20分位')
+    expect(document.body.textContent).toContain('同行5/10/20分位')
+    expect(document.body.textContent).toContain('行业成交额地位')
+    expect(document.body.textContent).toContain('7/20')
   })
 
   it('shows lower-shadow support confirmation and its independent evidence', async () => {

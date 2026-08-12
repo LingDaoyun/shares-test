@@ -6,7 +6,9 @@ import com.aistock.research.market.MarketScanScoreBreakdown;
 import com.aistock.research.tech.TechTrackedStock;
 import com.aistock.research.tech.TechTrackingReport;
 import com.aistock.research.shortterm.ShortTermCoverageSnapshot;
+import com.aistock.research.shortterm.ShortTermCrossSectionContext;
 import com.aistock.research.shortterm.ShortTermReport;
+import com.aistock.research.shortterm.ShortTermTechnicalReviewCoverage;
 import com.aistock.research.trading.TradingAdvice;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -147,6 +149,10 @@ class RecommendationAttestationServiceTest {
                 "实时行情",
                 NOW.minusSeconds(10)
         );
+        ShortTermTechnicalReviewCoverage technicalCoverage = ShortTermTechnicalReviewCoverage.of(20, 10, 9);
+        ShortTermCrossSectionContext crossSectionContext = new ShortTermCrossSectionContext(
+                95, 12, 9, "点时全市场", List.of("同行样本偏少")
+        );
         ShortTermReport report = new ShortTermReport(
                 "全市场短线",
                 95,
@@ -161,12 +167,15 @@ class RecommendationAttestationServiceTest {
                 List.of(),
                 List.of(),
                 null,
+                null,
                 List.of(),
                 Map.of(),
                 coverage,
                 List.of("600001", "600002"),
                 NOW.minusSeconds(20),
-                NOW
+                NOW,
+                technicalCoverage,
+                crossSectionContext
         );
 
         ShortTermReport attested = service.attest(report);
@@ -174,6 +183,8 @@ class RecommendationAttestationServiceTest {
         assertThat(attested.coverage()).isEqualTo(coverage);
         assertThat(attested.reviewedSymbols()).containsExactly("600001", "600002");
         assertThat(attested.dataCutoffAt()).isEqualTo(NOW.minusSeconds(20));
+        assertThat(attested.technicalReviewCoverage()).isEqualTo(technicalCoverage);
+        assertThat(attested.crossSectionContext()).isEqualTo(crossSectionContext);
     }
 
     @Test
