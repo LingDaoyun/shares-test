@@ -42,7 +42,7 @@ class ShortRightSideStrategyServiceTest {
         assertThat(signal.action()).isEqualTo(StrategyAction.WAIT);
         assertThat(signal.positionLimit()).isZero();
         assertThat(signal.evidenceSummary())
-                .anySatisfy(item -> assertThat(item).contains("14:45-14:56"));
+                .anySatisfy(item -> assertThat(item).contains("14:45-14:49"));
     }
 
     @Test
@@ -122,7 +122,7 @@ class ShortRightSideStrategyServiceTest {
         ShortRightSideStrategyInput input = new ShortRightSideStrategyInput(
                 "000977", "浪潮信息", "AI算力",
                 Instant.parse("2026-07-20T07:20:00Z"),
-                Instant.parse("2026-07-20T06:49:30Z"), "TAIL_ENTRY_1445_1456",
+                Instant.parse("2026-07-20T06:49:30Z"), "TAIL_ENTRY_1445_1449",
                 new BigDecimal("84"), new BigDecimal("82"), new BigDecimal("86"),
                 new BigDecimal("74"), new BigDecimal("81"), new BigDecimal("70"),
                 new BigDecimal("86"), new BigDecimal("32"), List.of());
@@ -142,7 +142,7 @@ class ShortRightSideStrategyServiceTest {
         assertThat(signal.action()).isEqualTo(StrategyAction.ADD);
         assertThat(signal.positionLimit()).isEqualByComparingTo("0.0800");
         assertThat(signal.context())
-                .containsEntry("tradingCheckpoint", "TAIL_ENTRY_1445_1456")
+                .containsEntry("tradingCheckpoint", "TAIL_ENTRY_1445_1449")
                 .containsEntry("supplyAbsorptionUsage", "CONTEXTUAL_CONFIRMATION");
         assertThat(signal.evidenceSummary())
                 .anySatisfy(item -> assertThat(item).contains("缩量承接", "右侧结构"));
@@ -185,7 +185,7 @@ class ShortRightSideStrategyServiceTest {
                 "测试行业",
                 Instant.parse("2026-07-20T07:20:00Z"),
                 Instant.parse("2026-07-20T07:19:30Z"),
-                "TAIL_ENTRY_1445_1456",
+                "TAIL_ENTRY_1445_1449",
                 new BigDecimal("90"),
                 new BigDecimal("90"),
                 new BigDecimal("90"),
@@ -214,7 +214,7 @@ class ShortRightSideStrategyServiceTest {
             int tier,
             BigDecimal marketHotScore
     ) {
-        return inputWithCrossAndCheckpoint(state, days, tier, marketHotScore, "TAIL_ENTRY_1445_1456");
+        return inputWithCrossAndCheckpoint(state, days, tier, marketHotScore, "TAIL_ENTRY_1445_1449");
     }
 
     private ShortRightSideStrategyInput inputWithCrossAndCheckpoint(

@@ -651,7 +651,7 @@ function CandidateDetail({
             <TradeReviewButton
               symbol={candidate.symbol}
               sourceModule="SHORT_TERM"
-              ruleVersion="short-term-right-side-v3-chip-verified"
+              ruleVersion="short-term-right-side-v4-transparent-ranking"
               recommendedAt={generatedAt}
               attestationToken={tradeCaptureToken}
             />
@@ -695,8 +695,10 @@ function CandidateDetail({
           ) : null}
           <ScoreMetric label="四因子原始分" value={candidate.score.finalScore} />
           <ScoreMetric label="阶段校准" value={candidate.score.stageAdjustment ?? 0} />
+          {candidate.score.fundFlowAdjustment != null ? (
+            <ScoreMetric label="资金流微调（最多±2）" value={candidate.score.fundFlowAdjustment} />
+          ) : null}
           <ScoreMetric label="排序分" value={candidate.score.rankingScore ?? candidate.score.finalScore} />
-          <ScoreMetric label="V2 排序分" value={candidate.score.v2RankingScore} />
         </div>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line-soft pt-3 text-xs text-ink-500">

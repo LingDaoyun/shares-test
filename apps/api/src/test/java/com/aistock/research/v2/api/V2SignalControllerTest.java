@@ -49,7 +49,7 @@ class V2SignalControllerTest {
 
     @BeforeEach
     void openAuthoritativeDecisionWindow() {
-        when(tradingClockService.shortTermDecisionCheckpoint()).thenReturn("TAIL_ENTRY_1445_1456");
+        when(tradingClockService.shortTermDecisionCheckpoint()).thenReturn("TAIL_ENTRY_1445_1449");
     }
 
     @AfterEach

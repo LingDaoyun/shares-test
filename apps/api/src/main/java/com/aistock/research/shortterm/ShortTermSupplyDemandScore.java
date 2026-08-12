@@ -7,6 +7,7 @@ public record ShortTermSupplyDemandScore(
         BigDecimal mainNetInflowRatio,
         BigDecimal largeOrderNetInflowRatio,
         BigDecimal buyPressureScore,
+        BigDecimal fundFlowAdjustment,
         BigDecimal overheadPressureReliefScore,
         BigDecimal technicalRankingScore,
         BigDecimal v2RankingScore,

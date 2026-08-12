@@ -418,7 +418,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void actionableTailUsesOnlyMinutesFrom1445InclusiveTo1457Exclusive() {
+    void actionableTailUsesOnlyMinutesFrom1445InclusiveTo1450Exclusive() {
         eastMoneyClient.quotes = List.of(
                 quote("600001", "尾盘边界", "10.62", "1.60", "18.00", "1.60", "180000000")
         );
@@ -427,8 +427,9 @@ class ShortTermServiceTest {
         eastMoneyClient.intraday.put("600001", List.of(
                 intraday("600001", "2026-07-07T14:44", "10.00", "10.00", "10.01", "9.99", "10000", "10000000", "10.00"),
                 intraday("600001", "2026-07-07T14:45", "10.05", "10.10", "10.11", "10.04", "12000", "12000000", "10.05"),
-                intraday("600001", "2026-07-07T14:52", "10.15", "10.20", "10.21", "10.14", "14000", "14000000", "10.10"),
-                intraday("600001", "2026-07-07T14:57", "8.00", "8.00", "8.01", "7.99", "90000", "90000000", "9.80")
+                intraday("600001", "2026-07-07T14:48", "10.15", "10.20", "10.21", "10.14", "14000", "14000000", "10.10"),
+                intraday("600001", "2026-07-07T14:49", "10.20", "10.21", "10.22", "10.18", "15000", "15000000", "10.11"),
+                intraday("600001", "2026-07-07T14:50", "8.00", "8.00", "8.01", "7.99", "90000", "90000000", "9.80")
         ));
 
         ShortTermCandidate candidate = find(
@@ -436,12 +437,12 @@ class ShortTermServiceTest {
                 "600001"
         );
 
-        assertThat(candidate.tailSignal().latestMinute()).isEqualTo("14:52");
+        assertThat(candidate.tailSignal().latestMinute()).isEqualTo("14:49");
         assertThat(candidate.tailSignal().tailStartPrice()).isEqualByComparingTo("10.10");
-        assertThat(candidate.tailSignal().changeFromActionableTailPercent()).isEqualByComparingTo("0.99");
+        assertThat(candidate.tailSignal().changeFromActionableTailPercent()).isEqualByComparingTo("1.09");
         assertThat(candidate.tailSignal().actionableTailWindow()).isTrue();
         assertThat(candidate.tailSignal().reasons()).anySatisfy(reason ->
-                assertThat(reason).contains("14:57", "未参与"));
+                assertThat(reason).contains("14:50", "未参与"));
     }
 
     @Test
@@ -783,7 +784,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void activeChipRankingChangesOrderOnlyInsideTheSameActionLayer() {
+    void legacyActiveChipConfigurationCannotChangeProductionOrder() {
         eastMoneyClient.quotes = List.of(
                 quote("600607", "强买盘样本", "10.62", "1.20", "18", "1.6", "600000000"),
                 quote("600608", "优质筹码样本", "10.62", "1.20", "18", "1.6", "600000000")
@@ -812,12 +813,14 @@ class ShortTermServiceTest {
                 .isGreaterThan(find(shadow, "600607").score().chipContributionScore());
         assertThat(find(shadow, "600608").score().v3RankingScore()).isNotNull();
         assertThat(active.candidates()).extracting(ShortTermCandidate::symbol)
-                .containsExactly("600608", "600607");
+                .containsExactly("600607", "600608");
         assertThat(find(active, "600608").action()).isEqualTo(find(active, "600607").action());
         assertThat(find(active, "600608").score().v3Rank()).isEqualTo(1);
         assertThat(find(active, "600608").score().rankDelta()).isPositive();
         assertThat(find(active, "600608").score().rankingScore())
-                .isEqualByComparingTo(find(active, "600608").score().v3RankingScore());
+                .isEqualByComparingTo(find(active, "600608").score().v2RankingScore());
+        assertThat(find(active, "600608").risks())
+                .contains("筹码因子仅影子记录，未参与生产排序");
         assertThat(eastMoneyClient.turnoverEnrichmentCalls).isPositive();
     }
 
@@ -1167,7 +1170,7 @@ class ShortTermServiceTest {
                         "600301",
                         "右侧候选",
                         "通用设备",
-                        Instant.parse("2026-07-07T06:50:00Z"),
+                        Instant.parse("2026-07-07T06:49:00Z"),
                         "1.60",
                         "600000000"
                 ),
@@ -1178,19 +1181,19 @@ class ShortTermServiceTest {
                     String.format("60%04d", 400 + index),
                     "涨停样本" + index,
                     "通用设备",
-                    Instant.parse("2026-07-07T06:50:00Z"),
+                    Instant.parse("2026-07-07T06:49:00Z"),
                     "9.60",
                     "300000000"
             ));
         }
         eastMoneyClient.quotes = quotes;
         eastMoneyClient.snapshotExpectedCount = quotes.size();
-        eastMoneyClient.snapshotFetchedAt = Instant.parse("2026-07-07T06:53:00Z");
+        eastMoneyClient.snapshotFetchedAt = Instant.parse("2026-07-07T06:49:00Z");
         eastMoneyClient.klines.put("600301", confirmedRightEarlyKLines("600301", "10.62", "180000"));
         eastMoneyClient.financials.put("600301", goodFinancial("600301"));
         eastMoneyClient.intraday.put("600301", confirmedTail("600301"));
 
-        ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:55:00Z"), SHANGHAI))
+        ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:49:30Z"), SHANGHAI))
                 .report(5, 100, 10, null, null, null, null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600301");
@@ -1369,7 +1372,7 @@ class ShortTermServiceTest {
 
     @Test
     void shouldKeepConfirmedLowerShadowSupportAsLightTrialCandidate() {
-        Instant timestamp = Instant.parse("2026-07-07T06:54:00Z");
+        Instant timestamp = Instant.parse("2026-07-07T06:49:00Z");
         eastMoneyClient.snapshotFetchedAt = timestamp;
         eastMoneyClient.quotes = List.of(
                 withTurnover(quoteAt("600041", "承接股份", "通用设备", timestamp, "-1.00", "900000000"), "3.00"),
@@ -1382,7 +1385,7 @@ class ShortTermServiceTest {
         eastMoneyClient.quotes.forEach(quote -> eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
         eastMoneyClient.intraday.put("600041", confirmedTail("600041"));
 
-        ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:55:00Z"), SHANGHAI))
+        ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:49:30Z"), SHANGHAI))
                 .report(8, 100, 8, null, null, null, null, null, null, null);
         ShortTermCandidate candidate = find(report, "600041");
 
@@ -2272,7 +2275,7 @@ class ShortTermServiceTest {
             BigDecimal close = new BigDecimal("10.45").add(new BigDecimal("0.05").multiply(BigDecimal.valueOf(index)));
             points.add(new EastMoneyIntradayPoint(
                     symbol,
-                    tradeDate.atTime(14, 45).plusMinutes(index * 3L),
+                    tradeDate.atTime(14, 45).plusMinutes(index),
                     close.subtract(new BigDecimal("0.02")),
                     close,
                     close.add(new BigDecimal("0.03")),
@@ -2308,8 +2311,8 @@ class ShortTermServiceTest {
         points.add(intraday(symbol, "2026-07-07T14:30", "10.32", "10.38", "10.40", "10.31", "2600000", "3000000000", "10.36"));
         points.add(intraday(symbol, "2026-07-07T14:45", "10.48", "10.50", "10.52", "10.47", "36000", "36000000", "10.48"));
         points.add(intraday(symbol, "2026-07-07T14:48", "10.50", "10.52", "10.53", "10.49", "36000", "37000000", "10.49"));
-        points.add(intraday(symbol, "2026-07-07T14:52", "10.52", "10.54", "10.55", "10.51", "36000", "38000000", "10.50"));
-        points.add(intraday(symbol, "2026-07-07T14:56", "10.54", "10.55", "10.56", "10.53", "36000", "39000000", "10.50"));
+        points.add(intraday(symbol, "2026-07-07T14:49", "10.52", "10.54", "10.55", "10.51", "36000", "38000000", "10.50"));
+        points.add(intraday(symbol, "2026-07-07T14:50", "10.54", "10.55", "10.56", "10.53", "36000", "39000000", "10.50"));
         return points;
     }
 

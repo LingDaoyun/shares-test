@@ -66,12 +66,12 @@ class TradingClockServiceTest {
         assertThat(serviceAt("2026-07-23T06:44:59Z").shortTermDecisionCheckpoint())
                 .startsWith("NOT_CONFIRMED:");
         assertThat(serviceAt("2026-07-23T06:45:00Z").shortTermDecisionCheckpoint())
-                .isEqualTo("TAIL_ENTRY_1445_1456");
-        assertThat(serviceAt("2026-07-23T06:56:59Z").shortTermDecisionCheckpoint())
-                .isEqualTo("TAIL_ENTRY_1445_1456");
-        assertThat(serviceAt("2026-07-23T06:56:59.999999999Z").shortTermDecisionCheckpoint())
-                .isEqualTo("TAIL_ENTRY_1445_1456");
-        assertThat(serviceAt("2026-07-23T06:57:00Z").shortTermDecisionCheckpoint())
+                .isEqualTo("TAIL_ENTRY_1445_1449");
+        assertThat(serviceAt("2026-07-23T06:49:59Z").shortTermDecisionCheckpoint())
+                .isEqualTo("TAIL_ENTRY_1445_1449");
+        assertThat(serviceAt("2026-07-23T06:49:59.999999999Z").shortTermDecisionCheckpoint())
+                .isEqualTo("TAIL_ENTRY_1445_1449");
+        assertThat(serviceAt("2026-07-23T06:50:00Z").shortTermDecisionCheckpoint())
                 .startsWith("NOT_CONFIRMED:");
         assertThat(serviceAt("2026-07-23T07:20:00Z").shortTermDecisionCheckpoint())
                 .startsWith("NOT_CONFIRMED:");

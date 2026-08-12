@@ -25,9 +25,9 @@ class ShortTermAutomationSettingsTest {
         assertThat(settings.enabled()).isTrue();
         assertThat(settings.zone()).isEqualTo("Asia/Shanghai");
         assertThat(settings.preselectCron()).isEqualTo("0 30 14 * * MON-FRI");
-        assertThat(settings.finalCron()).isEqualTo("0 48 14 * * MON-FRI");
-        assertThat(settings.readinessCron()).isEqualTo("0 54 14 * * MON-FRI");
-        assertThat(settings.finalDeadline()).isEqualTo(LocalTime.of(14, 53, 59));
+        assertThat(settings.finalCron()).isEqualTo("0 47 14 * * MON-FRI");
+        assertThat(settings.readinessCron()).isEqualTo("50 49 14 * * MON-FRI");
+        assertThat(settings.finalDeadline()).isEqualTo(LocalTime.of(14, 49, 40));
         assertThat(settings.freshness()).isEqualTo(Duration.ofSeconds(180));
 
         ShortTermScanRequest scan = settings.scanRequest();
@@ -99,7 +99,7 @@ class ShortTermAutomationSettingsTest {
 
         assertThat(settings.preselectCron()).isEqualTo("0 31 14 * * MON-FRI");
         assertThat(settings.finalCron()).isEqualTo("0 49 14 * * MON-FRI");
-        assertThat(settings.readinessCron()).isEqualTo("0 54 14 * * MON-FRI");
+        assertThat(settings.readinessCron()).isEqualTo("50 49 14 * * MON-FRI");
     }
 
     @Test
@@ -168,8 +168,8 @@ class ShortTermAutomationSettingsTest {
 
         assertThat(settings.enabled()).isTrue();
         assertThat(settings.zone()).isEqualTo("Asia/Shanghai");
-        assertThat(settings.finalCron()).isEqualTo("0 48 14 * * MON-FRI");
-        assertThat(settings.finalDeadline()).isEqualTo(LocalTime.of(14, 53, 59));
+        assertThat(settings.finalCron()).isEqualTo("0 47 14 * * MON-FRI");
+        assertThat(settings.finalDeadline()).isEqualTo(LocalTime.of(14, 49, 40));
         assertThat(settings.freshness()).isEqualTo(Duration.ofSeconds(180));
         assertThat(settings.scanRequest().limit()).isEqualTo(8);
         assertThat(settings.scanRequest().maxPe()).isEqualByComparingTo("100");
@@ -188,14 +188,13 @@ class ShortTermAutomationSettingsTest {
         ShortTermAutomationSettings settings = new ShortTermAutomationSettings(environment);
 
         assertThat(settings.overnightRules().entryStart()).isEqualTo(LocalTime.of(14, 46));
-        assertThat(settings.overnightRules().entryEnd()).isEqualTo(LocalTime.of(14, 55));
+        assertThat(settings.overnightRules().entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);
 
         environment.setProperty("research.short-term.overnight.entry-start", "14:56:59");
         environment.setProperty("research.short-term.overnight.entry-end", "14:56:59.999999999");
 
-        assertThat(settings.overnightRules().entryStart()).isEqualTo(LocalTime.of(14, 56, 59));
-        assertThat(settings.overnightRules().entryEnd())
-                .isEqualTo(LocalTime.of(14, 56, 59, 999_999_999));
+        assertThat(settings.overnightRules().entryStart()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_START);
+        assertThat(settings.overnightRules().entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);
 
         environment.setProperty("research.short-term.overnight.entry-start", "14:55");
         environment.setProperty("research.short-term.overnight.entry-end", "14:50");

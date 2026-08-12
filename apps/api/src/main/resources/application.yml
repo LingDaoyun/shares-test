@@ -46,7 +46,7 @@ research:
       min-valid-bars: 80
       min-turnover-coverage: 0.95
       weight: 0.25
-      activation-mode: ACTIVE
+      activation-mode: SHADOW
       single-source-coefficient: 1.00
       max-average-cost-deviation: 0.03
       min-cost-band-overlap: 0.70

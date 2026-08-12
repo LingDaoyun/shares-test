@@ -54,15 +54,15 @@ public class ShortTermAutomationSettings {
     }
 
     public String finalCron() {
-        return cron("research.short-term.schedule.final-cron", "0 48 14 * * MON-FRI");
+        return cron("research.short-term.schedule.final-cron", "0 47 14 * * MON-FRI");
     }
 
     public String readinessCron() {
-        return cron("research.short-term.schedule.readiness-cron", "0 54 14 * * MON-FRI");
+        return cron("research.short-term.schedule.readiness-cron", "50 49 14 * * MON-FRI");
     }
 
     public LocalTime finalDeadline() {
-        return time("research.short-term.schedule.final-deadline", "14:53:59");
+        return time("research.short-term.schedule.final-deadline", "14:49:40");
     }
 
     public Duration freshness() {

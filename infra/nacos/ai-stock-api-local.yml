@@ -5,9 +5,9 @@ research:
       enabled: true
       zone: Asia/Shanghai
       preselect-cron: "0 30 14 * * MON-FRI"
-      final-cron: "0 48 14 * * MON-FRI"
-      readiness-cron: "0 54 14 * * MON-FRI"
-      final-deadline: "14:53:59"
+      final-cron: "0 47 14 * * MON-FRI"
+      readiness-cron: "50 49 14 * * MON-FRI"
+      final-deadline: "14:49:40"
       freshness-seconds: 180
       limit: 8
       scan-limit: 6000
@@ -21,7 +21,7 @@ research:
       min-financial-score: 58
     overnight:
       entry-start: "14:45"
-      entry-end: "14:56"
+      entry-end: "14:49:59.999999999"
       normal-exit-time: "14:50"
       max-holding-trading-days: 2
       max-position-ratio: 0.3333

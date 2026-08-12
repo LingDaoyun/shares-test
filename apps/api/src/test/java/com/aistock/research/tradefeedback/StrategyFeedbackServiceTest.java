@@ -233,6 +233,31 @@ class StrategyFeedbackServiceTest {
         assertThat(pageable.getValue().getPageSize()).isEqualTo(5000);
     }
 
+    @Test
+    void usesT1AndT2ForShortTermAndExcludesItsT20Rows() {
+        MaturedRecommendationRow shortT20 = row(
+                "short-t20", "SHORT_TERM", "short-v4", "3.00", "4.00", "-1.00",
+                "2026-06-01T00:00:00Z");
+        MaturedRecommendationRow longT20 = row(
+                "long-t20", "LONG_TERM", "long-v1", "8.00", "10.00", "-3.00",
+                "2026-06-01T00:00:00Z");
+        when(outcomes.findMaturedRecommendationT20(any(Pageable.class)))
+                .thenReturn(List.of(shortT20, longT20));
+        when(outcomes.findMaturedShortTermRecommendationT1T2(any(Pageable.class)))
+                .thenReturn(List.of(
+                        row("short-t1", "SHORT_TERM", "short-v4", "T1", "1.00"),
+                        row("short-t2", "SHORT_TERM", "short-v4", "T2", "2.00")
+                ));
+        when(fills.findByCaseIdInOrderByCaseIdAscExecutedAtAscCreatedAtAscFillIdAsc(anyCollection()))
+                .thenReturn(List.of());
+
+        List<StrategyFeedbackSummary> summaries = service.summaries();
+
+        assertThat(summaries)
+                .extracting(summary -> summary.sourceModule() + "/" + summary.horizon())
+                .containsExactly("LONG_TERM/T20", "SHORT_TERM/T1", "SHORT_TERM/T2");
+    }
+
     private List<MaturedRecommendationRow> rows(
             String sourceModule,
             String ruleVersion,
@@ -273,6 +298,26 @@ class StrategyFeedbackServiceTest {
                 decimal(returnPct),
                 decimal(maxRunupPct),
                 decimal(maxDrawdownPct)
+        );
+    }
+
+    private MaturedRecommendationRow row(
+            String caseId,
+            String sourceModule,
+            String ruleVersion,
+            String horizon,
+            String returnPct
+    ) {
+        return new MaturedRecommendationRow(
+                caseId,
+                sourceModule,
+                ruleVersion,
+                horizon,
+                decimal("100.00"),
+                Instant.parse("2026-06-01T00:00:00Z"),
+                decimal(returnPct),
+                decimal("4.00"),
+                decimal("-2.00")
         );
     }
 

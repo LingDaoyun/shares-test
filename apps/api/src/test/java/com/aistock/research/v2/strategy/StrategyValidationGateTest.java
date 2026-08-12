@@ -68,7 +68,7 @@ class StrategyValidationGateTest {
                 CandidateStage.QUALIFIED,
                 StrategyAction.ADD,
                 new BigDecimal("0.0800"),
-                "14:45-14:56 尾盘窗口内确认分批买入。",
+                "14:45-14:49 尾盘窗口内确认分批买入。",
                 "跌破 20 日线退出。",
                 new BigDecimal("78.00"),
                 new BigDecimal("90.00"),

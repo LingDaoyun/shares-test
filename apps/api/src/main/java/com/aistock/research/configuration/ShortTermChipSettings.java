@@ -60,9 +60,9 @@ public class ShortTermChipSettings {
 
     public ChipActivationMode activationMode() {
         try {
-            return ChipActivationMode.valueOf(text("activation-mode", "ACTIVE").toUpperCase(Locale.ROOT));
+            return ChipActivationMode.valueOf(text("activation-mode", "SHADOW").toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException exception) {
-            return ChipActivationMode.ACTIVE;
+            return ChipActivationMode.SHADOW;
         }
     }
 

@@ -163,7 +163,7 @@ public class ShortRightSideStrategyService {
 
     private String entryCondition(StrategyAction action) {
         return switch (action) {
-            case ADD -> "只允许 14:45-14:56 尾盘可成交窗口内分批买入，单票短线仓位不超过 8%。";
+            case ADD -> "只允许 14:45-14:49 尾盘可成交窗口内分批买入，单票短线仓位不超过 8%。";
             case LIGHT_TRIAL -> "只允许 3% 以内试错，次日不能确认承接则退出观察。";
             default -> "不满足右侧早期确认，不开新仓。";
         };
@@ -281,9 +281,9 @@ public class ShortRightSideStrategyService {
 
     private String checkpointEvidence(ShortRightSideStrategyInput input) {
         if (TradingClockService.SHORT_TERM_ENTRY_CHECKPOINT.equals(checkpoint(input))) {
-            return "服务端交易时钟已进入 14:45-14:56 普通股票可成交决策窗口。";
+            return "服务端交易时钟已进入 14:45-14:49 普通股票可成交决策窗口。";
         }
-        return "服务端交易时钟不在 14:45-14:56 可成交决策窗口，当前不能发布买入动作。";
+        return "服务端交易时钟不在 14:45-14:49 可成交决策窗口，当前不能发布买入动作。";
     }
 
     private BigDecimal dataConfidence(ShortRightSideStrategyInput input) {

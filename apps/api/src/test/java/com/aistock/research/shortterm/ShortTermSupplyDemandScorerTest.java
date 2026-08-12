@@ -37,6 +37,10 @@ class ShortTermSupplyDemandScorerTest {
 
         assertThat(positive.buyPressureScore()).isGreaterThan(negative.buyPressureScore());
         assertThat(positive.rankingScore()).isGreaterThan(negative.rankingScore());
+        assertThat(positive.fundFlowAdjustment()).isBetween(BigDecimal.ZERO, new BigDecimal("2.00"));
+        assertThat(negative.fundFlowAdjustment()).isBetween(new BigDecimal("-2.00"), BigDecimal.ZERO);
+        assertThat(positive.rankingScore().subtract(negative.rankingScore()).abs())
+                .isLessThanOrEqualTo(new BigDecimal("4.00"));
     }
 
     @Test
@@ -60,7 +64,7 @@ class ShortTermSupplyDemandScorerTest {
     }
 
     @Test
-    void weakOverheadPressureOutranksLongUpperShadowNearResistance() {
+    void keepsOverheadPressureAsVisibleEvidenceWithoutDoubleCountingItInRanking() {
         EastMoneyFundFlowSnapshot flow = flow("5", "2", "1", TRADE_DATE);
 
         ShortTermSupplyDemandScore weakPressure = scorer.score(
@@ -76,7 +80,7 @@ class ShortTermSupplyDemandScorerTest {
 
         assertThat(weakPressure.overheadPressureReliefScore())
                 .isGreaterThan(strongPressure.overheadPressureReliefScore());
-        assertThat(weakPressure.rankingScore()).isGreaterThan(strongPressure.rankingScore());
+        assertThat(weakPressure.rankingScore()).isEqualByComparingTo(strongPressure.rankingScore());
     }
 
     @Test
@@ -98,6 +102,7 @@ class ShortTermSupplyDemandScorerTest {
         assertThat(wrongDate.dataGaps()).contains("资金流交易日与行情交易日不一致");
         assertThat(missing.buyPressureScore()).isEqualByComparingTo("35.00");
         assertThat(missing.dataGaps()).contains("东方财富资金流缺失");
+        assertThat(missing.fundFlowAdjustment()).isEqualByComparingTo("0.00");
         assertThat(missing.rankingScore()).isEqualByComparingTo("90.00");
     }
 
@@ -139,7 +144,7 @@ class ShortTermSupplyDemandScorerTest {
     }
 
     @Test
-    void appliesTheConfiguredV3WeightsWhenActivationModeIsActive() {
+    void keepsChipOutOfProductionRankingEvenWhenLegacyConfigurationSaysActive() {
         ShortTermChipSnapshot chip = mock(ShortTermChipSnapshot.class);
         when(chip.contributionScore()).thenReturn(new BigDecimal("18"));
 
@@ -152,10 +157,9 @@ class ShortTermSupplyDemandScorerTest {
                 ChipActivationMode.ACTIVE
         );
 
-        assertThat(score.v3RankingScore()).isEqualByComparingTo("77.21");
-        assertThat(score.rankingScore()).isEqualByComparingTo("77.21");
+        assertThat(score.rankingScore()).isEqualByComparingTo(score.v2RankingScore());
         assertThat(score.chipContributionScore()).isEqualByComparingTo("18.00");
-        assertThat(score.rankingScore()).isNotEqualByComparingTo(score.v2RankingScore());
+        assertThat(score.dataGaps()).contains("筹码因子仅影子记录，未参与生产排序");
     }
 
     private EastMoneyFundFlowSnapshot flow(

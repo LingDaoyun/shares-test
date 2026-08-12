@@ -154,7 +154,7 @@ class ShortTermTradePlanServiceTest {
     }
 
     @Test
-    void validUntilRepresentsExclusive1457ExecutionBoundary() {
+    void validUntilRepresentsExclusive1450ExecutionBoundary() {
         ShortTermTradePlan plan = service.create(
                 LocalDate.of(2026, 7, 23),
                 bd("10.00"),
@@ -164,7 +164,7 @@ class ShortTermTradePlanServiceTest {
                 rules()
         );
 
-        assertThat(plan.validUntil()).isEqualTo(Instant.parse("2026-07-23T06:57:00Z"));
+        assertThat(plan.validUntil()).isEqualTo(Instant.parse("2026-07-23T06:50:00Z"));
     }
 
     @Test

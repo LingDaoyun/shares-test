@@ -28,7 +28,7 @@ class ShortTermManualResultGateTest {
     @BeforeEach
     void setUp() {
         ShortTermAutomationSettings settings = mock(ShortTermAutomationSettings.class);
-        when(settings.finalDeadline()).thenReturn(LocalTime.parse("14:53:59"));
+        when(settings.finalDeadline()).thenReturn(LocalTime.parse("14:49:40"));
         when(settings.freshness()).thenReturn(Duration.ofMinutes(3));
         TradingClockService tradingClock = mock(TradingClockService.class);
         when(tradingClock.currentMarketDate()).thenReturn(TRADE_DATE);
@@ -94,13 +94,13 @@ class ShortTermManualResultGateTest {
     }
 
     @Test
-    void allowsScheduledResultAtExactFinalDeadline() {
-        Instant decisionAt = Instant.parse("2026-07-23T06:53:59Z");
+    void allowsScheduledResultOneSecondBeforeFinalDeadline() {
+        Instant decisionAt = Instant.parse("2026-07-23T06:49:39Z");
 
         ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
                 TRADE_DATE,
                 report(
-                        Instant.parse("2026-07-23T06:53:00Z"), true,
+                        Instant.parse("2026-07-23T06:49:00Z"), true,
                         new BigDecimal("0.99"), true, List.of()),
                 decisionAt,
                 decisionAt
@@ -110,13 +110,29 @@ class ShortTermManualResultGateTest {
     }
 
     @Test
-    void blocksScheduledResultOneSecondAfterFinalDeadline() {
-        Instant decisionAt = Instant.parse("2026-07-23T06:54:00Z");
+    void allowsScheduledResultAtExactFinalDeadline() {
+        Instant decisionAt = Instant.parse("2026-07-23T06:49:40Z");
 
         ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
                 TRADE_DATE,
                 report(
-                        Instant.parse("2026-07-23T06:53:00Z"), true,
+                        Instant.parse("2026-07-23T06:49:00Z"), true,
+                        new BigDecimal("0.99"), true, List.of()),
+                decisionAt,
+                decisionAt
+        );
+
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.NO_TRADE);
+    }
+
+    @Test
+    void blocksRunStartedBeforeButPersistedOneSecondAfterFinalDeadline() {
+        Instant decisionAt = Instant.parse("2026-07-23T06:49:41Z");
+
+        ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
+                TRADE_DATE,
+                report(
+                        Instant.parse("2026-07-23T06:49:00Z"), true,
                         new BigDecimal("0.99"), true, List.of()),
                 decisionAt,
                 decisionAt
@@ -166,13 +182,14 @@ class ShortTermManualResultGateTest {
 
     @Test
     void blocksScheduledResultWhenQuotesAreStale() {
+        Instant decisionAt = Instant.parse("2026-07-23T06:49:00Z");
         ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
                 TRADE_DATE,
                 report(
                         Instant.parse("2026-07-23T06:45:00Z"), true,
                         new BigDecimal("0.99"), true, List.of()),
-                DECISION_AT,
-                DECISION_AT);
+                decisionAt,
+                decisionAt);
 
         assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
         assertThat(result.blockedReasons()).containsExactly("QUOTE_STALE");
@@ -225,7 +242,7 @@ class ShortTermManualResultGateTest {
         Instant completedAt = Instant.parse("2026-08-01T02:10:20Z");
 
         ShortTermAutomationSettings settings = mock(ShortTermAutomationSettings.class);
-        when(settings.finalDeadline()).thenReturn(LocalTime.parse("14:53:59"));
+        when(settings.finalDeadline()).thenReturn(LocalTime.parse("14:49:40"));
         when(settings.freshness()).thenReturn(Duration.ofMinutes(3));
         TradingClockService tradingClock = mock(TradingClockService.class);
         when(tradingClock.currentMarketDate()).thenReturn(closedDate);
@@ -280,7 +297,7 @@ class ShortTermManualResultGateTest {
                 true,
                 closingDecisionWindow,
                 false,
-                "14:45-14:56",
+                "14:45-14:49",
                 List.of(),
                 List.of()
         ));

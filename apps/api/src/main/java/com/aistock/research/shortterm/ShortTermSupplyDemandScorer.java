@@ -15,9 +15,6 @@ import java.util.List;
 public class ShortTermSupplyDemandScorer {
 
     private static final BigDecimal HUNDRED = new BigDecimal("100");
-    private static final BigDecimal BUY_WEIGHT = new BigDecimal("0.45");
-    private static final BigDecimal PRESSURE_WEIGHT = new BigDecimal("0.30");
-    private static final BigDecimal TECHNICAL_WEIGHT = new BigDecimal("0.25");
     private static final BigDecimal MAX_CHIP_CONTRIBUTION = new BigDecimal("25");
     private static final BigDecimal V3_TECHNICAL_WEIGHT = new BigDecimal("0.45");
     private static final BigDecimal V3_PRESSURE_WEIGHT = new BigDecimal("0.20");
@@ -53,11 +50,13 @@ public class ShortTermSupplyDemandScorer {
         BigDecimal technicalScore = clamp(technicalRankingScore == null
                 ? new BigDecimal("50")
                 : technicalRankingScore);
-        BigDecimal v2RankingScore = flowScore.available()
-                ? flowScore.score().multiply(BUY_WEIGHT)
-                .add(pressureRelief.multiply(PRESSURE_WEIGHT))
-                .add(technicalScore.multiply(TECHNICAL_WEIGHT))
-                : technicalScore;
+        BigDecimal fundFlowAdjustment = flowScore.available()
+                ? flowScore.score().subtract(new BigDecimal("50"))
+                .divide(new BigDecimal("25"), 6, RoundingMode.HALF_UP)
+                .max(new BigDecimal("-2"))
+                .min(new BigDecimal("2"))
+                : BigDecimal.ZERO;
+        BigDecimal v2RankingScore = clamp(technicalScore.add(fundFlowAdjustment));
         BigDecimal chipContribution = chip == null || chip.contributionScore() == null
                 ? BigDecimal.ZERO
                 : chip.contributionScore().max(BigDecimal.ZERO).min(MAX_CHIP_CONTRIBUTION);
@@ -67,13 +66,15 @@ public class ShortTermSupplyDemandScorer {
                 .add(flowScore.available()
                         ? flowScore.score().multiply(V3_BUY_WEIGHT)
                         : BigDecimal.ZERO);
-        BigDecimal rankingScore = activationMode == ChipActivationMode.ACTIVE && chip != null
-                ? v3RankingScore
-                : v2RankingScore;
+        if (activationMode == ChipActivationMode.ACTIVE && chip != null) {
+            dataGaps.add("筹码因子仅影子记录，未参与生产排序");
+        }
+        BigDecimal rankingScore = v2RankingScore;
         return new ShortTermSupplyDemandScore(
                 scale(flowScore.mainRatio()),
                 scale(flowScore.largeOrderRatio()),
                 scale(flowScore.score()),
+                scale(fundFlowAdjustment),
                 scale(pressureRelief),
                 scale(technicalScore),
                 scale(clamp(v2RankingScore)),

@@ -30,16 +30,16 @@
 - default and Nacos YAML files
 - corresponding unit tests
 
-- [ ] Write failing tests proving chip shadow mode cannot alter production order.
-- [ ] Bound fresh same-day fund flow to a visible `[-2,+2]` tie-break contribution.
-- [ ] Return the active contribution and factor state in the score breakdown.
-- [ ] Change default/Nacos chip activation to `SHADOW`.
-- [ ] Enforce final deadline `14:49:40` and compatible cron/default validation.
-- [ ] Test `14:49:39`, exactly `14:49:40`, `14:49:41`, `Asia/Shanghai`, and a run that starts before but persists after the deadline.
-- [ ] Select T1/T2 feedback for `SHORT_TERM`; retain T20 for long-term cohorts.
-- [ ] Run targeted and complete backend tests.
-- [ ] Reviewer Agent inspects ranking invariants, time boundaries, refreshed configuration, and query correctness.
-- [ ] Fix findings, re-run tests, and commit the phase.
+- [x] Write failing tests proving chip shadow mode cannot alter production order.
+- [x] Bound fresh same-day fund flow to a visible `[-2,+2]` tie-break contribution.
+- [x] Return the active contribution and factor state in the score breakdown.
+- [x] Change default/Nacos chip activation to `SHADOW`.
+- [x] Enforce final deadline `14:49:40` and compatible cron/default validation.
+- [x] Test `14:49:39`, exactly `14:49:40`, `14:49:41`, `Asia/Shanghai`, and a run that starts before but persists after the deadline.
+- [x] Select T1/T2 feedback for `SHORT_TERM`; retain T20 for long-term cohorts.
+- [x] Run targeted and complete backend tests.
+- [x] Reviewer Agent inspects ranking invariants, time boundaries, refreshed configuration, and query correctness.
+- [x] Fix findings, re-run tests, and commit the phase.
 
 ## Phase 2: Full-Universe Sector Context And Relative Strength
 

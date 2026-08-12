@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ShortTermChipSettingsTest {
 
     @Test
-    void usesActiveLocalDistributionDefaults() {
+    void usesShadowLocalDistributionDefaults() {
         ShortTermChipSettings settings = new ShortTermChipSettings(new MockEnvironment());
 
         assertThat(settings.enabled()).isTrue();
@@ -19,19 +19,19 @@ class ShortTermChipSettingsTest {
         assertThat(settings.maxConcentrationZones()).isEqualTo(3);
         assertThat(settings.minPeakRelativeHeight()).isEqualByComparingTo("0.20");
         assertThat(settings.zoneEdgeRelativeHeight()).isEqualByComparingTo("0.25");
-        assertThat(settings.activationMode()).isEqualTo(ChipActivationMode.ACTIVE);
+        assertThat(settings.activationMode()).isEqualTo(ChipActivationMode.SHADOW);
         assertThat(settings.singleSourceCoefficient()).isEqualByComparingTo("1.00");
         assertThat(settings.tushareEnabled()).isFalse();
         assertThat(settings.tushareToken()).isEmpty();
     }
 
     @Test
-    void fallsBackToActiveForUnknownActivationMode() {
+    void fallsBackToShadowForUnknownActivationMode() {
         MockEnvironment environment = new MockEnvironment()
                 .withProperty("research.short-term.chip.activation-mode", "CERTAIN_BUY");
 
         ShortTermChipSettings settings = new ShortTermChipSettings(environment);
 
-        assertThat(settings.activationMode()).isEqualTo(ChipActivationMode.ACTIVE);
+        assertThat(settings.activationMode()).isEqualTo(ChipActivationMode.SHADOW);
     }
 }

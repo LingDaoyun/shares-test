@@ -100,7 +100,7 @@ function statusLabel(snapshot: ShortTermScheduledSnapshot, origin: ReportOrigin)
   }
   switch (status) {
     case 'FINAL_READY':
-      return '14:55 前买入确认已就绪'
+      return '14:49:40 前买入确认已就绪'
     case 'CACHE_PREVIEW':
       return '缓存行情预览'
     case 'PRESELECT_READY':

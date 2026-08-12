@@ -62,14 +62,14 @@ class ShortTermScheduledScanServiceTest {
 
     private static final ZoneId ZONE = TradingClockService.CHINA_MARKET_ZONE;
     private static final LocalDate TRADE_DATE = LocalDate.of(2026, 7, 23);
-    private static final Instant NOW = Instant.parse("2026-07-23T06:50:00Z");
+    private static final Instant NOW = Instant.parse("2026-07-23T06:49:30Z");
     private static final Duration STALE_TIMEOUT = Duration.ofMinutes(5);
     private static final ShortTermScanRequest REQUEST = new ShortTermScanRequest(
             8, 6000, 60, new BigDecimal("80000000"), new BigDecimal("100"),
             new BigDecimal("15"), new BigDecimal("1.20"), new BigDecimal("4"),
             new BigDecimal("8"), new BigDecimal("58"), null);
     private static final OvernightRuleSet RULES = new OvernightRuleSet(
-            LocalTime.of(14, 45), LocalTime.of(14, 56, 59), LocalTime.of(14, 50),
+            LocalTime.of(14, 45), TradingClockService.SHORT_TERM_ENTRY_END, LocalTime.of(14, 50),
             2, new BigDecimal("0.3333"), new BigDecimal("0.50"),
             new BigDecimal("2.5"), new BigDecimal("4.0"),
             new BigDecimal("4.5"), new BigDecimal("7.0"),
@@ -102,7 +102,7 @@ class ShortTermScheduledScanServiceTest {
         when(settings.overnightRules()).thenReturn(RULES);
         when(settings.zone()).thenReturn(ZONE.getId());
         when(settings.freshness()).thenReturn(Duration.ofSeconds(180));
-        when(settings.finalDeadline()).thenReturn(LocalTime.of(14, 53, 59));
+        when(settings.finalDeadline()).thenReturn(LocalTime.of(14, 49, 40));
         when(tradingClock.currentMarketDate()).thenReturn(TRADE_DATE);
         when(tradingClock.isMarketClosedDay(TRADE_DATE)).thenReturn(false);
 
@@ -155,7 +155,7 @@ class ShortTermScheduledScanServiceTest {
         InOrder order = inOrder(store, attestationService, historyService);
         order.verify(store).finish(
                 eq(new ShortTermSnapshotClaim(snapshotKey, 1)), eq(FINAL_READY), eq(raw),
-                eq(raw.dataCutoffAt()), eq(NOW), eq("14:55 前买入确认已就绪"), eq(List.of()));
+                eq(raw.dataCutoffAt()), eq(NOW), eq("14:49:40 前买入确认已就绪"), eq(List.of()));
         order.verify(attestationService).attest(raw);
         order.verify(historyService).recordShortTermReport(snapshotKey, attested);
     }
@@ -175,7 +175,7 @@ class ShortTermScheduledScanServiceTest {
         service.runNow(FINAL);
 
         verify(store).finish(any(), eq(FINAL_READY), eq(raw), eq(raw.dataCutoffAt()),
-                eq(NOW), eq("14:55 前买入确认已就绪"), eq(List.of()));
+                eq(NOW), eq("14:49:40 前买入确认已就绪"), eq(List.of()));
         verify(store, never()).fail(any(), any(), any(), anyList());
         verify(store, never()).finish(any(), eq(DATA_BLOCKED), any(), any(), any(), any(), anyList());
     }
@@ -445,15 +445,15 @@ class ShortTermScheduledScanServiceTest {
             service.runNow(READINESS_GUARD);
 
             verify(store).finish(any(), eq(status), eq(report), eq(report.dataCutoffAt()), eq(NOW),
-                    eq("14:55 前买入确认已通过就绪检查"), eq(List.of()));
+                    eq("14:49:40 前买入确认已通过就绪检查"), eq(List.of()));
         }
         verify(shortTermService, never()).report(any(ShortTermScanRequest.class));
         verify(shortTermService, never()).finalReport(any(), anySet());
     }
 
     @Test
-    void readinessGuardAtFourteenFiftyFourUsesOriginalFinalCompletionForDeadline() {
-        Clock guardClock = Clock.fixed(Instant.parse("2026-07-23T06:54:00Z"), ZONE);
+    void readinessGuardAtFourteenFortyNineFiftyUsesOriginalFinalCompletionForDeadline() {
+        Clock guardClock = Clock.fixed(Instant.parse("2026-07-23T06:49:50Z"), ZONE);
         ShortTermScheduledScanService guardService = new ShortTermScheduledScanService(
                 settings, tradingClock, store, shortTermService, historyService,
                 attestationService, new ObjectMapper().findAndRegisterModules(),
@@ -463,16 +463,16 @@ class ShortTermScheduledScanServiceTest {
                         TRADE_DATE + ":READINESS_GUARD:" + invocation.getArgument(2), 1)));
         ShortTermReport report = finalReport(
                 List.of(mock(ShortTermCandidate.class)),
-                Instant.parse("2026-07-23T06:52:30Z"), reliableCoverage("0.95"));
+                Instant.parse("2026-07-23T06:49:20Z"), reliableCoverage("0.95"));
         when(store.latest(TRADE_DATE, FINAL)).thenReturn(Optional.of(
                 snapshot(
                         FINAL, FINAL_READY, report, Instant.parse("2026-07-23T06:48:00Z"),
-                        Instant.parse("2026-07-23T06:53:00Z"))));
+                        Instant.parse("2026-07-23T06:49:30Z"))));
 
         guardService.runNow(READINESS_GUARD);
 
         verify(store).finish(any(), eq(FINAL_READY), eq(report), eq(report.dataCutoffAt()),
-                eq(guardClock.instant()), eq("14:55 前买入确认已通过就绪检查"), eq(List.of()));
+                eq(guardClock.instant()), eq("14:49:40 前买入确认已通过就绪检查"), eq(List.of()));
     }
 
     @Test
@@ -492,7 +492,7 @@ class ShortTermScheduledScanServiceTest {
 
         verify(store, never()).find(eq(TRADE_DATE), eq(FINAL), any());
         verify(store).finish(any(), eq(FINAL_READY), eq(report), eq(report.dataCutoffAt()), eq(NOW),
-                eq("14:55 前买入确认已通过就绪检查"), eq(List.of()));
+                eq("14:49:40 前买入确认已通过就绪检查"), eq(List.of()));
     }
 
     @Test

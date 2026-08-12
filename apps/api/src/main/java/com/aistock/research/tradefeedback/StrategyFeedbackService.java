@@ -25,7 +25,7 @@ import java.util.TreeMap;
 @Service
 public class StrategyFeedbackService {
 
-    private static final String HORIZON = "T20";
+    private static final String SHORT_TERM_SOURCE = "SHORT_TERM";
     private static final String BUY = "BUY";
     private static final ZoneId SAMPLE_ZONE = ZoneId.of("Asia/Shanghai");
     private static final int METRIC_SCALE = 4;
@@ -42,7 +42,8 @@ public class StrategyFeedbackService {
             .comparingInt(StrategyFeedbackSummary::sampleCount)
             .reversed()
             .thenComparing(StrategyFeedbackSummary::sourceModule)
-            .thenComparing(StrategyFeedbackSummary::ruleVersion);
+            .thenComparing(StrategyFeedbackSummary::ruleVersion)
+            .thenComparing(StrategyFeedbackSummary::horizon);
 
     private final TradeOutcomeRepository outcomeRepository;
     private final TradeFillRepository fillRepository;
@@ -115,8 +116,19 @@ public class StrategyFeedbackService {
         }
         List<MaturedRecommendationRow> rows = outcomeRepository
                 .findMaturedRecommendationT20(PageRequest.of(0, maxRows)).stream()
+                .filter(row -> !SHORT_TERM_SOURCE.equals(row.sourceModule()))
                 .filter(row -> row.returnPct() != null)
                 .toList();
+        List<MaturedRecommendationRow> shortTermRows = outcomeRepository
+                .findMaturedShortTermRecommendationT1T2(PageRequest.of(0, maxRows)).stream()
+                .filter(row -> row.returnPct() != null)
+                .toList();
+        if (!shortTermRows.isEmpty()) {
+            List<MaturedRecommendationRow> merged = new ArrayList<>(rows.size() + shortTermRows.size());
+            merged.addAll(rows);
+            merged.addAll(shortTermRows);
+            rows = List.copyOf(merged);
+        }
         if (rows.isEmpty()) {
             return cache(now, List.of());
         }
@@ -128,7 +140,7 @@ public class StrategyFeedbackService {
 
         Map<CohortKey, List<MaturedRecommendationRow>> cohorts = new TreeMap<>();
         for (MaturedRecommendationRow row : rows) {
-            cohorts.computeIfAbsent(new CohortKey(row.sourceModule(), row.ruleVersion()), ignored -> new ArrayList<>())
+            cohorts.computeIfAbsent(new CohortKey(row.sourceModule(), row.ruleVersion(), row.horizon()), ignored -> new ArrayList<>())
                     .add(row);
         }
 
@@ -184,7 +196,7 @@ public class StrategyFeedbackService {
         return new StrategyFeedbackSummary(
                 key.sourceModule(),
                 key.ruleVersion(),
-                HORIZON,
+                key.horizon(),
                 sampleCount,
                 positiveCount,
                 positiveRate,
@@ -274,12 +286,16 @@ public class StrategyFeedbackService {
         return rows.stream().map(mapper).filter(value -> value != null).toList();
     }
 
-    private record CohortKey(String sourceModule, String ruleVersion) implements Comparable<CohortKey> {
+    private record CohortKey(String sourceModule, String ruleVersion, String horizon) implements Comparable<CohortKey> {
 
         @Override
         public int compareTo(CohortKey other) {
             int sourceComparison = sourceModule.compareTo(other.sourceModule);
-            return sourceComparison != 0 ? sourceComparison : ruleVersion.compareTo(other.ruleVersion);
+            if (sourceComparison != 0) {
+                return sourceComparison;
+            }
+            int ruleComparison = ruleVersion.compareTo(other.ruleVersion);
+            return ruleComparison != 0 ? ruleComparison : horizon.compareTo(other.horizon);
         }
     }
 

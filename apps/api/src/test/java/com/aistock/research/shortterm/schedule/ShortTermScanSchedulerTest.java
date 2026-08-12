@@ -32,7 +32,7 @@ class ShortTermScanSchedulerTest {
         when(settings.zone()).thenReturn("Asia/Shanghai");
         when(settings.preselectCron()).thenReturn("0 30 14 * * MON-FRI");
         when(settings.finalCron()).thenReturn("0 48 14 * * MON-FRI");
-        when(settings.readinessCron()).thenReturn("0 54 14 * * MON-FRI");
+        when(settings.readinessCron()).thenReturn("50 49 14 * * MON-FRI");
         ShortTermScanScheduler scheduler = new ShortTermScanScheduler(service, settings);
         ScheduledTaskRegistrar registrar = new ScheduledTaskRegistrar();
 
@@ -54,7 +54,7 @@ class ShortTermScanSchedulerTest {
         when(settings.zone()).thenReturn("Asia/Shanghai");
         when(settings.preselectCron()).thenReturn("0 30 14 * * MON-FRI", "not-a-cron");
         when(settings.finalCron()).thenReturn("0 48 14 * * MON-FRI", "also-invalid");
-        when(settings.readinessCron()).thenReturn("0 54 14 * * MON-FRI", "0 55 14 * * MON-FRI");
+        when(settings.readinessCron()).thenReturn("50 49 14 * * MON-FRI", "0 55 14 * * MON-FRI");
         ShortTermScanScheduler scheduler = new ShortTermScanScheduler(service, settings);
         ScheduledTaskRegistrar registrar = new ScheduledTaskRegistrar();
         scheduler.configureTasks(registrar);
@@ -69,7 +69,7 @@ class ShortTermScanSchedulerTest {
         assertThat(first).containsExactly(
                 Instant.parse("2026-07-22T06:30:00Z"),
                 Instant.parse("2026-07-22T06:48:00Z"),
-                Instant.parse("2026-07-22T06:54:00Z"));
+                Instant.parse("2026-07-22T06:49:50Z"));
         assertThat(refreshed).containsExactly(
                 first.get(0),
                 first.get(1),
@@ -83,7 +83,7 @@ class ShortTermScanSchedulerTest {
         when(settings.zone()).thenReturn("UTC");
         when(settings.preselectCron()).thenReturn("0 30 14 * * MON-FRI");
         when(settings.finalCron()).thenReturn("0 48 14 * * MON-FRI");
-        when(settings.readinessCron()).thenReturn("0 54 14 * * MON-FRI");
+        when(settings.readinessCron()).thenReturn("50 49 14 * * MON-FRI");
         ShortTermScanScheduler scheduler = new ShortTermScanScheduler(service, settings);
         ScheduledTaskRegistrar registrar = new ScheduledTaskRegistrar();
         scheduler.configureTasks(registrar);

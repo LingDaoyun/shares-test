@@ -45,13 +45,13 @@ const emptyReport = {
     regularAuctionOpen: true,
     closingDecisionWindow: true,
     postCloseFixedPrice: false,
-    decisionTimeLabel: '14:45-14:56',
+    decisionTimeLabel: '14:45-14:49',
     rules: [],
     warnings: [],
     status: 'OPEN',
     sourceName: 'SINA',
-    marketTimestamp: '2026-07-23T14:52:00+08:00',
-    calculatedAt: '2026-07-23T14:53:00+08:00'
+    marketTimestamp: '2026-07-23T14:49:20+08:00',
+    calculatedAt: '2026-07-23T14:49:30+08:00'
   },
   methodology: ['只使用当天行情'],
   ruleSet: {
@@ -98,21 +98,21 @@ const emptyReport = {
     coverageRatio: 0.9909,
     executionReliable: true,
     source: 'SINA',
-    fetchedAt: '2026-07-23T14:52:00+08:00'
+    fetchedAt: '2026-07-23T14:49:20+08:00'
   },
   reviewedSymbols: [],
-  dataCutoffAt: '2026-07-23T14:52:00+08:00',
-  generatedAt: '2026-07-23T14:53:00+08:00'
+  dataCutoffAt: '2026-07-23T14:49:20+08:00',
+  generatedAt: '2026-07-23T14:49:30+08:00'
 } as ShortTermReport
 
 const finalReadySnapshot: ShortTermScheduledSnapshot = {
   tradeDate: '2026-07-23',
   stage: 'FINAL',
   status: 'FINAL_READY',
-  strategyVersion: 'short-term-right-side-v3-chip-verified',
-  message: '尾盘最终结果已就绪',
-  dataCutoffAt: '2026-07-23T14:52:00+08:00',
-  completedAt: '2026-07-23T14:53:00+08:00',
+  strategyVersion: 'short-term-right-side-v4-transparent-ranking',
+  message: '14:49:40 前尾盘最终结果已就绪',
+  dataCutoffAt: '2026-07-23T14:49:20+08:00',
+  completedAt: '2026-07-23T14:49:30+08:00',
   blockedReasons: [],
   report: emptyReport
 }
@@ -172,6 +172,7 @@ const candidate = (symbol: string, name = `候选${symbol}`) => ({
     riskPenalty: 5,
     finalScore: 74,
     stageAdjustment: 11,
+    fundFlowAdjustment: 1.2,
     rankingScore: 85
   },
   technical: {
@@ -230,7 +231,7 @@ const candidate = (symbol: string, name = `候选${symbol}`) => ({
 
 function reportWithCandidates(
   symbols: string[],
-  generatedAt = '2026-07-23T14:53:00+08:00',
+  generatedAt = '2026-07-23T14:49:30+08:00',
   technicalRules: Partial<typeof emptyReport.ruleSet> = {},
   trailingDrawdownPercent = 2
 ): ShortTermReport {
@@ -398,6 +399,7 @@ describe('ShortTermPage manual scan flow', () => {
     expect(document.body.textContent).toContain('收盘强度 10%')
     expect(document.body.textContent).toContain('四因子原始分')
     expect(document.body.textContent).toContain('阶段校准')
+    expect(document.body.textContent).toContain('资金流微调（最多±2）')
     expect(document.body.textContent).toContain('排序分')
     expect(document.body.textContent).not.toContain('综合分')
     expect(document.body.textContent).toContain('换手率')
@@ -661,7 +663,7 @@ describe('ShortTermPage manual scan flow', () => {
       status: 'RUNNING',
       tradeDate: '2026-07-23',
       resultStatus: 'RUNNING',
-      strategyVersion: 'short-term-right-side-v3-chip-verified',
+      strategyVersion: 'short-term-right-side-v4-transparent-ranking',
       blockedReasons: [],
       createdAt: '2026-07-23T14:54:00+08:00',
       startedAt: null,
@@ -674,7 +676,7 @@ describe('ShortTermPage manual scan flow', () => {
       status: 'SUCCEEDED',
       tradeDate: '2026-07-23',
       resultStatus: 'NO_TRADE',
-      strategyVersion: 'short-term-right-side-v3-chip-verified',
+      strategyVersion: 'short-term-right-side-v4-transparent-ranking',
       blockedReasons: [],
       createdAt: '2026-07-23T14:54:00+08:00',
       startedAt: '2026-07-23T14:54:00+08:00',
@@ -760,7 +762,7 @@ describe('ShortTermPage manual scan flow', () => {
       status: 'RUNNING',
       tradeDate: '2026-07-23',
       resultStatus: 'RUNNING',
-      strategyVersion: 'short-term-right-side-v3-chip-verified',
+      strategyVersion: 'short-term-right-side-v4-transparent-ranking',
       blockedReasons: [],
       createdAt: '2026-07-23T14:54:00+08:00',
       startedAt: null,
@@ -774,7 +776,7 @@ describe('ShortTermPage manual scan flow', () => {
         status: 'RUNNING',
         tradeDate: '2026-07-23',
         resultStatus: 'RUNNING',
-        strategyVersion: 'short-term-right-side-v3-chip-verified',
+        strategyVersion: 'short-term-right-side-v4-transparent-ranking',
         blockedReasons: [],
         createdAt: '2026-07-23T14:54:00+08:00',
         startedAt: '2026-07-23T14:54:01+08:00',
@@ -787,11 +789,11 @@ describe('ShortTermPage manual scan flow', () => {
         status: 'SUCCEEDED',
         tradeDate: '2026-07-23',
         resultStatus: 'FINAL_READY',
-        strategyVersion: 'short-term-right-side-v3-chip-verified',
+        strategyVersion: 'short-term-right-side-v4-transparent-ranking',
         blockedReasons: [],
-        createdAt: '2026-07-23T14:54:00+08:00',
-        startedAt: '2026-07-23T14:54:01+08:00',
-        finishedAt: '2026-07-23T14:55:00+08:00',
+        createdAt: '2026-07-23T14:48:00+08:00',
+        startedAt: '2026-07-23T14:48:01+08:00',
+        finishedAt: '2026-07-23T14:49:30+08:00',
         message: '手动扫描完成',
         report: reportWithCandidates(['600901'])
       })
@@ -817,7 +819,7 @@ describe('ShortTermPage manual scan flow', () => {
 
 describe('ScheduledSnapshotStatus', () => {
   const expectations: Array<[ShortTermSnapshotStatus, string, string]> = [
-    ['FINAL_READY', '14:55 前买入确认已就绪', 'emerald'],
+    ['FINAL_READY', '14:49:40 前买入确认已就绪', 'emerald'],
     ['CACHE_PREVIEW', '缓存行情预览', 'sky'],
     ['PRESELECT_READY', '自动预选已就绪', 'border-line'],
     ['RUNNING', '自动任务执行中', 'border-line'],
@@ -841,7 +843,7 @@ describe('ScheduledSnapshotStatus', () => {
 
     expect(html).toContain(label)
     expect(html).toContain(tone)
-    expect(html).toContain('short-term-right-side-v3-chip-verified')
+    expect(html).toContain('short-term-right-side-v4-transparent-ranking')
     if (status === 'FINAL_READY') {
       expect(html).not.toContain('尾盘最终结果已就绪')
     }
@@ -917,9 +919,9 @@ function mockManualReport(report: ShortTermReport, jobId: string) {
     status: 'RUNNING',
     tradeDate: '2026-07-23',
     resultStatus: 'RUNNING',
-    strategyVersion: 'short-term-right-side-v3-chip-verified',
+    strategyVersion: 'short-term-right-side-v4-transparent-ranking',
     blockedReasons: [],
-    createdAt: '2026-07-23T14:54:00+08:00',
+    createdAt: '2026-07-23T14:48:00+08:00',
     startedAt: null,
     finishedAt: null,
     message: '手动扫描中',
@@ -930,11 +932,11 @@ function mockManualReport(report: ShortTermReport, jobId: string) {
     status: 'SUCCEEDED',
     tradeDate: '2026-07-23',
     resultStatus: report.candidateCount ? 'FINAL_READY' : 'NO_TRADE',
-    strategyVersion: 'short-term-right-side-v3-chip-verified',
+    strategyVersion: 'short-term-right-side-v4-transparent-ranking',
     blockedReasons: [],
-    createdAt: '2026-07-23T14:54:00+08:00',
-    startedAt: '2026-07-23T14:54:00+08:00',
-    finishedAt: '2026-07-23T14:55:00+08:00',
+    createdAt: '2026-07-23T14:48:00+08:00',
+    startedAt: '2026-07-23T14:48:00+08:00',
+    finishedAt: '2026-07-23T14:49:30+08:00',
     message: report.candidateCount
       ? '手动分析已完成，已生成当前时点候选'
       : '手动分析已完成，当前无合格候选',

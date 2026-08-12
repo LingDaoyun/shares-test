@@ -25,9 +25,9 @@ public class TradingClockService {
     public static final LocalTime POST_CLOSE_FIXED_PRICE_START = LocalTime.of(15, 5);
     public static final LocalTime POST_CLOSE_FIXED_PRICE_END = LocalTime.of(15, 30);
     public static final LocalTime SHORT_TERM_ENTRY_START = LocalTime.of(14, 45);
-    public static final LocalTime SHORT_TERM_ENTRY_END = LocalTime.of(14, 56, 59);
-    public static final LocalTime SHORT_TERM_ENTRY_EXCLUSIVE_END = LocalTime.of(14, 57);
-    public static final String SHORT_TERM_ENTRY_CHECKPOINT = "TAIL_ENTRY_1445_1456";
+    public static final LocalTime SHORT_TERM_ENTRY_END = LocalTime.of(14, 49, 59, 999_999_999);
+    public static final LocalTime SHORT_TERM_ENTRY_EXCLUSIVE_END = LocalTime.of(14, 50);
+    public static final String SHORT_TERM_ENTRY_CHECKPOINT = "TAIL_ENTRY_1445_1449";
     private static final Set<LocalDate> OFFICIAL_2026_HOLIDAYS = Set.of(
             LocalDate.parse("2026-01-01"), LocalDate.parse("2026-01-02"),
             LocalDate.parse("2026-02-16"), LocalDate.parse("2026-02-17"), LocalDate.parse("2026-02-18"),
@@ -125,14 +125,16 @@ public class TradingClockService {
                     List.of("上午拉升不能替代尾盘承接。"));
         }
         if (!time.isBefore(AFTERNOON_START) && time.isBefore(CLOSING_CALL_START)) {
-            return snapshot("AFTERNOON_CONTINUOUS", "下午连续竞价", true, time.isAfter(LocalTime.of(14, 30)), false, "14:45-14:56",
-                    List.of("14:30 后进入候选观察，普通股票只在 14:45-14:56 形成可执行尾盘结论。"),
-                    List.of("14:45 前只做预选；14:57 起已无法按普通连续竞价的新建议成交。"));
+            boolean actionableTail = !time.isBefore(SHORT_TERM_ENTRY_START)
+                    && time.isBefore(SHORT_TERM_ENTRY_EXCLUSIVE_END);
+            return snapshot("AFTERNOON_CONTINUOUS", "下午连续竞价", true, actionableTail, false, "14:45-14:49",
+                    List.of("14:30 后进入候选观察，普通股票只在 14:45-14:49 形成可执行尾盘结论。"),
+                    List.of("14:45 前只做预选；14:50 起不再发布新的隔夜买入建议。"));
         }
         if (!time.isBefore(CLOSING_CALL_START) && !time.isAfter(REGULAR_CLOSE)) {
             return snapshot("CLOSING_CALL_AUCTION", "收盘集合竞价", true, false, false, "14:57-15:00",
                     List.of("14:57-15:00 数据只用于历史验证和次日研究。"),
-                    List.of("14:57-15:00 收盘集合竞价不能新建 14:55 尾盘建议，也不能替代 14:45-14:56 入场窗口。"));
+                    List.of("14:57-15:00 收盘集合竞价不能新建尾盘建议，也不能替代 14:45-14:49 入场窗口。"));
         }
         if (!time.isBefore(POST_CLOSE_FIXED_PRICE_START) && !time.isAfter(POST_CLOSE_FIXED_PRICE_END)) {
             return snapshot("POST_CLOSE_FIXED_PRICE", "盘后固定价格", false, false, true, "15:05-15:30",

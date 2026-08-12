@@ -22,8 +22,8 @@ public class ShortTermScanScheduler {
     private static final Logger log = LoggerFactory.getLogger(ShortTermScanScheduler.class);
     private static final Map<ShortTermSnapshotStage, String> DEFAULT_CRONS = Map.of(
             PRESELECT, "0 30 14 * * MON-FRI",
-            FINAL, "0 48 14 * * MON-FRI",
-            READINESS_GUARD, "0 54 14 * * MON-FRI"
+            FINAL, "0 47 14 * * MON-FRI",
+            READINESS_GUARD, "50 49 14 * * MON-FRI"
     );
 
     private final ShortTermScheduledScanService scheduledScanService;

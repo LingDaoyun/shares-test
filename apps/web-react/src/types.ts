@@ -640,6 +640,7 @@ export interface ShortTermScoreBreakdown {
   mainNetInflowRatio?: number | null
   largeOrderNetInflowRatio?: number | null
   buyPressureScore?: number | null
+  fundFlowAdjustment?: number | null
   overheadPressureReliefScore?: number | null
   technicalRankingScore?: number | null
   v2RankingScore?: number | null

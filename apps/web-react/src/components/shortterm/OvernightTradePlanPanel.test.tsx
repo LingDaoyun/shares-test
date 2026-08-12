@@ -7,8 +7,8 @@ const plan: ShortTermTradePlan = {
   strategyLabel: '隔夜超短波段',
   status: 'ACTIONABLE',
   blockedReasons: [],
-  entryWindow: '14:45-14:56',
-  validUntil: '2026-07-23T14:56:59+08:00',
+  entryWindow: '14:45-14:49',
+  validUntil: '2026-07-23T14:49:59+08:00',
   referenceEntryPrice: 10.2,
   entryLow: 10.1,
   entryHigh: 10.3,
@@ -62,7 +62,7 @@ describe('OvernightTradePlanPanel', () => {
     expect(html).toContain('隔夜交易纪律')
     expect(html).toContain('可执行')
     expect(html).toContain('<dl')
-    expect(html).toContain('14:45-14:56')
+    expect(html).toContain('14:45-14:49')
     expect(html).toContain('10.20')
     expect(html).toContain('10.10')
     expect(html).toContain('10.30')

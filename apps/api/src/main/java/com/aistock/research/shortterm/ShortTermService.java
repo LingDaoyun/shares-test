@@ -15,7 +15,6 @@ import com.aistock.research.quality.EvidenceCompletenessInput;
 import com.aistock.research.quality.EvidenceCompletenessService;
 import com.aistock.research.quality.RecommendationQuality;
 import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
-import com.aistock.research.shortterm.chip.ChipActivationMode;
 import com.aistock.research.shortterm.chip.ChipVerificationStatus;
 import com.aistock.research.shortterm.chip.ShortTermChipAnalysisService;
 import com.aistock.research.shortterm.chip.ShortTermChipSnapshot;
@@ -77,10 +76,10 @@ public class ShortTermService {
     private static final BigDecimal MEDIUM_TURNOVER_TAIL_AMOUNT = new BigDecimal("800000000");
     private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private static final LocalTime ACTIONABLE_TAIL_START = LocalTime.of(14, 45);
-    private static final LocalTime ACTIONABLE_TAIL_END_EXCLUSIVE = LocalTime.of(14, 57);
+    private static final LocalTime ACTIONABLE_TAIL_END_EXCLUSIVE = LocalTime.of(14, 50);
     private static final LocalTime POST_CLOSE_FIXED_PRICE_START = LocalTime.of(15, 5);
     private static final LocalTime POST_CLOSE_FIXED_PRICE_END = LocalTime.of(15, 30);
-    private static final String ACTIONABLE_TAIL_LABEL = "14:45-14:56";
+    private static final String ACTIONABLE_TAIL_LABEL = "14:45-14:49";
     private static final ShortTermWeightProfile WEIGHT_PROFILE = new ShortTermWeightProfile(
             new BigDecimal("0.10"),
             new BigDecimal("0.30"),
@@ -138,7 +137,7 @@ public class ShortTermService {
                     List.of("煤炭", "煤业", "能源", "电力", "石油", "油气")
             )
     );
-    private static final String QUOTE_NOTE = "短线右侧模块先做全 A 股行情漏斗，再对候选拉取近一年 K 线、最近年报、同日资金流和推算筹码成本；PE/PB 仅作估值语境，筹码只参与同动作层候选排序。";
+    private static final String QUOTE_NOTE = "短线右侧模块先做全 A 股行情漏斗，再对候选拉取近一年 K 线、最近年报、同日资金流和推算筹码成本；PE/PB 仅作估值语境，筹码只作影子诊断，不参与生产排序。";
 
     private final EastMoneyClient eastMoneyClient;
     private final EvidenceCompletenessService evidenceCompletenessService;
@@ -477,7 +476,7 @@ public class ShortTermService {
                 ))
                 .toList();
         List<ScoredShortTerm> scored = attachRankingDiagnostics(rawScored).stream()
-                .sorted(shortTermRankingComparator(rawScored))
+                .sorted(shortTermRankingComparator())
                 .toList();
 
         List<ShortTermRiskExclusion> exclusions = java.util.stream.Stream.of(
@@ -516,13 +515,13 @@ public class ShortTermService {
                         "第三层技术底分固定为金叉 45%、放量上涨 30%、换手适配 15%、K 线收盘强度 10%。",
                         "筹码结构是独立证据层，只展示成本分布、上方筹码和前高残余筹码；不与金叉、量能、换手率混算主分。",
                         "筹码由东方财富换手率和日 K 在 Java 本地复算，Tushare 只认证最近完整交易日；认证失败不阻断扫描，也不能改变动作建议。",
-                        "当前筹码配置为 " + chipSettings.activationMode() + "；ACTIVE 模式下有效本地筹码占 25%，只在同一动作层级内调整推荐顺序。",
+                        "当前筹码配置为 " + chipSettings.activationMode() + "；即使历史配置仍为 ACTIVE，筹码也只保留影子诊断，不能改变生产排序或动作。",
                         "默认输出八个短线候选：可执行层在前、观察层补足展示，但不会为了凑数制造加仓建议。",
                         "PE、PB、热门方向和普通财务质量只作上下文与风险说明，不进入短线四项主分。",
                         "热门方向可帮助全市场预选，但不能覆盖金叉、放量、换手、上影线和硬风险门禁。",
                         "涨幅过大、距离 20 日线过远、120 日位置过高、量能过度放大会被视为追涨风险，宁可等待回踩确认。",
                         "最终建议只做短线纪律提示：右侧早期也以分批试错为主，跌破关键均线要退出。",
-                        "14:45-14:56 使用当时已经产生的分时、均价线、尾盘成交占比和高点回落完成普通股票尾盘决策；14:57 后数据只用于历史复盘，不能反推当日买点。"
+                        "14:45-14:49 使用当时已经产生的分时、均价线、尾盘成交占比和高点回落完成普通股票尾盘决策；14:50 后数据只用于历史复盘，不能反推当日买点。"
                 ),
                 ruleSet,
                 WEIGHT_PROFILE,
@@ -821,6 +820,7 @@ public class ShortTermService {
                         supplyDemand.mainNetInflowRatio(),
                         supplyDemand.largeOrderNetInflowRatio(),
                         supplyDemand.buyPressureScore(),
+                        supplyDemand.fundFlowAdjustment(),
                         supplyDemand.overheadPressureReliefScore(),
                         supplyDemand.technicalRankingScore(),
                         supplyDemand.v2RankingScore(),
@@ -1714,7 +1714,7 @@ public class ShortTermService {
                     null,
                     null,
                     new BigDecimal("35"),
-                    List.of("当天 1 分钟分时数据暂不可用，不能确认 14:45-14:56 可执行尾盘承接。"),
+                    List.of("当天 1 分钟分时数据暂不可用，不能确认 14:45-14:49 可执行尾盘承接。"),
                     List.of("尾盘分时缺失时不执行短线买入。")
             );
         }
@@ -1736,7 +1736,7 @@ public class ShortTermService {
                     null,
                     null,
                     new BigDecimal("35"),
-                    List.of("当天 1 分钟分时为空，无法判断 14:45-14:56 可执行尾盘承接。"),
+                    List.of("当天 1 分钟分时为空，无法判断 14:45-14:49 可执行尾盘承接。"),
                     List.of("没有当天分时证据时不执行短线买入。")
             );
         }
@@ -1811,7 +1811,7 @@ public class ShortTermService {
                     null,
                     null,
                     new BigDecimal("40"),
-                    List.of("当前最新分时到 " + latestAvailableMinute + "，尚未进入 14:45-14:56 可执行尾盘窗口。"),
+                    List.of("当前最新分时到 " + latestAvailableMinute + "，尚未进入 14:45-14:49 可执行尾盘窗口。"),
                     List.of("14:45 前只筛候选，不把盘中涨幅当作买点。", "进入可执行窗口后再复核均价线、回落和成交占比。")
             );
         }
@@ -1858,7 +1858,7 @@ public class ShortTermService {
                     null,
                     null,
                     new BigDecimal("35"),
-                    List.of("缺少 14:45-14:56 可执行尾盘分时；14:57 后数据不能反推当日买点。"),
+                    List.of("缺少 14:45-14:49 可执行尾盘分时；14:50 后数据不能反推当日买点。"),
                     List.of("可执行窗口证据缺失时不执行短线买入。")
             );
         }
@@ -1905,10 +1905,10 @@ public class ShortTermService {
             label = "尾盘回落";
         }
         List<String> reasons = new ArrayList<>();
-        reasons.add("14:45-14:56 涨跌 " + valueText(changeFromActionableTail) + "%，可执行尾盘高点回落 " + valueText(drawdown) + "%。");
+        reasons.add("14:45-14:49 涨跌 " + valueText(changeFromActionableTail) + "%，可执行尾盘高点回落 " + valueText(drawdown) + "%。");
         if (points.stream().anyMatch(point ->
                 !point.minute().toLocalTime().isBefore(ACTIONABLE_TAIL_END_EXCLUSIVE))) {
-            reasons.add("14:57 后分时仅保留为历史观察，未参与本次可执行评分。");
+            reasons.add("14:50 后分时仅保留为历史观察，未参与本次可执行评分。");
         }
         reasons.add("最新价相对当日均价线 " + valueText(closeVsAverage) + "%，尾盘成交额占比 " + valueText(tailAmountRatio)
                 + "%，本票动态确认门槛 " + valueText(tailAmountRatioThreshold) + "%。");
@@ -1917,7 +1917,7 @@ public class ShortTermService {
         } else if ("WATCH".equals(status)) {
             reasons.add("尾盘没有明显走坏，但强度不足，只能继续观察。");
         } else {
-            reasons.add("尾盘回落或均价线承接不足，不适合作为 14:45-14:56 可执行买点。");
+            reasons.add("尾盘回落或均价线承接不足，不适合作为 14:45-14:49 可执行买点。");
         }
         return new ShortTermTailSignal(
                 status,
@@ -1934,7 +1934,7 @@ public class ShortTermService {
                 tailAmountRatio,
                 score,
                 reasons,
-                List.of("普通股票只用 14:45-14:56 已产生的数据完成尾盘决策。", "尾盘跌回均价线下方或从高点回落超过 1.8% 时不追。", "大成交额股票采用较低尾盘成交占比门槛，但仍必须站稳均价线并保持价格强度。", "14:57 后数据只用于历史复盘，不能反推买点。")
+                List.of("普通股票只用 14:45-14:49 已产生的数据完成尾盘决策。", "尾盘跌回均价线下方或从高点回落超过 1.8% 时不追。", "大成交额股票采用较低尾盘成交占比门槛，但仍必须站稳均价线并保持价格强度。", "14:50 后数据只用于历史复盘，不能反推买点。")
         );
     }
 
@@ -1990,7 +1990,7 @@ public class ShortTermService {
                     "ADD",
                     "加仓",
                     Math.min(90, Math.max(base.confidence(), tailSignal.score().setScale(0, RoundingMode.HALF_UP).intValue())),
-                    "右侧结构通过，且当日分时证据不晚于 14:45-14:56 可成交决策时刻，可按纪律小仓试错。",
+                    "右侧结构通过，且当日分时证据不晚于 14:45-14:49 可成交决策时刻，可按纪律小仓试错。",
                     merge(base.reasons(), tailSignal.reasons()),
                     merge(base.riskControls(), tailSignal.riskControls())
             );
@@ -2030,11 +2030,11 @@ public class ShortTermService {
             );
         }
         String summary = switch (tailSignal.status()) {
-            case "CONFIRMED" -> "14:45-14:56 尾盘证据已形成，但当前已不在普通股票可成交决策窗口；结果只用于研究，不可新建短线仓位。";
-            case "NOT_READY" -> "当前还没有进入 14:45-14:56 可执行尾盘窗口，先保留候选观察。";
+            case "CONFIRMED" -> "14:45-14:49 尾盘证据已形成，但当前已不在普通股票可成交决策窗口；结果只用于研究，不可新建短线仓位。";
+            case "NOT_READY" -> "当前还没有进入 14:45-14:49 可执行尾盘窗口，先保留候选观察。";
             case "POST_CLOSE_FIXED_PRICE" -> "当前数据属于盘后固定价格区间，不能和普通尾盘买点混用，今日先观察。";
-            case "WATCH" -> "14:45-14:56 尾盘观察证据不足，结果只用于研究，不可新建短线仓位。";
-            case "WEAK" -> "14:45-14:56 分时承接不足或从高点回落，今日不追。";
+            case "WATCH" -> "14:45-14:49 尾盘观察证据不足，结果只用于研究，不可新建短线仓位。";
+            case "WEAK" -> "14:45-14:49 分时承接不足或从高点回落，今日不追。";
             case "HISTORICAL_ONLY" -> "只有 14:57 后历史数据，不能反推当日可执行买点。";
             default -> "当天分时数据缺失，无法确认 " + ACTIONABLE_TAIL_LABEL + " 可执行买点。";
         };
@@ -2129,14 +2129,14 @@ public class ShortTermService {
                 null,
                 null,
                 new BigDecimal("40"),
-                List.of("14:45-14:56 可执行尾盘信号会在候选入围后拉取。"),
+                List.of("14:45-14:49 可执行尾盘信号会在候选入围后拉取。"),
                 List.of("未完成可执行尾盘确认前不执行短线买入。")
         );
     }
 
     private List<String> withTailEntryRule(List<String> rules) {
         List<String> merged = new ArrayList<>(rules);
-        merged.add("最近三根已完成交易日内确认金叉后，14:45-14:56 仍必须复核当时已产生的尾盘分时；尾盘只能确认买点，不能为旧金叉或未确认金叉创造买点。");
+        merged.add("最近三根已完成交易日内确认金叉后，14:45-14:49 仍必须复核当时已产生的尾盘分时；尾盘只能确认买点，不能为旧金叉或未确认金叉创造买点。");
         merged.add("14:57 后数据只用于历史复盘，15:05-15:30 盘后固定价格不能替代普通尾盘确认。");
         return merged.stream().distinct().toList();
     }
@@ -2147,7 +2147,7 @@ public class ShortTermService {
         merged.add(new ShortTermEvidence(
                 "尾盘分时",
                 tailSignal.statusLabel() + "：最新分时 " + minuteText
-                        + "，14:45-14:56 涨跌 " + valueText(tailSignal.changeFromActionableTailPercent())
+                        + "，14:45-14:49 涨跌 " + valueText(tailSignal.changeFromActionableTailPercent())
                         + "%，高点回落 " + valueText(tailSignal.drawdownFromTailHighPercent())
                         + "%，相对均价线 " + valueText(tailSignal.closeVsAveragePricePercent())
                         + "%，尾盘成交占比 " + valueText(tailSignal.tailAmountRatioPercent()) + "%。",
@@ -2354,8 +2354,8 @@ public class ShortTermService {
                 && chip.contributionScore() != null
                 && chip.contributionScore().compareTo(BigDecimal.ZERO) > 0) {
             strengths.add("筹码模型已认证：当前价距推算成本中枢 "
-                    + valueText(chip.distanceToAverageCostPercent()) + "% ，筹码排序贡献 "
-                    + valueText(chip.contributionScore()) + " 分。");
+                    + valueText(chip.distanceToAverageCostPercent()) + "% ，影子诊断分 "
+                    + valueText(chip.contributionScore()) + "（未参与生产排序）。");
         }
         if (chip.overheadChipRatioPercent() != null
                 && chip.overheadChipRatioPercent().compareTo(new BigDecimal("35")) <= 0) {
@@ -2462,9 +2462,9 @@ public class ShortTermService {
         if (chip.verificationStatus() == ChipVerificationStatus.SINGLE_SOURCE) {
             risks.add("筹码结构由本地成交与换手模型推算，尚未使用外部数据交叉验证。");
         } else if (chip.verificationStatus() == ChipVerificationStatus.CONFLICT) {
-            risks.add("本地与外部筹码模型冲突，本轮筹码排序贡献为0。");
+            risks.add("本地与外部筹码模型冲突，本轮筹码影子诊断分为0。");
         } else if (chip.verificationStatus() == ChipVerificationStatus.STALE) {
-            risks.add("筹码认证日期过期，本轮筹码排序贡献为0。");
+            risks.add("筹码认证日期过期，本轮筹码影子诊断分为0。");
         } else if (chip.verificationStatus() == ChipVerificationStatus.INSUFFICIENT) {
             risks.add("K线或换手率质量不足，无法形成可靠筹码成本分布画像。");
         }
@@ -2681,8 +2681,8 @@ public class ShortTermService {
                         + valueText(chip.cost70High()) + " 元，上方筹码 "
                         + valueText(chip.overheadChipRatioPercent()) + "% ，结构分 "
                         + valueText(chip.chipStructureScore()) + "，认证系数 "
-                        + valueText(chip.verificationCoefficient()) + "，筹码排序贡献 "
-                        + valueText(chip.contributionScore()) + " 分。",
+                        + valueText(chip.verificationCoefficient()) + "，筹码影子诊断分 "
+                        + valueText(chip.contributionScore()) + "（未参与生产排序）。",
                 chip.externalTradeDate() == null
                         ? null
                         : "https://tushare.pro/document/2?doc_id=293",
@@ -3199,6 +3199,7 @@ public class ShortTermService {
                 score.valuationScore(), score.financialScore(), score.riskPenalty(),
                 score.finalScore(), score.stageAdjustment(), score.mainNetInflowRatio(),
                 score.largeOrderNetInflowRatio(), score.buyPressureScore(),
+                score.fundFlowAdjustment(),
                 score.overheadPressureReliefScore(), score.technicalRankingScore(),
                 score.v2RankingScore(), score.chipContributionScore(), score.v3RankingScore(),
                 v2Rank, v3Rank, rankDelta, score.rankingScore()
@@ -3270,25 +3271,8 @@ public class ShortTermService {
         };
     }
 
-    private Comparator<ScoredShortTerm> shortTermRankingComparator(List<ScoredShortTerm> scored) {
-        boolean hasChipSnapshot = scored != null && scored.stream()
-                .anyMatch(item -> item.candidate().chip() != null);
-        return chipSettings.activationMode() == ChipActivationMode.ACTIVE && hasChipSnapshot
-                ? shortTermActiveRankingComparator()
-                : shortTermV2RankingComparator();
-    }
-
-    private Comparator<ScoredShortTerm> shortTermActiveRankingComparator() {
-        return Comparator
-                .comparingInt((ScoredShortTerm item) -> eligibilityGatePriority(item.candidate().action())).reversed()
-                .thenComparing(Comparator.comparingInt(
-                        (ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed())
-                .thenComparing(item -> item.candidate().score().rankingScore(),
-                        Comparator.nullsLast(Comparator.reverseOrder()))
-                .thenComparing(Comparator.comparingInt(
-                        (ScoredShortTerm item) -> eligibleGoldenCrossPriority(item.candidate())).reversed())
-                .thenComparing(Comparator.comparingInt(
-                        (ScoredShortTerm item) -> rightSideMaturityPriority(item.candidate())).reversed());
+    private Comparator<ScoredShortTerm> shortTermRankingComparator() {
+        return shortTermV2RankingComparator();
     }
 
     private Comparator<ScoredShortTerm> shortTermV3RankingComparator() {
@@ -3305,34 +3289,17 @@ public class ShortTermService {
     }
 
     private Comparator<ScoredShortTerm> shortTermV2RankingComparator() {
-        Comparator<ScoredShortTerm> supplyDemandOrder = Comparator
-                .comparingInt((ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed()
-                .thenComparing(Comparator.comparing(
-                        (ScoredShortTerm item) -> hasFundFlow(item.candidate().score())
-                ).reversed())
-                .thenComparing(item -> item.candidate().score().v2RankingScore(),
-                        Comparator.nullsLast(Comparator.reverseOrder()))
+        return Comparator
+                .comparingInt((ScoredShortTerm item) -> eligibilityGatePriority(item.candidate().action())).reversed()
                 .thenComparing(Comparator.comparingInt(
                         (ScoredShortTerm item) -> eligibleGoldenCrossPriority(item.candidate())).reversed())
-                .thenComparing(Comparator.comparingInt(
-                        (ScoredShortTerm item) -> rightSideMaturityPriority(item.candidate())).reversed());
-        Comparator<ScoredShortTerm> legacyOrder = Comparator
-                .comparingInt((ScoredShortTerm item) -> eligibleGoldenCrossPriority(item.candidate())).reversed()
                 .thenComparing(Comparator.comparingInt(
                         (ScoredShortTerm item) -> actionPriority(item.candidate().action())).reversed())
                 .thenComparing(Comparator.comparingInt(
                         (ScoredShortTerm item) -> rightSideMaturityPriority(item.candidate())).reversed())
-                .thenComparing(item -> item.candidate().score().technicalRankingScore(), Comparator.reverseOrder());
-        return Comparator
-                .comparingInt((ScoredShortTerm item) -> eligibilityGatePriority(item.candidate().action())).reversed()
-                .thenComparing((left, right) -> hasFundFlow(left.candidate().score())
-                        || hasFundFlow(right.candidate().score())
-                        ? supplyDemandOrder.compare(left, right)
-                        : legacyOrder.compare(left, right));
-    }
-
-    private boolean hasFundFlow(ShortTermScoreBreakdown score) {
-        return score != null && score.mainNetInflowRatio() != null;
+                .thenComparing(item -> item.candidate().score().rankingScore(),
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(item -> item.candidate().symbol(), Comparator.nullsLast(String::compareTo));
     }
 
     private int eligibilityGatePriority(String action) {
