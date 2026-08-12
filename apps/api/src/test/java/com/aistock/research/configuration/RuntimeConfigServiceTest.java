@@ -1,7 +1,9 @@
 package com.aistock.research.configuration;
 
+import com.aistock.research.ai.LlmSettingsProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 import java.time.Instant;
 import java.util.List;
@@ -15,12 +17,26 @@ import static org.mockito.Mockito.when;
 class RuntimeConfigServiceTest {
 
     private RuntimeConfigStore store;
+    private MockEnvironment environment;
     private RuntimeConfigService service;
 
     @BeforeEach
     void setUp() {
         store = mock(RuntimeConfigStore.class);
-        service = new RuntimeConfigService(store);
+        environment = new MockEnvironment();
+        service = new RuntimeConfigService(store, new LlmSettingsProvider(store, environment));
+    }
+
+    @Test
+    void currentConfigReportsAnEnvironmentKeyWithoutReturningItsValue() {
+        environment.setProperty("DEEPSEEK_API_KEY", "environment-key");
+        when(store.readState()).thenReturn(state(null, "existing-model", 7, 3));
+
+        RuntimeConfigSnapshot response = service.currentConfig();
+
+        assertThat(response.llm().apiKey()).isNull();
+        assertThat(response.llm().apiKeyConfigured()).isTrue();
+        assertThat(response.llm().apiKeySource()).isEqualTo("env:DEEPSEEK_API_KEY");
     }
 
     @Test

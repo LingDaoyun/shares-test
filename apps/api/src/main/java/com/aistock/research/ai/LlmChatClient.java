@@ -1,9 +1,7 @@
 package com.aistock.research.ai;
 
-import com.aistock.research.config.LlmProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -14,29 +12,23 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 @Service
 public class LlmChatClient {
 
-    private static final String OPENAI_PROVIDER = "openai";
-    private static final String MOONSHOT_PROVIDER = "moonshot";
-    private static final String KIMI_CODE_PROVIDER = "kimi-code";
     private static final String DEEPSEEK_PROVIDER = "deepseek";
 
     private final ObjectMapper objectMapper;
-    private final LlmProperties properties;
-    private final Environment environment;
+    private final LlmSettingsProvider settingsProvider;
 
-    public LlmChatClient(ObjectMapper objectMapper, LlmProperties properties, Environment environment) {
+    public LlmChatClient(ObjectMapper objectMapper, LlmSettingsProvider settingsProvider) {
         this.objectMapper = objectMapper;
-        this.properties = properties;
-        this.environment = environment;
+        this.settingsProvider = settingsProvider;
     }
 
     public LlmConfigPreview currentConfig() {
-        LlmSettings settings = settings();
+        LlmSettings settings = settingsProvider.current();
         return new LlmConfigPreview(
                 settings.provider(),
                 settings.model(),
@@ -52,9 +44,9 @@ public class LlmChatClient {
     }
 
     public JsonNode completeJson(String systemPrompt, String userPrompt, String schemaName, Map<String, Object> schema) {
-        LlmSettings settings = settings();
+        LlmSettings settings = settingsProvider.current();
         if (!hasText(settings.apiKey())) {
-            throw new IllegalStateException("未配置 LLM API Key，无法执行 Agent AI 辩论增强。请配置 research.ai.llm.api-key 或 " + defaultKeyEnv(settings.provider()));
+            throw new IllegalStateException("未配置 LLM API Key，无法执行 Agent AI 辩论增强。请在系统配置中设置 API Key 或 apiKeyEnv");
         }
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -266,217 +258,8 @@ public class LlmChatClient {
         }
     }
 
-    private LlmSettings settings() {
-        String provider = canonicalProvider(firstNonBlank(
-                property("research.ai.llm.provider", properties.provider()),
-                OPENAI_PROVIDER
-        ));
-        String apiKey = firstNonBlank(
-                property("research.ai.llm.api-key", properties.apiKey()),
-                legacyOpenAiProperty(provider, "api-key"),
-                envValue(property("research.ai.llm.api-key-env", properties.apiKeyEnv())),
-                envValue(defaultKeyEnv(provider)),
-                legacyOpenAiEnv(provider)
-        );
-        String model = firstNonBlank(
-                property("research.ai.llm.model", properties.model()),
-                legacyOpenAiProperty(provider, "model"),
-                defaultModel(provider)
-        );
-        String baseUrl = firstNonBlank(
-                property("research.ai.llm.base-url", properties.baseUrl()),
-                legacyOpenAiProperty(provider, "base-url"),
-                defaultBaseUrl(provider)
-        );
-        String responseFormat = normalizeResponseFormat(firstNonBlank(
-                property("research.ai.llm.response-format", properties.responseFormat()),
-                defaultResponseFormat(provider)
-        ));
-        boolean strictJsonSchema = booleanProperty("research.ai.llm.strict-json-schema", properties.strictJsonSchema(), true);
-        String thinking = blankToNull(property("research.ai.llm.thinking", properties.thinking()));
-        Integer maxCompletionTokens = firstNonNull(
-                integerProperty("research.ai.llm.max-completion-tokens", properties.maxCompletionTokens()),
-                defaultMaxCompletionTokens(provider)
-        );
-        Double temperature = doubleProperty("research.ai.llm.temperature", properties.temperature());
-
-        return new LlmSettings(
-                provider,
-                apiKey,
-                apiKeySource(provider),
-                model,
-                baseUrl,
-                responseFormat,
-                strictJsonSchema,
-                thinking,
-                maxCompletionTokens,
-                temperature
-        );
-    }
-
-    private String canonicalProvider(String provider) {
-        String normalized = provider.toLowerCase(Locale.ROOT).trim();
-        if ("kimi-code".equals(normalized) || "kimi_code".equals(normalized)) {
-            return KIMI_CODE_PROVIDER;
-        }
-        if ("deepseek".equals(normalized) || "deep_seek".equals(normalized) || "deep-seek".equals(normalized)) {
-            return DEEPSEEK_PROVIDER;
-        }
-        if ("kimi".equals(normalized)) {
-            return MOONSHOT_PROVIDER;
-        }
-        return normalized;
-    }
-
-    private String defaultBaseUrl(String provider) {
-        if (KIMI_CODE_PROVIDER.equals(provider)) {
-            return "https://api.kimi.com/coding/v1";
-        }
-        if (MOONSHOT_PROVIDER.equals(provider)) {
-            return "https://api.moonshot.ai/v1";
-        }
-        if (DEEPSEEK_PROVIDER.equals(provider)) {
-            return "https://api.deepseek.com";
-        }
-        return "https://api.openai.com/v1";
-    }
-
-    private String defaultModel(String provider) {
-        if (KIMI_CODE_PROVIDER.equals(provider)) {
-            return "kimi-for-coding";
-        }
-        if (MOONSHOT_PROVIDER.equals(provider)) {
-            return "kimi-k2.6";
-        }
-        if (DEEPSEEK_PROVIDER.equals(provider)) {
-            return "deepseek-v4-pro";
-        }
-        return "gpt-5.5";
-    }
-
-    private String defaultKeyEnv(String provider) {
-        if (KIMI_CODE_PROVIDER.equals(provider)) {
-            return "KIMI_API_KEY";
-        }
-        if (MOONSHOT_PROVIDER.equals(provider)) {
-            return "MOONSHOT_API_KEY";
-        }
-        if (DEEPSEEK_PROVIDER.equals(provider)) {
-            return "DEEPSEEK_API_KEY";
-        }
-        return "OPENAI_API_KEY";
-    }
-
-    private String defaultResponseFormat(String provider) {
-        if (DEEPSEEK_PROVIDER.equals(provider)) {
-            return "json_object";
-        }
-        return "json_schema";
-    }
-
     private String maxTokensField(String provider) {
-        if (DEEPSEEK_PROVIDER.equals(provider)) {
-            return "max_tokens";
-        }
-        return "max_completion_tokens";
-    }
-
-    private Integer defaultMaxCompletionTokens(String provider) {
-        if (DEEPSEEK_PROVIDER.equals(provider)) {
-            return 8192;
-        }
-        return null;
-    }
-
-    private String legacyOpenAiProperty(String provider, String field) {
-        if (!OPENAI_PROVIDER.equals(provider)) {
-            return null;
-        }
-        return property("research.ai.openai." + field, null);
-    }
-
-    private String legacyOpenAiEnv(String provider) {
-        if (!OPENAI_PROVIDER.equals(provider)) {
-            return null;
-        }
-        return envValue("OPENAI_API_KEY");
-    }
-
-    private String apiKeySource(String provider) {
-        if (hasText(property("research.ai.llm.api-key", properties.apiKey()))) {
-            return "research.ai.llm.api-key";
-        }
-        if (OPENAI_PROVIDER.equals(provider) && hasText(property("research.ai.openai.api-key", null))) {
-            return "research.ai.openai.api-key";
-        }
-        String configuredEnv = property("research.ai.llm.api-key-env", properties.apiKeyEnv());
-        if (hasText(configuredEnv) && hasText(envValue(configuredEnv))) {
-            return "env:" + configuredEnv;
-        }
-        String defaultEnv = defaultKeyEnv(provider);
-        if (hasText(envValue(defaultEnv))) {
-            return "env:" + defaultEnv;
-        }
-        if (OPENAI_PROVIDER.equals(provider) && hasText(envValue("OPENAI_API_KEY"))) {
-            return "env:OPENAI_API_KEY";
-        }
-        return "missing";
-    }
-
-    private String normalizeResponseFormat(String responseFormat) {
-        return responseFormat.trim().toLowerCase(Locale.ROOT).replace('-', '_');
-    }
-
-    private String property(String name, String fallback) {
-        String value = environment.getProperty(name);
-        if (!hasText(value)) {
-            return fallback;
-        }
-        return value;
-    }
-
-    private boolean booleanProperty(String name, Boolean fallback, boolean defaultValue) {
-        String value = environment.getProperty(name);
-        if (!hasText(value)) {
-            return fallback == null ? defaultValue : fallback;
-        }
-        return Boolean.parseBoolean(value);
-    }
-
-    private Integer integerProperty(String name, Integer fallback) {
-        String value = environment.getProperty(name);
-        if (!hasText(value)) {
-            return fallback;
-        }
-        return Integer.parseInt(value);
-    }
-
-    private Double doubleProperty(String name, Double fallback) {
-        String value = environment.getProperty(name);
-        if (!hasText(value)) {
-            return fallback;
-        }
-        return Double.parseDouble(value);
-    }
-
-    private String envValue(String envName) {
-        if (!hasText(envName)) {
-            return null;
-        }
-        return System.getenv(envName);
-    }
-
-    private String firstNonBlank(String... values) {
-        for (String value : values) {
-            if (hasText(value)) {
-                return value;
-            }
-        }
-        return null;
-    }
-
-    private <T> T firstNonNull(T value, T fallback) {
-        return value == null ? fallback : value;
+        return DEEPSEEK_PROVIDER.equals(provider) ? "max_tokens" : "max_completion_tokens";
     }
 
     private String blankToNull(String value) {
@@ -508,17 +291,4 @@ public class LlmChatClient {
         return normalized.substring(0, 600) + "...";
     }
 
-    private record LlmSettings(
-            String provider,
-            String apiKey,
-            String apiKeySource,
-            String model,
-            String baseUrl,
-            String responseFormat,
-            boolean strictJsonSchema,
-            String thinking,
-            Integer maxCompletionTokens,
-            Double temperature
-    ) {
-    }
 }

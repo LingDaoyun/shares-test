@@ -1,5 +1,7 @@
 package com.aistock.research.configuration;
 
+import com.aistock.research.ai.LlmConfigPreview;
+import com.aistock.research.ai.LlmSettingsProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -10,9 +12,11 @@ public class RuntimeConfigService {
     private static final String STORAGE = "database";
 
     private final RuntimeConfigStore store;
+    private final LlmSettingsProvider settingsProvider;
 
-    public RuntimeConfigService(RuntimeConfigStore store) {
+    public RuntimeConfigService(RuntimeConfigStore store, LlmSettingsProvider settingsProvider) {
         this.store = store;
+        this.settingsProvider = settingsProvider;
     }
 
     public RuntimeConfigSnapshot currentConfig() {
@@ -52,24 +56,20 @@ public class RuntimeConfigService {
     }
 
     private LlmRuntimeConfig publicLlm(StoredLlmConfig stored) {
-        boolean keyConfigured = hasText(stored.apiKey());
+        LlmConfigPreview effective = settingsProvider.preview(stored);
         return new LlmRuntimeConfig(
-                stored.provider(),
+                effective.provider(),
                 null,
                 stored.apiKeyEnv(),
-                stored.model(),
-                stored.baseUrl(),
-                stored.responseFormat(),
-                stored.strictJsonSchema(),
-                stored.thinking(),
-                stored.maxCompletionTokens(),
-                stored.temperature(),
-                keyConfigured,
-                keyConfigured ? "database" : "missing"
+                effective.model(),
+                effective.baseUrl(),
+                effective.responseFormat(),
+                effective.strictJsonSchema(),
+                effective.thinking(),
+                effective.maxCompletionTokens(),
+                effective.temperature(),
+                effective.apiKeyConfigured(),
+                effective.apiKeySource()
         );
-    }
-
-    private boolean hasText(String value) {
-        return value != null && !value.isBlank();
     }
 }
