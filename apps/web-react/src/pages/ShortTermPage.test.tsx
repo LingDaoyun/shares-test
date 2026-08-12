@@ -407,6 +407,95 @@ describe('ShortTermPage manual scan flow', () => {
     expect(document.body.textContent).toContain('盘中暂定')
   })
 
+  it('shows lower-shadow support confirmation and its independent evidence', async () => {
+    const supportCandidate = {
+      ...candidate('600041', '承接股份'),
+      phase: 'SUPPORT_REVERSAL',
+      phaseLabel: '长下影承接',
+      action: 'SUPPORT_REVERSAL_LIGHT_TRIAL',
+      actionLabel: '长下影承接-轻仓',
+      score: {
+        ...candidate('600041').score,
+        supportReversalScore: 91,
+        rankingScore: 86
+      },
+      technical: {
+        ...candidate('600041').technical,
+        supportReversal: {
+          state: 'CONFIRMED',
+          stateLabel: '长下影承接确认',
+          score: 91,
+          lowerShadowPercent: 81.48,
+          bodyPercent: 14.81,
+          upperShadowPercent: 3.7,
+          closeLocationPercent: 81.48,
+          supportType: 'MA5',
+          supportPrice: 10.6,
+          supportReclaimed: true,
+          trendQualified: true,
+          volumeQualified: true,
+          turnoverQualified: true,
+          provisional: false,
+          reasons: [],
+          dataGaps: []
+        }
+      }
+    }
+    const report = reportWithCandidates(['600041'])
+    await renderWithManualReport(root, {
+      ...report,
+      candidates: [supportCandidate]
+    } as unknown as ShortTermReport)
+
+    expect(document.body.textContent).toContain('长下影承接确认')
+    await clickButton('承接股份')
+
+    expect(document.body.textContent).toContain('下影线占比')
+    expect(document.body.textContent).toContain('收复支撑')
+    expect(document.body.textContent).toContain('5 日线 10.60 元')
+    expect(document.body.textContent).toContain('承接反转分')
+  })
+
+  it('hides lower-shadow support score when the signal is not certified', async () => {
+    const ordinaryCandidate = {
+      ...candidate('600042', '普通上涨'),
+      score: {
+        ...candidate('600042').score,
+        supportReversalScore: 65
+      },
+      technical: {
+        ...candidate('600042').technical,
+        supportReversal: {
+          state: 'NONE',
+          stateLabel: '长下影承接未确认',
+          score: 65,
+          lowerShadowPercent: 20,
+          bodyPercent: 45,
+          upperShadowPercent: 35,
+          closeLocationPercent: 60,
+          supportType: null,
+          supportPrice: null,
+          supportReclaimed: false,
+          trendQualified: true,
+          volumeQualified: true,
+          turnoverQualified: true,
+          provisional: false,
+          reasons: ['下影线占比不足 50%'],
+          dataGaps: []
+        }
+      }
+    }
+    const report = reportWithCandidates(['600042'])
+    await renderWithManualReport(root, {
+      ...report,
+      candidates: [ordinaryCandidate]
+    } as unknown as ShortTermReport)
+
+    await clickButton('普通上涨')
+    expect(document.body.textContent).not.toContain('承接反转分')
+    expect(document.body.textContent).not.toContain('长下影承接未确认')
+  })
+
   it('shows a confirmed buy entry action in the short-term candidate detail', async () => {
     await renderWithManualReport(root, reportWithCandidates(['600795']))
     await clickButton('候选600795')

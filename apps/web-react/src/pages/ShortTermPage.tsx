@@ -18,7 +18,7 @@ import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCount
 import { loadShortTermViewPreferences, saveShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import type { ShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import { useShortTermScanStore } from '../store/shortTermScanStore'
-import type { ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermSupportReversalSignal, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -52,6 +52,7 @@ const DEFAULT_DRAFT: DraftParams = {
 
 const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'neutral' | 'sky'> = {
   RIGHT_EARLY_ADD: 'success',
+  SUPPORT_REVERSAL_LIGHT_TRIAL: 'success',
   WATCH_RIGHT_SIDE: 'brand',
   WATCH_VALUE_RETURN: 'brand',
   WAIT_PULLBACK: 'warning',
@@ -563,6 +564,7 @@ function CandidateRow({
   onSelect: () => void
 }) {
   const goldenCross = candidate.technical.goldenCross
+  const supportReversal = candidate.technical.supportReversal
   return (
     <button
       type="button"
@@ -575,6 +577,9 @@ function CandidateRow({
           <h3 className="truncate text-base font-semibold text-ink-900">{candidate.name}</h3>
           <span className="font-mono text-xs text-ink-400">{candidate.symbol}</span>
           <Tag tone="sky">{candidate.phaseLabel}</Tag>
+          {supportReversal?.state === 'CONFIRMED' ? (
+            <Tag tone="success">{supportReversal.stateLabel}</Tag>
+          ) : null}
         </div>
         <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-ink-500">{candidate.reason}</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
@@ -683,6 +688,11 @@ function CandidateDetail({
           <ScoreMetric label="量能 30%" value={candidate.score.volumeScore} />
           <ScoreMetric label="换手 15%" value={candidate.score.turnoverScore} />
           <ScoreMetric label="收盘强度 10%" value={candidate.score.closeStrengthScore} />
+          {candidate.score.supportReversalScore != null
+          && (candidate.technical.supportReversal?.state === 'CONFIRMED'
+            || candidate.technical.supportReversal?.state === 'OBSERVATION') ? (
+            <ScoreMetric label="承接反转分" value={candidate.score.supportReversalScore} />
+          ) : null}
           <ScoreMetric label="四因子原始分" value={candidate.score.finalScore} />
           <ScoreMetric label="阶段校准" value={candidate.score.stageAdjustment ?? 0} />
           <ScoreMetric label="排序分" value={candidate.score.rankingScore ?? candidate.score.finalScore} />
@@ -695,6 +705,8 @@ function CandidateDetail({
           <span>{weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型热度' : '换手'} {formatNumber(weightProfile.finalTurnover * 100)}%</span>
           <span>{weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型财务与估值' : '收盘强度'} {formatNumber(weightProfile.finalCloseStrength * 100)}%</span>
         </div>
+
+        <SupportReversalDetail signal={candidate.technical.supportReversal} />
 
         <div className="grid grid-cols-2 gap-2">
           <Metric label="MA5/10/20" value={`${formatNumber(candidate.technical.ma5)} / ${formatNumber(candidate.technical.ma10)} / ${formatNumber(candidate.technical.ma20)}`} />
@@ -792,6 +804,42 @@ function GoldenCrossDetail({ snapshot }: { snapshot: ShortTermGoldenCrossSnapsho
       ) : null}
     </>
   )
+}
+
+function SupportReversalDetail({ signal }: { signal: ShortTermSupportReversalSignal | null | undefined }) {
+  if (!signal || (signal.state !== 'CONFIRMED' && signal.state !== 'OBSERVATION')) {
+    return null
+  }
+  return (
+    <section className="border-t border-line-soft pt-3" aria-label="长下影承接证据">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Tag tone={signal.state === 'CONFIRMED' ? 'success' : 'sky'}>{signal.stateLabel}</Tag>
+        <span className="text-xs text-ink-500">独立形态认证，不单独推断主力做多</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+        <Metric label="下影线占比" value={`${formatNumber(signal.lowerShadowPercent)}%`} />
+        <Metric label="实体 / 上影" value={`${formatNumber(signal.bodyPercent)}% / ${formatNumber(signal.upperShadowPercent)}%`} />
+        <Metric label="收盘位置" value={`${formatNumber(signal.closeLocationPercent)}%`} />
+        <Metric label="收复支撑" value={supportReference(signal)} />
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-ink-500">
+        失效条件：重新跌破本次承接低点或收复支撑，或次日弱开后不能及时收回；确认信号最多对应轻仓试错。
+      </p>
+    </section>
+  )
+}
+
+function supportReference(signal: ShortTermSupportReversalSignal) {
+  const label = signal.supportType === 'MA5'
+    ? '5 日线'
+    : signal.supportType === 'MA10'
+      ? '10 日线'
+      : signal.supportType === 'MA20'
+        ? '20 日线'
+        : signal.supportType === 'PREVIOUS_HIGH20'
+          ? '前 20 日高点'
+          : '关键支撑'
+  return signal.supportPrice == null ? label : `${label} ${formatPrice(signal.supportPrice)} 元`
 }
 
 function TailSignalPanel({ signal }: { signal: ShortTermTailSignal }) {

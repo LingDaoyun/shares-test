@@ -29,8 +29,49 @@ public record ShortTermTechnicalSnapshot(
         ShortTermGoldenCrossSnapshot goldenCross,
         BigDecimal atr14Percent,
         BigDecimal recentSupportPrice,
-        ShortTermMomentumQuality momentumQuality
+        ShortTermMomentumQuality momentumQuality,
+        ShortTermSupportReversalSignal supportReversal
 ) {
+    public ShortTermTechnicalSnapshot(
+            LocalDate tradeDate,
+            BigDecimal ma5,
+            BigDecimal ma10,
+            BigDecimal ma20,
+            BigDecimal ma60,
+            BigDecimal ma20SlopePercent,
+            BigDecimal ma60SlopePercent,
+            BigDecimal previousHigh20,
+            BigDecimal previousHigh60,
+            BigDecimal breakoutFromPreviousHigh20Percent,
+            BigDecimal previousRange20Percent,
+            BigDecimal high120,
+            BigDecimal low120,
+            BigDecimal volumeRatio5,
+            BigDecimal volumeRatio20,
+            BigDecimal rangePosition60,
+            BigDecimal rangePosition120,
+            BigDecimal distanceToMa20Percent,
+            BigDecimal drawdownFrom120HighPercent,
+            BigDecimal todayAmplitudePercent,
+            int consecutiveAboveMa20Days,
+            String rightSideSignal,
+            ShortTermGoldenCrossSnapshot goldenCross,
+            BigDecimal atr14Percent,
+            BigDecimal recentSupportPrice,
+            ShortTermMomentumQuality momentumQuality
+    ) {
+        this(
+                tradeDate, ma5, ma10, ma20, ma60, ma20SlopePercent, ma60SlopePercent,
+                previousHigh20, previousHigh60, breakoutFromPreviousHigh20Percent,
+                previousRange20Percent, high120, low120, volumeRatio5, volumeRatio20,
+                rangePosition60, rangePosition120, distanceToMa20Percent,
+                drawdownFrom120HighPercent, todayAmplitudePercent, consecutiveAboveMa20Days,
+                rightSideSignal, goldenCross, atr14Percent, recentSupportPrice,
+                momentumQuality,
+                ShortTermSupportReversalSignal.unavailable()
+        );
+    }
+
     public ShortTermTechnicalSnapshot(
             LocalDate tradeDate,
             BigDecimal ma5,
@@ -84,7 +125,8 @@ public record ShortTermTechnicalSnapshot(
                 goldenCross,
                 atr14Percent,
                 recentSupportPrice,
-                ShortTermMomentumQuality.unavailable()
+                ShortTermMomentumQuality.unavailable(),
+                ShortTermSupportReversalSignal.unavailable()
         );
     }
 
@@ -115,7 +157,40 @@ public record ShortTermTechnicalSnapshot(
                 goldenCross,
                 atr14Percent,
                 recentSupportPrice,
-                quality == null ? ShortTermMomentumQuality.unavailable() : quality
+                quality == null ? ShortTermMomentumQuality.unavailable() : quality,
+                supportReversal == null ? ShortTermSupportReversalSignal.unavailable() : supportReversal
+        );
+    }
+
+    public ShortTermTechnicalSnapshot withSupportReversal(ShortTermSupportReversalSignal signal) {
+        return new ShortTermTechnicalSnapshot(
+                tradeDate,
+                ma5,
+                ma10,
+                ma20,
+                ma60,
+                ma20SlopePercent,
+                ma60SlopePercent,
+                previousHigh20,
+                previousHigh60,
+                breakoutFromPreviousHigh20Percent,
+                previousRange20Percent,
+                high120,
+                low120,
+                volumeRatio5,
+                volumeRatio20,
+                rangePosition60,
+                rangePosition120,
+                distanceToMa20Percent,
+                drawdownFrom120HighPercent,
+                todayAmplitudePercent,
+                consecutiveAboveMa20Days,
+                rightSideSignal,
+                goldenCross,
+                atr14Percent,
+                recentSupportPrice,
+                momentumQuality == null ? ShortTermMomentumQuality.unavailable() : momentumQuality,
+                signal == null ? ShortTermSupportReversalSignal.unavailable() : signal
         );
     }
 }

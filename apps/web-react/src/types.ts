@@ -573,6 +573,26 @@ export interface ShortTermTechnicalSnapshot {
   rightSideSignal: string
   goldenCross?: ShortTermGoldenCrossSnapshot | null
   momentumQuality?: ShortTermMomentumQuality | null
+  supportReversal?: ShortTermSupportReversalSignal | null
+}
+
+export interface ShortTermSupportReversalSignal {
+  state: 'CONFIRMED' | 'OBSERVATION' | 'NONE' | 'UNAVAILABLE'
+  stateLabel: string
+  score: number
+  lowerShadowPercent: number | null
+  bodyPercent: number | null
+  upperShadowPercent: number | null
+  closeLocationPercent: number | null
+  supportType: 'MA5' | 'MA10' | 'MA20' | 'PREVIOUS_HIGH20' | null
+  supportPrice: number | null
+  supportReclaimed: boolean
+  trendQualified: boolean
+  volumeQualified: boolean
+  turnoverQualified: boolean
+  provisional: boolean
+  reasons: string[]
+  dataGaps: string[]
 }
 
 export interface ShortTermMomentumQuality {
@@ -610,6 +630,7 @@ export interface ShortTermScoreBreakdown {
   volumeScore: number
   turnoverScore: number
   closeStrengthScore: number
+  supportReversalScore?: number
   marketHeatScore: number
   valuationScore: number
   financialScore: number

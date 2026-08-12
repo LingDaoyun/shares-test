@@ -1306,6 +1306,7 @@ class ShortTermServiceTest {
         assertThat(candidate.tailSignal().status()).isEqualTo("CONFIRMED");
         assertThat(candidate.technical().rightSideSignal()).contains("右侧早期");
         assertThat(candidate.financial().qualityScore()).isGreaterThanOrEqualTo(new BigDecimal("58"));
+        assertThat(candidate.score().supportReversalScore()).isEqualByComparingTo("0.00");
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("000002");
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("600004");
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("600003");
@@ -1346,7 +1347,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldExcludeNonPositiveDailyChangeFromShortTermRecommendations() {
+    void shouldExcludeDeclineBeyondTwoPercentBeforeTechnicalReview() {
         eastMoneyClient.quotes = List.of(
                 quote("600009", "下跌候选", "14.96", "-2.35", "18.00", "1.60", "260000000")
         );
@@ -1359,11 +1360,62 @@ class ShortTermServiceTest {
         assertThat(report.exclusions()).filteredOn(exclusion -> "600009".equals(exclusion.symbol()))
                 .singleElement()
                 .satisfies(exclusion -> {
-                    assertThat(exclusion.category()).isEqualTo("NON_POSITIVE_DAILY_CHANGE");
-                    assertThat(exclusion.reason()).isEqualTo("当日未上涨");
+                    assertThat(exclusion.category()).isEqualTo("DAILY_DECLINE_TOO_LARGE");
+                    assertThat(exclusion.reason()).isEqualTo("当日跌幅超过承接观察上限");
                     assertThat(exclusion.evidence()).contains("当日涨跌幅", "-2.35%");
                 });
         assertThat(eastMoneyClient.requestedKlineSymbols).doesNotContain("600009");
+    }
+
+    @Test
+    void shouldKeepConfirmedLowerShadowSupportAsLightTrialCandidate() {
+        Instant timestamp = Instant.parse("2026-07-07T06:54:00Z");
+        eastMoneyClient.snapshotFetchedAt = timestamp;
+        eastMoneyClient.quotes = List.of(
+                withTurnover(quoteAt("600041", "承接股份", "通用设备", timestamp, "-1.00", "900000000"), "3.00"),
+                withTurnover(quoteAt("600042", "同行上涨一", "通用设备", timestamp, "1.20", "800000000"), "3.00"),
+                withTurnover(quoteAt("600043", "同行上涨二", "通用设备", timestamp, "0.80", "700000000"), "3.00")
+        );
+        eastMoneyClient.klines.put("600041", lowerShadowSupportKLines("600041"));
+        eastMoneyClient.klines.put("600042", confirmedRightEarlyKLines("600042", "10.62", "230000"));
+        eastMoneyClient.klines.put("600043", confirmedRightEarlyKLines("600043", "10.62", "230000"));
+        eastMoneyClient.quotes.forEach(quote -> eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
+        eastMoneyClient.intraday.put("600041", confirmedTail("600041"));
+
+        ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:55:00Z"), SHANGHAI))
+                .report(8, 100, 8, null, null, null, null, null, null, null);
+        ShortTermCandidate candidate = find(report, "600041");
+
+        assertThat(candidate.action()).isEqualTo("SUPPORT_REVERSAL_LIGHT_TRIAL");
+        assertThat(candidate.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
+        assertThat(candidate.technical().supportReversal().confirmed()).isTrue();
+        assertThat(candidate.score().supportReversalScore()).isGreaterThanOrEqualTo(new BigDecimal("70"));
+        assertThat(candidate.entryRules()).anyMatch(rule -> rule.contains("承接低点") || rule.contains("收复支撑"));
+    }
+
+    @Test
+    void shouldHideSlightDeclineWithoutConfirmedLowerShadowSupportAfterKlineReview() {
+        Instant timestamp = Instant.parse("2026-07-07T06:54:00Z");
+        eastMoneyClient.snapshotFetchedAt = timestamp;
+        eastMoneyClient.quotes = List.of(
+                withTurnover(quoteAt("600044", "普通微跌", "通用设备", timestamp, "-1.00", "900000000"), "3.00"),
+                withTurnover(quoteAt("600045", "同行上涨一", "通用设备", timestamp, "1.20", "800000000"), "3.00"),
+                withTurnover(quoteAt("600046", "同行上涨二", "通用设备", timestamp, "0.80", "700000000"), "3.00")
+        );
+        eastMoneyClient.klines.put("600044", rightEarlyKLines("600044", "10.62", "230000"));
+        eastMoneyClient.klines.put("600045", confirmedRightEarlyKLines("600045", "10.62", "230000"));
+        eastMoneyClient.klines.put("600046", confirmedRightEarlyKLines("600046", "10.62", "230000"));
+        eastMoneyClient.quotes.forEach(quote -> eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
+
+        ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:55:00Z"), SHANGHAI))
+                .report(8, 100, 8, null, null, null, null, null, null, null);
+
+        assertThat(eastMoneyClient.requestedKlineSymbols).contains("600044");
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("600044");
+        assertThat(report.exclusions()).filteredOn(exclusion -> "600044".equals(exclusion.symbol()))
+                .singleElement()
+                .satisfies(exclusion -> assertThat(exclusion.category())
+                        .isEqualTo("SUPPORT_REVERSAL_NOT_CONFIRMED"));
     }
 
     @Test
@@ -1991,6 +2043,22 @@ class ShortTermServiceTest {
                 new BigDecimal("10.62"),
                 new BigDecimal("12.20"),
                 new BigDecimal("10.50"),
+                latest.volume(),
+                latest.amount()
+        ));
+        return rows;
+    }
+
+    private List<EastMoneyKLine> lowerShadowSupportKLines(String symbol) {
+        List<EastMoneyKLine> rows = new ArrayList<>(rightEarlyKLines(symbol, "10.62", "230000"));
+        EastMoneyKLine latest = rows.get(rows.size() - 1);
+        rows.set(rows.size() - 1, new EastMoneyKLine(
+                symbol,
+                latest.tradeDate(),
+                new BigDecimal("10.70"),
+                new BigDecimal("10.62"),
+                new BigDecimal("10.72"),
+                new BigDecimal("10.18"),
                 latest.volume(),
                 latest.amount()
         ));

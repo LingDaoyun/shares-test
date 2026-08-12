@@ -150,6 +150,7 @@ public class ShortTermService {
     private final ShortTermChipAnalysisService chipAnalysisService;
     private final ShortTermChipSettings chipSettings;
     private final ShortTermMomentumQualityEvaluator momentumQualityEvaluator = new ShortTermMomentumQualityEvaluator();
+    private final ShortTermSupportReversalEvaluator supportReversalEvaluator = new ShortTermSupportReversalEvaluator();
     private final ShortTermCoreSignalScorer coreSignalScorer = new ShortTermCoreSignalScorer();
     private final ShortTermSupplyDemandScorer supplyDemandScorer = new ShortTermSupplyDemandScorer();
     private final ValuationContextCalculator valuationContextCalculator = new ValuationContextCalculator();
@@ -759,7 +760,11 @@ public class ShortTermService {
         BigDecimal riskPenalty = riskPenalty(quote, technical, financial, ruleSet);
         ShortTermCoreSignalScore coreSignalScore = item.coreSignalScore();
         BigDecimal finalScore = coreSignalScore.finalScore();
-        StageAdjustedScore stageScore = stageAdjustedCoreScore(finalScore, technical.goldenCross());
+        StageAdjustedScore stageScore = stageAdjustedCoreScore(
+                finalScore,
+                technical.goldenCross(),
+                technical.supportReversal()
+        );
         ShortTermSupplyDemandScore supplyDemand = supplyDemandScorer.score(
                 fundFlow,
                 quote.tradeDate(),
@@ -806,6 +811,7 @@ public class ShortTermService {
                         coreSignalScore.volumeScore(),
                         coreSignalScore.turnoverScore(),
                         coreSignalScore.closeStrengthScore(),
+                        supportReversalScore(technical),
                         marketHeatScore,
                         valuationScore,
                         financialScore,
@@ -854,7 +860,8 @@ public class ShortTermService {
 
     private StageAdjustedScore stageAdjustedCoreScore(
             BigDecimal rawScore,
-            ShortTermGoldenCrossSnapshot goldenCross
+            ShortTermGoldenCrossSnapshot goldenCross,
+            ShortTermSupportReversalSignal supportReversal
     ) {
         BigDecimal score = rawScore == null ? new BigDecimal("30") : rawScore;
         BigDecimal rankingScore = score;
@@ -862,6 +869,9 @@ public class ShortTermService {
             rankingScore = clamp(score.max(new BigDecimal("85")));
         } else if (goldenCross != null && goldenCross.watchLayer()) {
             rankingScore = clamp(score.min(new BigDecimal("84")));
+        }
+        if (supportReversal != null && supportReversal.confirmed() && supportReversal.score() != null) {
+            rankingScore = clamp(rankingScore.max(supportReversal.score().min(new BigDecimal("86"))));
         }
         BigDecimal finalRawScore = clamp(score);
         return new StageAdjustedScore(
@@ -893,10 +903,21 @@ public class ShortTermService {
         );
         List<String> dataGaps = new ArrayList<>(evaluation.dataGaps());
         dataGaps.addAll(momentumQuality.dataGaps());
+        ShortTermTechnicalSnapshot snapshot = evaluation.snapshot().withMomentumQuality(momentumQuality);
+        ShortTermSupportReversalSignal supportReversal = supportReversalEvaluator.evaluate(
+                quote,
+                evaluation.rows(),
+                close,
+                latestBarCompleted,
+                snapshot,
+                momentumQuality,
+                ruleSet.maxDistanceToMa20Percent()
+        );
+        dataGaps.addAll(supportReversal.dataGaps());
         return new TechnicalContext(
                 quote,
                 evaluation.rows(),
-                evaluation.snapshot().withMomentumQuality(momentumQuality),
+                snapshot.withSupportReversal(supportReversal),
                 evaluation.last(),
                 evaluation.previous(),
                 dataGaps
@@ -1164,6 +1185,10 @@ public class ShortTermService {
         }
         if (financialHardRisk) {
             return new ActionDecision("DATA_REVIEW", "基本面红旗复核");
+        }
+        ShortTermSupportReversalSignal supportReversal = technical.supportReversal();
+        if (supportReversal != null && supportReversal.confirmed()) {
+            return new ActionDecision("SUPPORT_REVERSAL_LIGHT_TRIAL", "长下影承接-轻仓");
         }
         if ((rightEarly || "右侧已拉开".equals(technical.rightSideSignal()) || goldenCrossWatch) && chaseRisk) {
             return new ActionDecision("WAIT_PULLBACK", "右侧已动-等回踩");
@@ -1482,6 +1507,24 @@ public class ShortTermService {
                             "单票试错仓位不超过计划短线仓位的 1/5。",
                             "不追第二笔，次日不能继续站稳 5/10/20 日线时退出。",
                             "尾盘从高点回落或跌回均价线下方时取消试错。"
+                    )
+            );
+        }
+        if ("SUPPORT_REVERSAL_LIGHT_TRIAL".equals(decision.action())) {
+            ShortTermSupportReversalSignal support = technical.supportReversal();
+            return new TradingAdvice(
+                    "LIGHT_TRIAL",
+                    "轻仓试错",
+                    Math.min(confidence(finalScore), 76),
+                    "股价微跌但长下影收复关键支撑，属于承接反转试错，不是趋势加仓信号。",
+                    List.of(
+                            "下影线、收盘位置、支撑收复与量能条件同时通过。",
+                            "当前只证明下方存在承接，不能据此推断主力正在做多。"
+                    ),
+                    List.of(
+                            "单票试错仓位不超过计划短线仓位的 1/5。",
+                            "跌破本次承接低点或重新失守 " + supportName(support) + " 时退出。",
+                            "次日弱开且 30 分钟内不能收回支撑时不补仓。"
                     )
             );
         }
@@ -2036,8 +2079,9 @@ public class ShortTermService {
             ShortTermTailSignal tailSignal,
             boolean recentConfirmedGoldenCross
     ) {
-        return recentConfirmedGoldenCross
-                && (isRightSideExecutableCandidate(candidateAction) || "LIGHT_TRIAL".equals(base.action()))
+        boolean supportReversal = "SUPPORT_REVERSAL_LIGHT_TRIAL".equals(candidateAction);
+        return (supportReversal || recentConfirmedGoldenCross)
+                && (supportReversal || isRightSideExecutableCandidate(candidateAction) || "LIGHT_TRIAL".equals(base.action()))
                 && ("CONFIRMED".equals(tailSignal.status()) || "WATCH".equals(tailSignal.status()));
     }
 
@@ -2195,6 +2239,44 @@ public class ShortTermService {
         return value != null && value.compareTo(new BigDecimal(threshold)) <= 0;
     }
 
+    private BigDecimal supportReversalScore(ShortTermTechnicalSnapshot technical) {
+        if (technical == null || technical.supportReversal() == null || technical.supportReversal().score() == null) {
+            return BigDecimal.ZERO.setScale(2);
+        }
+        ShortTermSupportReversalSignal signal = technical.supportReversal();
+        if (!signal.confirmed() && !signal.watchLayer()) {
+            return BigDecimal.ZERO.setScale(2);
+        }
+        return signal.score();
+    }
+
+    private String supportReversalEvidence(ShortTermSupportReversalSignal signal) {
+        if (signal == null) {
+            return "微跌候选缺少长下影承接认证结果，不进入推荐池。";
+        }
+        List<String> details = new ArrayList<>();
+        details.add("下影线占比 " + valueText(signal.lowerShadowPercent()) + "%");
+        details.add("收盘位置 " + valueText(signal.closeLocationPercent()) + "%");
+        details.add("认证分 " + valueText(signal.score()));
+        details.addAll(signal.reasons());
+        details.addAll(signal.dataGaps());
+        return String.join("；", details) + "。";
+    }
+
+    private String supportName(ShortTermSupportReversalSignal signal) {
+        if (signal == null || signal.supportType() == null || signal.supportPrice() == null) {
+            return "关键支撑";
+        }
+        String label = switch (signal.supportType()) {
+            case "MA5" -> "5 日线";
+            case "MA10" -> "10 日线";
+            case "MA20" -> "20 日线";
+            case "PREVIOUS_HIGH20" -> "前 20 日高点";
+            default -> signal.supportType();
+        };
+        return label + " " + money(signal.supportPrice()) + " 元";
+    }
+
     private List<String> strengths(
             EastMoneyQuote quote,
             ShortTermTechnicalSnapshot technical,
@@ -2202,6 +2284,10 @@ public class ShortTermService {
             ValuationContext valuationContext
     ) {
         List<String> strengths = new ArrayList<>();
+        ShortTermSupportReversalSignal supportReversal = technical.supportReversal();
+        if (supportReversal != null && supportReversal.confirmed()) {
+            strengths.add("微跌长下影收复 " + supportName(supportReversal) + "，下方承接信号已通过独立认证。");
+        }
         if (isQualifiedRightSideSignal(technical.rightSideSignal())) {
             strengths.add("K 线处于" + technical.rightSideSignal() + "，不是纯左侧猜底。");
         }
@@ -2325,6 +2411,10 @@ public class ShortTermService {
         if (technical.ma20SlopePercent() != null && technical.ma20SlopePercent().compareTo(new BigDecimal("-0.80")) < 0) {
             risks.add("20 日线仍在明显下行，右侧确认不足，不能把低估值当买点。");
         }
+        ShortTermSupportReversalSignal supportReversal = technical.supportReversal();
+        if (supportReversal != null && supportReversal.confirmed()) {
+            risks.add("长下影只代表当日低位承接，不能单独证明主力做多；重新跌破承接低点或支撑位即失效。");
+        }
         if (technical.breakoutFromPreviousHigh20Percent() != null
                 && technical.breakoutFromPreviousHigh20Percent().compareTo(new BigDecimal("8")) > 0) {
             risks.add("突破前 20 日高点幅度偏大，短线追涨回撤风险上升。");
@@ -2394,6 +2484,14 @@ public class ShortTermService {
                     "换手率以 2%-5% 为优选区间，且上涨 K 线不能出现长上影弱收盘。",
                     "第二笔必须等待回踩不破 5/10/20 日线，不能在单日急拉后追。",
                     "财务持续亏损恶化或出现重大审计监管红旗时取消交易。"
+            );
+        }
+        if ("SUPPORT_REVERSAL_LIGHT_TRIAL".equals(decision.action())) {
+            return List.of(
+                    "仅在微跌不超过 2%、下影线占比至少 50% 且收盘位置至少 70% 时保留。",
+                    "必须触及并收复 MA5/MA10/MA20 或前 20 日高点，20 日量比保持 1.00-2.50。",
+                    "尾盘证据通过后最多使用计划短线仓位的 1/5，不能追加为加仓动作。",
+                    "重新失守收复支撑、跌破承接低点或次日弱开不能收回时退出。"
             );
         }
         return List.of(
@@ -2495,6 +2593,22 @@ public class ShortTermService {
                 quote.quoteUrl(),
                 10
         ));
+        ShortTermSupportReversalSignal supportReversal = technical.supportReversal();
+        if (supportReversal != null && !"UNAVAILABLE".equals(supportReversal.state())) {
+            evidence.add(new ShortTermEvidence(
+                    "长下影承接",
+                    supportReversal.stateLabel()
+                            + "：下影线占比 " + valueText(supportReversal.lowerShadowPercent())
+                            + "% ，实体占比 " + valueText(supportReversal.bodyPercent())
+                            + "% ，上影线占比 " + valueText(supportReversal.upperShadowPercent())
+                            + "% ，收盘位置 " + valueText(supportReversal.closeLocationPercent())
+                            + "% ；收复 " + supportName(supportReversal)
+                            + "，独立认证分 " + valueText(supportReversal.score())
+                            + "。该形态不单独推断主力做多。",
+                    quote.quoteUrl(),
+                    30
+            ));
+        }
         if (financial == null || financial.reportDate() == null) {
             evidence.add(new ShortTermEvidence("财报质量", "最近年报指标暂不可用，不能排除基本面红旗。", null, 0));
         } else {
@@ -2579,6 +2693,15 @@ public class ShortTermService {
 
     private String reason(EastMoneyQuote quote, ShortTermTechnicalSnapshot technical, ShortTermFinancialSnapshot financial, ActionDecision decision) {
         String financialText = financial == null ? "财报待复核" : financial.statusLabel();
+        if ("SUPPORT_REVERSAL_LIGHT_TRIAL".equals(decision.action())) {
+            ShortTermSupportReversalSignal support = technical.supportReversal();
+            return decision.actionLabel()
+                    + "：当日涨跌幅 " + valueText(quote.changePercent())
+                    + "% ，长下影占比 " + valueText(support == null ? null : support.lowerShadowPercent())
+                    + "% ，收盘位置 " + valueText(support == null ? null : support.closeLocationPercent())
+                    + "% ，已收复 " + supportName(support)
+                    + "；" + financialText + "。";
+        }
         return decision.actionLabel()
                 + "："
                 + technical.rightSideSignal()
@@ -2598,6 +2721,9 @@ public class ShortTermService {
     }
 
     private String phase(ShortTermTechnicalSnapshot technical, ActionDecision decision) {
+        if ("SUPPORT_REVERSAL_LIGHT_TRIAL".equals(decision.action())) {
+            return "SUPPORT_REVERSAL";
+        }
         if ("WAIT_PULLBACK".equals(decision.action())) {
             return "RIGHT_EXTENDED";
         }
@@ -2611,6 +2737,9 @@ public class ShortTermService {
     }
 
     private String phaseLabel(ShortTermTechnicalSnapshot technical, ActionDecision decision) {
+        if ("SUPPORT_REVERSAL_LIGHT_TRIAL".equals(decision.action())) {
+            return "长下影承接";
+        }
         if ("WAIT_PULLBACK".equals(decision.action())) {
             return "右侧拉开";
         }
@@ -2673,13 +2802,13 @@ public class ShortTermService {
                     "缺少当日实时涨跌幅，无法确认当前是否处于上升状态，不进入短线推荐候选。"
             );
         }
-        if (quote.changePercent().compareTo(BigDecimal.ZERO) <= 0) {
+        if (quote.changePercent().compareTo(new BigDecimal("-2.00")) < 0) {
             return riskExclusion(
                     quote,
-                    "NON_POSITIVE_DAILY_CHANGE",
-                    "当日未上涨",
+                    "DAILY_DECLINE_TOO_LARGE",
+                    "当日跌幅超过承接观察上限",
                     "当日涨跌幅 " + valueText(quote.changePercent())
-                            + "% 不为正，短线只保留当前正在上涨的候选，不进入推荐候选。"
+                            + "% 低于 -2.00%，不进入长下影承接复核。"
             );
         }
         if (quote.changePercent() != null && quote.changePercent().compareTo(ruleSet.maxEntryRisePercent()) > 0) {
@@ -2756,6 +2885,20 @@ public class ShortTermService {
                     "成交量数据缺失",
                     "无法计算当日成交量相对 20 日均量的比例，不使用默认分补足短线候选。"
             );
+        }
+        boolean nonPositiveChange = quote.changePercent() != null
+                && quote.changePercent().compareTo(BigDecimal.ZERO) <= 0;
+        ShortTermSupportReversalSignal supportReversal = technical.supportReversal();
+        if (nonPositiveChange && (supportReversal == null || !supportReversal.confirmed())) {
+            return riskExclusion(
+                    quote,
+                    "SUPPORT_REVERSAL_NOT_CONFIRMED",
+                    "微跌承接未确认",
+                    supportReversalEvidence(supportReversal)
+            );
+        }
+        if (nonPositiveChange) {
+            return null;
         }
         ShortTermGoldenCrossSnapshot goldenCross = technical.goldenCross();
         if (goldenCross == null
@@ -3052,7 +3195,7 @@ public class ShortTermService {
     ) {
         return new ShortTermScoreBreakdown(
                 score.technicalScore(), score.goldenCrossScore(), score.volumeScore(),
-                score.turnoverScore(), score.closeStrengthScore(), score.marketHeatScore(),
+                score.turnoverScore(), score.closeStrengthScore(), score.supportReversalScore(), score.marketHeatScore(),
                 score.valuationScore(), score.financialScore(), score.riskPenalty(),
                 score.finalScore(), score.stageAdjustment(), score.mainNetInflowRatio(),
                 score.largeOrderNetInflowRatio(), score.buyPressureScore(),
@@ -3120,7 +3263,7 @@ public class ShortTermService {
     private int actionPriority(String action) {
         return switch (action) {
             case "RIGHT_EARLY_ADD" -> 5;
-            case "WATCH_RIGHT_SIDE", "WATCH_VALUE_RETURN" -> 4;
+            case "SUPPORT_REVERSAL_LIGHT_TRIAL", "RIGHT_EARLY_LIGHT_TRIAL", "WATCH_RIGHT_SIDE", "WATCH_VALUE_RETURN" -> 4;
             case "WAIT_PULLBACK" -> 3;
             case "WAIT_CONFIRM" -> 2;
             default -> 1;
@@ -3208,17 +3351,26 @@ public class ShortTermService {
     }
 
     private int qualifiedGoldenCrossPriority(ShortTermTechnicalSnapshot technical) {
-        if (technical == null || technical.goldenCross() == null) {
+        if (technical == null) {
             return 0;
+        }
+        int supportTier = technical.supportReversal() != null && technical.supportReversal().confirmed() ? 2 : 0;
+        if (technical.goldenCross() == null) {
+            return supportTier;
         }
         int tier = technical.goldenCross().priorityTier();
         if (tier == 2 && !isEarlyRightSideSignal(technical.rightSideSignal())) {
-            return 0;
+            return supportTier;
         }
-        return tier;
+        return Math.max(tier, supportTier);
     }
 
     private int rightSideMaturityPriority(ShortTermCandidate candidate) {
+        if (candidate.technical() != null
+                && candidate.technical().supportReversal() != null
+                && candidate.technical().supportReversal().confirmed()) {
+            return 5;
+        }
         String signal = candidate.technical() == null ? null : candidate.technical().rightSideSignal();
         if ("右侧早期确认".equals(signal)) {
             return 6;
