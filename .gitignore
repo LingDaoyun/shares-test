@@ -26,3 +26,4 @@ redis-data/
 # Downloaded reference projects
 external/
 .superpowers/
+.worktrees/
