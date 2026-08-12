@@ -17,7 +17,7 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       KIMI_API_KEY: ${KIMI_API_KEY:-}
     ports:
-      - "${API_PORT:-19080}:19080"
+      - "127.0.0.1:${API_PORT:-19080}:19080"
     volumes:
       - api-data:/data
 
@@ -28,7 +28,7 @@ services:
     container_name: ai-stock-web
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-5176}:80"
+      - "127.0.0.1:${WEB_PORT:-5176}:80"
     depends_on:
       - api
 

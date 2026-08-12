@@ -1,5 +1,6 @@
 package com.aistock.research.common.error;
 
+import com.aistock.research.configuration.RuntimeConfigRevisionConflictException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
@@ -49,6 +50,19 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleIllegalArgument(IllegalArgumentException exception) {
         ApiError body = new ApiError("BAD_REQUEST", exception.getMessage(), Instant.now(), Map.of());
         return ResponseEntity.badRequest().body(body);
+    }
+
+    @ExceptionHandler(RuntimeConfigRevisionConflictException.class)
+    public ResponseEntity<ApiError> handleRuntimeConfigConflict(
+            RuntimeConfigRevisionConflictException exception
+    ) {
+        ApiError body = new ApiError(
+                "RUNTIME_CONFIG_CONFLICT",
+                exception.getMessage(),
+                Instant.now(),
+                Map.of()
+        );
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
     }
 
     @ExceptionHandler(IllegalStateException.class)

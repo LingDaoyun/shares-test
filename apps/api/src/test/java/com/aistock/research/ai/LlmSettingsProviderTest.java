@@ -1,26 +1,28 @@
 package com.aistock.research.ai;
 
 import com.aistock.research.configuration.RuntimeConfigStore;
+import com.aistock.research.configuration.LlmProviderPolicy;
 import com.aistock.research.configuration.StoredLlmConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.mock.env.MockEnvironment;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class LlmSettingsProviderTest {
 
     private RuntimeConfigStore store;
-    private MockEnvironment environment;
+    private LlmApiKeyEnvironment environment;
     private LlmSettingsProvider provider;
 
     @BeforeEach
     void setUp() {
         store = mock(RuntimeConfigStore.class);
-        environment = new MockEnvironment();
-        provider = new LlmSettingsProvider(store, environment);
+        environment = mock(LlmApiKeyEnvironment.class);
+        provider = new LlmSettingsProvider(store, environment, new LlmProviderPolicy());
     }
 
     @Test
@@ -35,7 +37,7 @@ class LlmSettingsProviderTest {
 
     @Test
     void directDatabaseKeyWinsButSettingsToStringNeverReportsIt() {
-        environment.setProperty("DEEPSEEK_API_KEY", "environment-key");
+        when(environment.value("DEEPSEEK_API_KEY")).thenReturn("environment-key");
         when(store.readLlm()).thenReturn(storedModel("test-secret", "deepseek-chat"));
 
         LlmSettings settings = provider.current();
@@ -46,25 +48,37 @@ class LlmSettingsProviderTest {
     }
 
     @Test
-    void resolvesConfiguredEnvironmentVariableBeforeProviderDefault() {
-        environment.setProperty("CUSTOM_MODEL_KEY", "configured-key");
-        environment.setProperty("DEEPSEEK_API_KEY", "default-key");
+    void resolvesTheProvidersAllowedEnvironmentVariable() {
+        when(environment.value("DEEPSEEK_API_KEY")).thenReturn("configured-key");
         when(store.readLlm()).thenReturn(new StoredLlmConfig(
-                "deepseek", null, "CUSTOM_MODEL_KEY", "deepseek-chat",
+                "deepseek", null, "DEEPSEEK_API_KEY", "deepseek-chat",
                 "https://api.deepseek.com", "json_object", false,
                 null, 8192, null));
 
         LlmSettings settings = provider.current();
 
         assertThat(settings.apiKey()).isEqualTo("configured-key");
-        assertThat(settings.apiKeySource()).isEqualTo("env:CUSTOM_MODEL_KEY");
+        assertThat(settings.apiKeySource()).isEqualTo("env:DEEPSEEK_API_KEY");
     }
 
     @Test
-    void usesProviderEnvironmentDefaultWhenConfiguredNameIsMissing() {
-        environment.setProperty("MOONSHOT_API_KEY", "moonshot-key");
+    void neverTreatsAnArbitrarySpringPropertyAsAnApiKey() {
         when(store.readLlm()).thenReturn(new StoredLlmConfig(
-                "kimi", null, "MISSING_CUSTOM_KEY", null,
+                "deepseek", null, "spring.datasource.password", "deepseek-chat",
+                "https://api.deepseek.com", "json_object", false,
+                null, 8192, null));
+
+        assertThatThrownBy(provider::current)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("环境变量");
+        verifyNoInteractions(environment);
+    }
+
+    @Test
+    void usesProviderEnvironmentDefaultWhenTheStoredNameIsBlank() {
+        when(environment.value("MOONSHOT_API_KEY")).thenReturn("moonshot-key");
+        when(store.readLlm()).thenReturn(new StoredLlmConfig(
+                "kimi", null, null, null,
                 null, null, true, null, null, null));
 
         LlmSettings settings = provider.current();

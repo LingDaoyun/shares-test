@@ -1,9 +1,9 @@
 package com.aistock.research.configuration;
 
+import com.aistock.research.ai.LlmApiKeyEnvironment;
 import com.aistock.research.ai.LlmSettingsProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.mock.env.MockEnvironment;
 
 import java.time.Instant;
 import java.util.List;
@@ -17,19 +17,23 @@ import static org.mockito.Mockito.when;
 class RuntimeConfigServiceTest {
 
     private RuntimeConfigStore store;
-    private MockEnvironment environment;
+    private LlmApiKeyEnvironment environment;
     private RuntimeConfigService service;
 
     @BeforeEach
     void setUp() {
         store = mock(RuntimeConfigStore.class);
-        environment = new MockEnvironment();
-        service = new RuntimeConfigService(store, new LlmSettingsProvider(store, environment));
+        environment = mock(LlmApiKeyEnvironment.class);
+        service = new RuntimeConfigService(store, new LlmSettingsProvider(
+                store,
+                environment,
+                new LlmProviderPolicy()
+        ));
     }
 
     @Test
     void currentConfigReportsAnEnvironmentKeyWithoutReturningItsValue() {
-        environment.setProperty("DEEPSEEK_API_KEY", "environment-key");
+        when(environment.value("DEEPSEEK_API_KEY")).thenReturn("environment-key");
         when(store.readState()).thenReturn(state(null, "existing-model", 7, 3));
 
         RuntimeConfigSnapshot response = service.currentConfig();
@@ -91,14 +95,24 @@ class RuntimeConfigServiceTest {
                 null
         );
         RuntimeConfigState committed = state("replacement-key", "new-model", 8, 4);
-        when(store.updateAll(request.llm(), request.policySources())).thenReturn(committed);
+        when(store.updateAll(
+                request.llm(),
+                request.policySources(),
+                request.llmRevision(),
+                request.policySourcesRevision()
+        )).thenReturn(committed);
 
         RuntimeConfigSnapshot response = service.updateConfig(request);
 
         assertThat(response.llm().apiKey()).isNull();
         assertThat(response.llmRevision()).isEqualTo(8);
         assertThat(response.policySourcesRevision()).isEqualTo(4);
-        verify(store).updateAll(request.llm(), request.policySources());
+        verify(store).updateAll(
+                request.llm(),
+                request.policySources(),
+                request.llmRevision(),
+                request.policySourcesRevision()
+        );
     }
 
     private RuntimeConfigState state(

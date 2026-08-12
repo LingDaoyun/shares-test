@@ -48,7 +48,7 @@ describe('SettingsPage section actions', () => {
       runtimeConfig: null,
       runtimeConfigForm: {
         ...emptyRuntimeConfig(),
-        llm: { ...defaultLlmRuntimeConfig(), apiKeyConfigured: true, apiKeySource: 'research.ai.llm.api-key' },
+        llm: { ...defaultLlmRuntimeConfig(), apiKeyConfigured: true, apiKeySource: 'env:DEEPSEEK_API_KEY' },
         policySources: [{ name: '当前政策源', type: 'html', url: 'https://current.example', weight: 80 }]
       },
       runtimeConfigLoading: false
@@ -126,6 +126,16 @@ describe('SettingsPage section actions', () => {
     expect(toast.success).toHaveBeenCalledWith('大模型配置已保存并生效')
   })
 
+  it('switches provider credentials and endpoint as one safe preset', async () => {
+    const provider = selectIn('大模型配置', 'Provider')
+
+    await changeSelect(provider, 'openai')
+
+    expect(fieldIn('大模型配置', '模型').value).toBe('gpt-5.5')
+    expect(fieldIn('大模型配置', 'Base URL').value).toBe('https://api.openai.com/v1')
+    expect(fieldIn('大模型配置', 'API Key 环境变量名').value).toBe('OPENAI_API_KEY')
+  })
+
   function section(title: string) {
     const heading = [...host.querySelectorAll<HTMLElement>('h3, .section-title')]
       .find((element) => element.textContent?.trim() === title)
@@ -153,6 +163,14 @@ describe('SettingsPage section actions', () => {
     if (!input) throw new Error(`Field not found: ${title} / ${label}`)
     return input
   }
+
+  function selectIn(title: string, label: string) {
+    const fieldLabel = [...section(title).querySelectorAll<HTMLLabelElement>('label')]
+      .find((element) => element.textContent?.trim() === label)
+    const select = fieldLabel?.parentElement?.querySelector<HTMLSelectElement>('select')
+    if (!select) throw new Error(`Select not found: ${title} / ${label}`)
+    return select
+  }
 })
 
 async function click(button: HTMLButtonElement) {
@@ -167,6 +185,15 @@ async function change(input: HTMLInputElement, value: string) {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
     setter?.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
+    await Promise.resolve()
+  })
+}
+
+async function changeSelect(select: HTMLSelectElement, value: string) {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+    setter?.call(select, value)
+    select.dispatchEvent(new Event('change', { bubbles: true }))
     await Promise.resolve()
   })
 }

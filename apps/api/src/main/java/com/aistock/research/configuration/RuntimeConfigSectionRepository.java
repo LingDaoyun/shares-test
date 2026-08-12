@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
+import java.util.Collection;
+import java.util.List;
 
 public interface RuntimeConfigSectionRepository
         extends JpaRepository<RuntimeConfigSectionEntity, String> {
@@ -15,4 +17,10 @@ public interface RuntimeConfigSectionRepository
     @Query("select section from RuntimeConfigSectionEntity section "
             + "where section.sectionKey = :sectionKey")
     Optional<RuntimeConfigSectionEntity> findForUpdate(@Param("sectionKey") String sectionKey);
+
+    @Query("select section from RuntimeConfigSectionEntity section "
+            + "where section.sectionKey in :sectionKeys")
+    List<RuntimeConfigSectionEntity> findSections(
+            @Param("sectionKeys") Collection<String> sectionKeys
+    );
 }

@@ -40,7 +40,12 @@ public class RuntimeConfigService {
     }
 
     public RuntimeConfigSnapshot updateConfig(RuntimeConfigSnapshot request) {
-        RuntimeConfigState state = store.updateAll(request.llm(), request.policySources());
+        RuntimeConfigState state = store.updateAll(
+                request.llm(),
+                request.policySources(),
+                request.llmRevision(),
+                request.policySourcesRevision()
+        );
         return snapshot(state);
     }
 

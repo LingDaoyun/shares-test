@@ -1459,7 +1459,7 @@
         <el-form label-position="top" class="settings-form">
           <div class="form-grid">
             <el-form-item label="Provider">
-              <el-select v-model="runtimeConfigForm.llm.provider" class="full-width">
+              <el-select v-model="runtimeConfigForm.llm.provider" class="full-width" @change="changeLlmProvider">
                 <el-option label="DeepSeek" value="deepseek" />
                 <el-option label="OpenAI" value="openai" />
                 <el-option label="Moonshot / Kimi 开放平台" value="moonshot" />
@@ -1508,6 +1508,13 @@
             <el-input v-model="runtimeConfigForm.llm.thinking" class="thinking-input" placeholder="thinking 类型，可留空" />
           </div>
         </el-form>
+
+        <div class="settings-actions">
+          <el-button :icon="Refresh" :loading="llmRuntimeConfigLoading" @click="loadLlmRuntimeConfig">重新读取</el-button>
+          <el-button type="primary" :icon="Check" :loading="llmRuntimeConfigSaving" @click="saveLlmRuntimeConfig">
+            保存配置
+          </el-button>
+        </div>
       </div>
 
       <div class="panel settings-panel">
@@ -1539,8 +1546,8 @@
         </div>
 
         <div class="settings-actions">
-          <el-button :icon="Refresh" :loading="runtimeConfigLoading" @click="loadRuntimeConfig">重新读取</el-button>
-          <el-button type="primary" :icon="Check" :loading="runtimeConfigSaving" @click="saveRuntimeConfig">
+          <el-button :icon="Refresh" :loading="policySourcesLoading" @click="loadPolicySources">重新读取</el-button>
+          <el-button type="primary" :icon="Check" :loading="policySourcesSaving" @click="savePolicySources">
             保存配置
           </el-button>
         </div>
@@ -1579,13 +1586,16 @@ import {
   fetchInvestmentDecision,
   fetchLatestTrendAnalysis,
   fetchLlmConfig,
+  fetchLlmRuntimeConfig,
   fetchPolicyThemes,
+  fetchPolicySources,
   fetchRules,
   fetchRuntimeConfig,
   fetchTrendAnalysisHistory,
   fetchWatchlist,
   previewTrendPrompt,
-  updateRuntimeConfig
+  updateLlmRuntimeConfig,
+  updatePolicySources
 } from './api/client'
 import type {
   AgentConsensusReport,
@@ -1688,7 +1698,10 @@ const configLoading = ref(false)
 const previewLoading = ref(false)
 const aiLoading = ref(false)
 const runtimeConfigLoading = ref(false)
-const runtimeConfigSaving = ref(false)
+const llmRuntimeConfigLoading = ref(false)
+const llmRuntimeConfigSaving = ref(false)
+const policySourcesLoading = ref(false)
+const policySourcesSaving = ref(false)
 const researchLoading = ref(false)
 const consensusLoading = ref(false)
 const aiConsensusLoading = ref(false)
@@ -1894,6 +1907,43 @@ function emptyRuntimeConfig(): RuntimeConfigSnapshot {
     },
     policySources: [],
     updatedAt: new Date().toISOString()
+  }
+}
+
+const LLM_PROVIDER_DEFAULTS: Record<string, {
+  model: string
+  baseUrl: string
+  apiKeyEnv: string
+  responseFormat: string
+  maxCompletionTokens: number | null
+}> = {
+  deepseek: {
+    model: 'deepseek-v4-pro',
+    baseUrl: 'https://api.deepseek.com',
+    apiKeyEnv: 'DEEPSEEK_API_KEY',
+    responseFormat: 'json_object',
+    maxCompletionTokens: 8192
+  },
+  openai: {
+    model: 'gpt-5.5',
+    baseUrl: 'https://api.openai.com/v1',
+    apiKeyEnv: 'OPENAI_API_KEY',
+    responseFormat: 'json_schema',
+    maxCompletionTokens: null
+  },
+  moonshot: {
+    model: 'kimi-k2.6',
+    baseUrl: 'https://api.moonshot.ai/v1',
+    apiKeyEnv: 'MOONSHOT_API_KEY',
+    responseFormat: 'json_schema',
+    maxCompletionTokens: null
+  },
+  'kimi-code': {
+    model: 'kimi-for-coding',
+    baseUrl: 'https://api.kimi.com/coding/v1',
+    apiKeyEnv: 'KIMI_API_KEY',
+    responseFormat: 'json_schema',
+    maxCompletionTokens: null
   }
 }
 
@@ -2366,21 +2416,93 @@ async function loadRuntimeConfig() {
   }
 }
 
-async function saveRuntimeConfig() {
-  runtimeConfigSaving.value = true
+async function loadLlmRuntimeConfig() {
+  llmRuntimeConfigLoading.value = true
   try {
-    const payload = cloneRuntimeConfig(runtimeConfigForm.value)
+    const [llm, snapshot] = await Promise.all([
+      fetchLlmRuntimeConfig(),
+      fetchRuntimeConfig()
+    ])
+    runtimeConfigForm.value.llm = { ...llm, apiKey: '' }
+    runtimeConfigForm.value.llmRevision = snapshot.llmRevision
+    runtimeConfigForm.value.updatedAt = snapshot.updatedAt
+    runtimeConfig.value = snapshot
+  } catch (error) {
+    ElMessage.error(extractErrorMessage(error))
+  } finally {
+    llmRuntimeConfigLoading.value = false
+  }
+}
+
+async function saveLlmRuntimeConfig() {
+  llmRuntimeConfigSaving.value = true
+  try {
     const nextApiKey = runtimeConfigForm.value.llm.apiKey?.trim()
-    payload.llm.apiKey = nextApiKey ? nextApiKey : null
-    const updated = await updateRuntimeConfig(payload)
-    runtimeConfig.value = updated
-    runtimeConfigForm.value = cloneRuntimeConfig(updated)
-    ElMessage.success('配置已保存并生效')
+    const updated = await updateLlmRuntimeConfig({
+      ...runtimeConfigForm.value.llm,
+      apiKey: nextApiKey ? nextApiKey : null
+    })
+    runtimeConfigForm.value.llm = { ...updated, apiKey: '' }
+    const snapshot = await fetchRuntimeConfig()
+    runtimeConfigForm.value.llmRevision = snapshot.llmRevision
+    runtimeConfigForm.value.updatedAt = snapshot.updatedAt
+    runtimeConfig.value = snapshot
+    ElMessage.success('大模型配置已保存并生效')
     await refreshLlmConfig()
   } catch (error) {
     ElMessage.error(extractErrorMessage(error))
   } finally {
-    runtimeConfigSaving.value = false
+    llmRuntimeConfigSaving.value = false
+  }
+}
+
+async function loadPolicySources() {
+  policySourcesLoading.value = true
+  try {
+    const [sources, snapshot] = await Promise.all([
+      fetchPolicySources(),
+      fetchRuntimeConfig()
+    ])
+    runtimeConfigForm.value.policySources = sources.map((source) => ({ ...source }))
+    runtimeConfigForm.value.policySourcesRevision = snapshot.policySourcesRevision
+    runtimeConfigForm.value.updatedAt = snapshot.updatedAt
+    runtimeConfig.value = snapshot
+  } catch (error) {
+    ElMessage.error(extractErrorMessage(error))
+  } finally {
+    policySourcesLoading.value = false
+  }
+}
+
+async function savePolicySources() {
+  policySourcesSaving.value = true
+  try {
+    const updated = await updatePolicySources(
+      runtimeConfigForm.value.policySources.map((source) => ({ ...source }))
+    )
+    runtimeConfigForm.value.policySources = updated.map((source) => ({ ...source }))
+    const snapshot = await fetchRuntimeConfig()
+    runtimeConfigForm.value.policySourcesRevision = snapshot.policySourcesRevision
+    runtimeConfigForm.value.updatedAt = snapshot.updatedAt
+    runtimeConfig.value = snapshot
+    ElMessage.success('政策源配置已保存并生效')
+  } catch (error) {
+    ElMessage.error(extractErrorMessage(error))
+  } finally {
+    policySourcesSaving.value = false
+  }
+}
+
+function changeLlmProvider(provider: string) {
+  const defaults = LLM_PROVIDER_DEFAULTS[provider]
+  if (!defaults) return
+  runtimeConfigForm.value.llm = {
+    ...runtimeConfigForm.value.llm,
+    provider,
+    ...defaults,
+    apiKey: '',
+    apiKeyConfigured: false,
+    apiKeySource: 'missing'
   }
 }
 

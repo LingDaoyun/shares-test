@@ -16,10 +16,26 @@ import { defaultLlmRuntimeConfig, defaultPolicySources } from '../lib/runtimeCon
 import type { PolicySourceConfig } from '../types'
 
 const PROVIDERS = [
-  { label: 'DeepSeek', value: 'deepseek' },
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'Moonshot / Kimi 开放平台', value: 'moonshot' },
-  { label: 'Kimi Code', value: 'kimi-code' }
+  {
+    label: 'DeepSeek', value: 'deepseek', model: 'deepseek-v4-pro',
+    baseUrl: 'https://api.deepseek.com', apiKeyEnv: 'DEEPSEEK_API_KEY',
+    responseFormat: 'json_object', maxCompletionTokens: 8192
+  },
+  {
+    label: 'OpenAI', value: 'openai', model: 'gpt-5.5',
+    baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY',
+    responseFormat: 'json_schema', maxCompletionTokens: null
+  },
+  {
+    label: 'Moonshot / Kimi 开放平台', value: 'moonshot', model: 'kimi-k2.6',
+    baseUrl: 'https://api.moonshot.ai/v1', apiKeyEnv: 'MOONSHOT_API_KEY',
+    responseFormat: 'json_schema', maxCompletionTokens: null
+  },
+  {
+    label: 'Kimi Code', value: 'kimi-code', model: 'kimi-for-coding',
+    baseUrl: 'https://api.kimi.com/coding/v1', apiKeyEnv: 'KIMI_API_KEY',
+    responseFormat: 'json_schema', maxCompletionTokens: null
+  }
 ]
 const FORMATS = ['json_object', 'json_schema', 'none']
 
@@ -34,6 +50,22 @@ export function SettingsPage() {
 
   const patchLlm = (patch: Partial<typeof form.llm>) => {
     setRuntimeConfigForm({ ...form, llm: { ...form.llm, ...patch } })
+  }
+
+  const changeProvider = (provider: string) => {
+    const defaults = PROVIDERS.find((item) => item.value === provider)
+    if (!defaults) return
+    patchLlm({
+      provider,
+      model: defaults.model,
+      baseUrl: defaults.baseUrl,
+      apiKeyEnv: defaults.apiKeyEnv,
+      responseFormat: defaults.responseFormat,
+      maxCompletionTokens: defaults.maxCompletionTokens,
+      apiKey: '',
+      apiKeyConfigured: false,
+      apiKeySource: 'missing'
+    })
   }
 
   const addPolicySource = () => {
@@ -150,7 +182,7 @@ export function SettingsPage() {
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Field label="Provider">
-            <select className="field" value={form.llm.provider} onChange={(e) => patchLlm({ provider: e.target.value })}>
+            <select className="field" value={form.llm.provider} onChange={(e) => changeProvider(e.target.value)}>
               {PROVIDERS.map((p) => (
                 <option key={p.value} value={p.value}>{p.label}</option>
               ))}

@@ -8,6 +8,8 @@ import type {
   FactorSnapshot,
   InvestmentDecisionReport,
   LlmConfigPreview,
+  LlmRuntimeConfig,
+  PolicySourceConfig,
   PolicyTheme,
   RuntimeConfigSnapshot,
   RuleDefinition,
@@ -101,6 +103,26 @@ export async function fetchLlmConfig(): Promise<LlmConfigPreview> {
 
 export async function fetchRuntimeConfig(): Promise<RuntimeConfigSnapshot> {
   const { data } = await http.get<RuntimeConfigSnapshot>('/runtime-config')
+  return data
+}
+
+export async function fetchLlmRuntimeConfig(): Promise<LlmRuntimeConfig> {
+  const { data } = await http.get<LlmRuntimeConfig>('/runtime-config/llm')
+  return data
+}
+
+export async function updateLlmRuntimeConfig(request: LlmRuntimeConfig): Promise<LlmRuntimeConfig> {
+  const { data } = await http.put<LlmRuntimeConfig>('/runtime-config/llm', request)
+  return data
+}
+
+export async function fetchPolicySources(): Promise<PolicySourceConfig[]> {
+  const { data } = await http.get<PolicySourceConfig[]>('/runtime-config/policy-sources')
+  return data
+}
+
+export async function updatePolicySources(request: PolicySourceConfig[]): Promise<PolicySourceConfig[]> {
+  const { data } = await http.put<PolicySourceConfig[]>('/runtime-config/policy-sources', request)
   return data
 }
 

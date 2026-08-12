@@ -80,14 +80,16 @@ overall_assessment         总体判断
 - 反证和证据缺口识别。
 - 严格结构化输出。
 
-落地时不要把模型名写死在业务代码里，统一走数据库运行配置；密钥优先使用环境变量：
+落地时不要把模型名写死在业务代码里，统一走数据库运行配置；密钥优先使用 Provider 对应的环境变量：
 
 ```text
-research.ai.llm.provider=deepseek | openai | moonshot | kimi-code
-research.ai.llm.api-key=...
-research.ai.llm.model=deepseek-v4-pro | deepseek-v4-flash | gpt-5.5 | kimi-k2.6 | kimi-for-coding
-research.ai.llm.base-url=https://api.deepseek.com | https://api.openai.com/v1 | https://api.moonshot.ai/v1 | https://api.kimi.com/coding/v1
+PUT /api/runtime-config/llm
+provider=deepseek | openai | moonshot | kimi-code
+model=deepseek-v4-pro | deepseek-v4-flash | gpt-5.5 | kimi-k2.6 | kimi-for-coding
+apiKeyEnv=DEEPSEEK_API_KEY | OPENAI_API_KEY | MOONSHOT_API_KEY | KIMI_API_KEY
 ```
+
+Base URL 只允许对应 Provider 的官方 HTTPS 地址，防止数据库 Key 或环境变量密钥被发送到非受信目标。切换 Provider 且数据库中已有直接 Key 时，必须重新填写新 Provider 的 Key。
 
 DeepSeek 暂按 JSON Object 模式接入，严格字段校验由后端解析 JSON 和提示词 schema 共同承担。
 

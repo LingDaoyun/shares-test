@@ -59,16 +59,6 @@ research:
         connect-timeout-ms: 1200
         read-timeout-ms: 1800
         max-concurrency: 4
-  ai:
-    llm:
-      provider: ${LLM_PROVIDER:deepseek}
-      api-key: ${LLM_API_KEY:}
-      api-key-env: ${LLM_API_KEY_ENV:}
-      model: ${LLM_MODEL:}
-      base-url: ${LLM_BASE_URL:}
-      response-format: ${LLM_RESPONSE_FORMAT:}
-      strict-json-schema: ${LLM_STRICT_JSON_SCHEMA:false}
-      thinking: ${LLM_THINKING:}
   live-data:
     stock-limit: 80
     eastmoney-fund-flow-url: https://push2.eastmoney.com/api/qt/ulist.np/get
