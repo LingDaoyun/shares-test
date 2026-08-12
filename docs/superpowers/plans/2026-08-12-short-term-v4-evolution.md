@@ -71,15 +71,19 @@
 - create `ShortTermMarketRegimeClassifier.java`
 - modify technical snapshot/report/action mapping and tests
 
-- [ ] Calculate ATR percentage, MA20 distance in ATR units, range contraction, and breakout expansion.
-- [ ] Add an independent `VOLATILITY_CONTRACTION_BREAKOUT` signal family.
-- [ ] Classify risk-off, repair, trend-expansion, and crowded-volatile states from full-market inputs.
-- [ ] Require regime inputs to use the same unfiltered quote universe and point-in-time cutoff established in Phase 2.
-- [ ] Keep safety gates hard; make ranking thresholds volatility/percentile aware.
-- [ ] Limit repair/crowded states to light actions and keep risk-off non-executable.
-- [ ] Add boundary, zero-range, missing-data, and action-downgrade tests.
+- [x] Calculate ATR percentage, MA20 distance in ATR units, range contraction, and breakout expansion.
+- [x] Add an independent `VOLATILITY_CONTRACTION_BREAKOUT` signal family.
+- [x] Classify risk-off, repair, trend-expansion, and crowded-volatile states from full-market inputs.
+- [x] Require regime inputs to use the same unfiltered quote universe and point-in-time cutoff established in Phase 2.
+- [x] Keep safety gates hard; make ranking thresholds volatility/percentile aware.
+- [x] Limit repair/crowded states to light actions and keep risk-off non-executable.
+- [x] Add boundary, zero-range, missing-data, and action-downgrade tests.
 - [ ] Reviewer Agent checks formula correctness, duplicate-factor risk, regime leakage, and action safety.
 - [ ] Fix findings, re-run tests, and commit the phase.
+
+Checkpoint on 2026-08-12: implementation and 649-test backend regression are green. The first
+read-only reviewer was stopped for a Codex restart before returning a verdict; restart Phase 3 at
+the reviewer gate, then fix findings and replace this checkpoint with the final phase commit.
 
 ## Phase 4: Automatic T1/T2 Observation And Outcome Loop
 

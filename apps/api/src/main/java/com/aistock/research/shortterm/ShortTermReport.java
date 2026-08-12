@@ -28,7 +28,8 @@ public record ShortTermReport(
         Instant dataCutoffAt,
         Instant generatedAt,
         ShortTermTechnicalReviewCoverage technicalReviewCoverage,
-        ShortTermCrossSectionContext crossSectionContext
+        ShortTermCrossSectionContext crossSectionContext,
+        ShortTermMarketRegime marketRegime
 ) {
     public ShortTermReport {
         methodology = methodology == null ? List.of() : List.copyOf(methodology);
@@ -47,6 +48,43 @@ public record ShortTermReport(
         crossSectionContext = crossSectionContext == null
                 ? ShortTermCrossSectionContext.unavailable()
                 : crossSectionContext;
+        marketRegime = marketRegime == null
+                ? ShortTermMarketRegime.unavailable("历史报告未包含市场状态快照")
+                : marketRegime;
+    }
+
+    public ShortTermReport(
+            String scope,
+            int universeCount,
+            int reviewedCount,
+            int klineReviewedCount,
+            int candidateCount,
+            String quoteNote,
+            TradingSessionSnapshot tradingSession,
+            List<String> methodology,
+            ShortTermRuleSet ruleSet,
+            ShortTermWeightProfile weightProfile,
+            List<ShortTermCandidate> candidates,
+            List<ShortTermHotDirection> hotDirections,
+            ShortTermMarketSentiment marketSentiment,
+            ShortTermMarketFundDirection marketFundDirection,
+            List<ShortTermRiskExclusion> exclusions,
+            Map<String, String> tradeCaptureTokens,
+            ShortTermCoverageSnapshot coverage,
+            List<String> reviewedSymbols,
+            Instant dataCutoffAt,
+            Instant generatedAt,
+            ShortTermTechnicalReviewCoverage technicalReviewCoverage,
+            ShortTermCrossSectionContext crossSectionContext
+    ) {
+        this(
+                scope, universeCount, reviewedCount, klineReviewedCount, candidateCount,
+                quoteNote, tradingSession, methodology, ruleSet, weightProfile, candidates,
+                hotDirections, marketSentiment, marketFundDirection, exclusions, tradeCaptureTokens,
+                coverage, reviewedSymbols, dataCutoffAt, generatedAt,
+                technicalReviewCoverage, crossSectionContext,
+                ShortTermMarketRegime.unavailable("历史报告未包含市场状态快照")
+        );
     }
 
     public ShortTermReport(
@@ -77,7 +115,8 @@ public record ShortTermReport(
                 hotDirections, marketSentiment, marketFundDirection, exclusions, tradeCaptureTokens,
                 coverage, reviewedSymbols, dataCutoffAt, generatedAt,
                 ShortTermTechnicalReviewCoverage.unavailable(),
-                ShortTermCrossSectionContext.unavailable()
+                ShortTermCrossSectionContext.unavailable(),
+                ShortTermMarketRegime.unavailable("历史报告未包含市场状态快照")
         );
     }
 

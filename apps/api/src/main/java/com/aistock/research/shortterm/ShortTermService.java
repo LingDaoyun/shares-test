@@ -153,6 +153,9 @@ public class ShortTermService {
     private final ShortTermCoreSignalScorer coreSignalScorer = new ShortTermCoreSignalScorer();
     private final ShortTermSupplyDemandScorer supplyDemandScorer = new ShortTermSupplyDemandScorer();
     private final ShortTermCrossSectionAnalyzer crossSectionAnalyzer = new ShortTermCrossSectionAnalyzer();
+    private final ShortTermVolatilityQualityEvaluator volatilityQualityEvaluator = new ShortTermVolatilityQualityEvaluator();
+    private final ShortTermSignalProfileResolver signalProfileResolver = new ShortTermSignalProfileResolver();
+    private final ShortTermMarketRegimeClassifier marketRegimeClassifier = new ShortTermMarketRegimeClassifier();
     private final ValuationContextCalculator valuationContextCalculator = new ValuationContextCalculator();
 
     public ShortTermService(EastMoneyClient eastMoneyClient) {
@@ -376,13 +379,19 @@ public class ShortTermService {
                 .filter(quote -> passesQuotePreFilter(quote, ruleSet, unstableIndustrySymbols))
                 .toList();
         ShortTermMarketSentiment marketSentiment = marketSentiment(marketContextUniverse, coverage);
+        ShortTermMarketRegime marketRegime = marketRegimeClassifier.classify(
+                marketContextUniverse,
+                coverage,
+                marketSentiment
+        );
         ShortTermMarketFundDirection marketFundDirection = marketFundDirection(marketContextUniverse);
-        if (isExtremeRiskOffMarket(marketSentiment)) {
+        if (marketRegime.riskOff() || isExtremeRiskOffMarket(marketSentiment)) {
             return extremeRiskOffReport(
                     ruleSet,
                     quoteUniverse,
                     coverage,
                     marketSentiment,
+                    marketRegime,
                     marketFundDirection,
                     quoteExclusions,
                     pointInTimeCoverageQuotes,
@@ -485,7 +494,8 @@ public class ShortTermService {
                         crossSection.industryLeadershipBySymbol().get(item.quote().symbol()),
                         ruleSet,
                         hotDirectionMap,
-                        marketSentiment
+                        marketSentiment,
+                        marketRegime
                 ))
                 .toList();
         List<ScoredShortTerm> scored = attachRankingDiagnostics(rawScored).stream()
@@ -536,6 +546,9 @@ public class ShortTermService {
                         "第一层使用点时全市场行情计算市场情绪与热门方向，再做流动性、非 ST 和追涨风险过滤；行业成交额地位只软排序，不再硬卡前三。",
                         "第二层拉取候选近一年 K 线，优先确认 MA5/MA10 金叉及其形成阶段，并计算实时换手率和收盘强度。",
                         "第三层技术底分固定为金叉 45%、放量上涨 30%、换手适配 15%、K 线收盘强度 10%。",
+                        "波动质量使用 ATR 归一化衡量距 20 日线位置、近期真实波幅收缩与突破扩张，独立贡献限制在 -3 至 +3 分并完整展示。",
+                        "市场状态由点时全市场上涨广度、收益中位数、绝对波动、涨跌停近似比例和上涨侧成交额共同划分；退潮不推荐，修复或拥挤高波动只允许轻仓。",
+                        "金叉动量、下影承接反转和波动收缩突破保持为独立信号族，页面与历史快照保留主信号族和全部激活证据。",
                         "筹码结构是独立证据层，只展示成本分布、上方筹码和前高残余筹码；不与金叉、量能、换手率混算主分。",
                         "筹码由东方财富换手率和日 K 在 Java 本地复算，Tushare 只认证最近完整交易日；认证失败不阻断扫描，也不能改变动作建议。",
                         "当前筹码配置为 " + chipSettings.activationMode() + "；即使历史配置仍为 ACTIVE，筹码也只保留影子诊断，不能改变生产排序或动作。",
@@ -559,7 +572,8 @@ public class ShortTermService {
                 dataCutoffAt(pointInTimeCoverageQuotes, candidates),
                 Instant.now(),
                 technicalReviewCoverage,
-                crossSection.context()
+                crossSection.context(),
+                marketRegime
         );
     }
 
@@ -718,6 +732,7 @@ public class ShortTermService {
             List<EastMoneyQuote> quoteUniverse,
             ShortTermCoverageSnapshot coverage,
             ShortTermMarketSentiment marketSentiment,
+            ShortTermMarketRegime marketRegime,
             ShortTermMarketFundDirection marketFundDirection,
             List<ShortTermRiskExclusion> quoteExclusions,
             List<EastMoneyQuote> pointInTimeCoverageQuotes,
@@ -735,8 +750,8 @@ public class ShortTermService {
                 Map.of()
         ).context();
         String note = quoteNote(coverage, technicalReviewCoverage)
-                + " 市场情绪触发极端弱市闸门："
-                + marketSentiment.explanation()
+                + " 市场状态触发极端弱市闸门："
+                + marketRegime.explanation()
                 + " 本轮不拉取K线、不生成短线推荐，等待广度修复后再评估。";
         return new ShortTermReport(
                 "A 股短线右侧启动池",
@@ -764,7 +779,8 @@ public class ShortTermService {
                 dataCutoffAt(pointInTimeCoverageQuotes, List.of()),
                 Instant.now(),
                 technicalReviewCoverage,
-                crossSectionContext
+                crossSectionContext,
+                marketRegime
         );
     }
 
@@ -778,7 +794,13 @@ public class ShortTermService {
                 context.snapshot().momentumQuality(),
                 ruleSet.minVolumeRatio()
         );
-        return new TechnicalCandidate(quote, context, technicalScore, coreSignalScore);
+        ShortTermVolatilityQuality volatilityQuality = volatilityQualityEvaluator.evaluate(
+                context.rows(),
+                latestPrice(quote, context),
+                quote.tradeDate(),
+                context.snapshot()
+        );
+        return new TechnicalCandidate(quote, context, technicalScore, coreSignalScore, volatilityQuality);
     }
 
     private ScoredShortTerm score(
@@ -790,7 +812,8 @@ public class ShortTermService {
             ShortTermIndustryLeadership industryLeadership,
             ShortTermRuleSet ruleSet,
             Map<String, ShortTermHotDirection> hotDirectionMap,
-            ShortTermMarketSentiment marketSentiment
+            ShortTermMarketSentiment marketSentiment,
+            ShortTermMarketRegime marketRegime
     ) {
         EastMoneyQuote quote = item.quote();
         ShortTermTechnicalSnapshot technical = item.technical().snapshot();
@@ -840,18 +863,26 @@ public class ShortTermService {
                 chip,
                 chipSettings.activationMode()
         );
-        BigDecimal rankingScore = clamp(supplyDemand.rankingScore().add(crossSectionAdjustment));
+        ShortTermVolatilityQuality volatilityQuality = item.volatilityQuality() == null
+                ? ShortTermVolatilityQuality.unavailable("波动质量快照缺失，不参与排序")
+                : item.volatilityQuality();
+        BigDecimal volatilityContribution = zeroIfNull(volatilityQuality.contribution());
+        BigDecimal rankingScore = clamp(supplyDemand.rankingScore()
+                .add(crossSectionAdjustment)
+                .add(volatilityContribution));
         ActionDecision decision = decide(
                 quote,
                 technical,
                 financial,
                 quoteFreshness,
                 marketSentiment,
+                marketRegime,
                 item.technicalScore(),
                 coreSignalScore.volumeScore(),
                 stageScore.rankingScore(),
                 ruleSet
         );
+        ShortTermSignalProfile signalProfile = signalProfileResolver.resolve(technical, volatilityQuality);
         BigDecimal price = latestPrice(quote, item.technical());
         ShortTermCandidate candidate = new ShortTermCandidate(
                 0,
@@ -902,7 +933,9 @@ public class ShortTermService {
                         scale(industryLeadershipContribution),
                         scale(marketHeatContribution),
                         scale(crossSectionAdjustment),
-                        rankingScore
+                        rankingScore,
+                        scale(volatilityContribution),
+                        scale(rankingScore.subtract(supplyDemand.technicalRankingScore()))
                 ),
                 technical,
                 financial,
@@ -928,7 +961,9 @@ public class ShortTermService {
                 null,
                 chip,
                 safeRelativeStrength,
-                safeIndustryLeadership
+                safeIndustryLeadership,
+                volatilityQuality,
+                signalProfile
         );
         return new ScoredShortTerm(candidate);
     }
@@ -1245,6 +1280,7 @@ public class ShortTermService {
             ShortTermFinancialSnapshot financial,
             QuoteFreshnessSnapshot quoteFreshness,
             ShortTermMarketSentiment marketSentiment,
+            ShortTermMarketRegime marketRegime,
             BigDecimal technicalScore,
             BigDecimal volumeScore,
             BigDecimal finalScore,
@@ -1270,8 +1306,8 @@ public class ShortTermService {
         boolean turnoverPreferred = "PREFERRED".equals(momentum.turnoverBand());
         boolean chaseRisk = isChaseRisk(quote, technical, ruleSet);
         boolean crowdedSentiment = "高潮".equals(marketSentiment.phase());
-        boolean marketRiskOff = "退潮".equals(marketSentiment.phase())
-                || "冰点/混沌".equals(marketSentiment.phase())
+        boolean regimeLightTrialOnly = marketRegime != null && marketRegime.lightTrialOnly();
+        boolean marketRiskOff = marketRegime != null && marketRegime.riskOff()
                 || "行情覆盖不足".equals(marketSentiment.phase());
         if (marketRiskOff) {
             return new ActionDecision("MARKET_RISK_WAIT", "情绪风险等待");
@@ -1300,6 +1336,9 @@ public class ShortTermService {
                 && volumeConfirmed && volumeScore.compareTo(new BigDecimal("78")) >= 0
                 && !chaseRisk
                 && "右侧早期确认".equals(technical.rightSideSignal());
+        if (rightEarlyStrongEnough && regimeLightTrialOnly) {
+            return new ActionDecision("REGIME_LIGHT_TRIAL", "市场状态-轻仓");
+        }
         if (rightEarlyStrongEnough && !crowdedSentiment) {
             return new ActionDecision("RIGHT_EARLY_ADD", "右侧早期-分批");
         }
@@ -1606,6 +1645,23 @@ public class ShortTermService {
                     )
             );
         }
+        if ("REGIME_LIGHT_TRIAL".equals(decision.action())) {
+            return new TradingAdvice(
+                    "LIGHT_TRIAL",
+                    "轻仓试错",
+                    Math.min(confidence(finalScore), 72),
+                    "市场仍处于修复或拥挤高波动状态，个股右侧结构虽已确认，也只允许轻仓试错。",
+                    List.of(
+                            "个股金叉、量能与右侧结构已达到原始执行条件。",
+                            "市场状态尚未进入有序趋势扩张，动作强度已从加仓降为轻仓。"
+                    ),
+                    List.of(
+                            "单票试错仓位不超过计划短线仓位的 1/5。",
+                            "尾盘承接减弱时取消试错，次日不能延续则退出。",
+                            "市场状态转为系统性退潮时停止新增短线仓位。"
+                    )
+            );
+        }
         if ("SUPPORT_REVERSAL_LIGHT_TRIAL".equals(decision.action())) {
             ShortTermSupportReversalSignal support = technical.supportReversal();
             return new TradingAdvice(
@@ -1694,7 +1750,9 @@ public class ShortTermService {
                 candidate.tradePlan(),
                 candidate.chip(),
                 candidate.relativeStrength(),
-                candidate.industryLeadership()
+                candidate.industryLeadership(),
+                candidate.volatilityQuality(),
+                candidate.signalProfile()
         );
     }
 
@@ -1786,7 +1844,7 @@ public class ShortTermService {
                 candidate.buyZoneLow(), candidate.buyZoneHigh(), candidate.stopPrice(), candidate.strengths(),
                 candidate.risks(), candidate.entryRules(), candidate.exitRules(), candidate.evidenceCompleteness(),
                 candidate.evidence(), candidate.tradePlan(), candidate.chip(), candidate.relativeStrength(),
-                candidate.industryLeadership()
+                candidate.industryLeadership(), candidate.volatilityQuality(), candidate.signalProfile()
         );
     }
 
@@ -1826,7 +1884,9 @@ public class ShortTermService {
                 plan,
                 candidate.chip(),
                 candidate.relativeStrength(),
-                candidate.industryLeadership()
+                candidate.industryLeadership(),
+                candidate.volatilityQuality(),
+                candidate.signalProfile()
         );
     }
 
@@ -2250,7 +2310,10 @@ public class ShortTermService {
     }
 
     private String lightTrialSummary(TradingAdvice base) {
-        if (base != null && base.summary() != null && base.summary().contains("高潮")) {
+        if (base != null && base.summary() != null
+                && (base.summary().contains("高潮")
+                || base.summary().contains("修复")
+                || base.summary().contains("拥挤高波动"))) {
             return base.summary();
         }
         return "右侧结构已经进入可试错区，但还没有达到强加仓标准，只允许轻仓试错，不追第二笔。";
@@ -3294,7 +3357,7 @@ public class ShortTermService {
                 v2Rank, v3Rank, rankDelta,
                 score.relativeStrengthContribution(), score.industryLeadershipContribution(),
                 score.marketHeatContribution(), score.crossSectionAdjustment(),
-                score.rankingScore()
+                score.rankingScore(), score.volatilityContribution(), score.visibleRankingAdjustment()
         );
     }
 
@@ -3311,7 +3374,8 @@ public class ShortTermService {
                 candidate.technical(), candidate.financial(), candidate.buyZoneLow(), candidate.buyZoneHigh(),
                 candidate.stopPrice(), candidate.strengths(), candidate.risks(), candidate.entryRules(),
                 candidate.exitRules(), candidate.evidenceCompleteness(), candidate.evidence(),
-                candidate.tradePlan(), candidate.chip(), candidate.relativeStrength(), candidate.industryLeadership()
+                candidate.tradePlan(), candidate.chip(), candidate.relativeStrength(), candidate.industryLeadership(),
+                candidate.volatilityQuality(), candidate.signalProfile()
         );
     }
 
@@ -3351,14 +3415,16 @@ public class ShortTermService {
                 candidate.tradePlan(),
                 candidate.chip(),
                 candidate.relativeStrength(),
-                candidate.industryLeadership()
+                candidate.industryLeadership(),
+                candidate.volatilityQuality(),
+                candidate.signalProfile()
         );
     }
 
     private int actionPriority(String action) {
         return switch (action) {
             case "RIGHT_EARLY_ADD" -> 5;
-            case "SUPPORT_REVERSAL_LIGHT_TRIAL", "RIGHT_EARLY_LIGHT_TRIAL", "WATCH_RIGHT_SIDE", "WATCH_VALUE_RETURN" -> 4;
+            case "REGIME_LIGHT_TRIAL", "SUPPORT_REVERSAL_LIGHT_TRIAL", "RIGHT_EARLY_LIGHT_TRIAL", "WATCH_RIGHT_SIDE", "WATCH_VALUE_RETURN" -> 4;
             case "WAIT_PULLBACK" -> 3;
             case "WAIT_CONFIRM" -> 2;
             default -> 1;
@@ -3954,7 +4020,8 @@ public class ShortTermService {
             EastMoneyQuote quote,
             TechnicalContext technical,
             BigDecimal technicalScore,
-            ShortTermCoreSignalScore coreSignalScore
+            ShortTermCoreSignalScore coreSignalScore,
+            ShortTermVolatilityQuality volatilityQuality
     ) {
     }
 

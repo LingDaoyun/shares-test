@@ -1058,10 +1058,10 @@ class ShortTermServiceTest {
 
         ShortTermReport report = service.report(5, 50, 10, null, null, null, null, null, null, null);
 
-        ShortTermCandidate candidate = find(report, "600201");
         assertThat(report.marketSentiment().phase()).isEqualTo("冰点/混沌");
-        assertThat(candidate.action()).isEqualTo("MARKET_RISK_WAIT");
-        assertThat(candidate.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
+        assertThat(report.marketRegime().state()).isEqualTo("RISK_OFF");
+        assertThat(report.candidates()).isEmpty();
+        assertThat(eastMoneyClient.requestedKlineSymbols).isEmpty();
     }
 
     @Test
@@ -1085,6 +1085,8 @@ class ShortTermServiceTest {
 
         assertThat(report.coverage().executionReliable()).isTrue();
         assertThat(report.marketSentiment().phase()).isEqualTo("极端退潮");
+        assertThat(report.marketRegime().state()).isEqualTo("RISK_OFF");
+        assertThat(report.marketRegime().maxAction()).isEqualTo("NO_TRADE");
         assertThat(report.marketSentiment().declining()).isGreaterThan(5000);
         assertThat(report.marketSentiment().limitDownLike()).isGreaterThanOrEqualTo(1000);
         assertThat(report.candidates()).isEmpty();
@@ -1095,7 +1097,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldNotUseExtremeSelloffGateBeforeSixHundredLimitDownLikeStocks() {
+    void shouldStillUseBreadthRiskOffGateBelowSixHundredLimitDownLikeStocks() {
         List<EastMoneyQuote> quotes = new ArrayList<>();
         quotes.add(quote("600201", "逆势右侧候选", "10.62", "1.60", "18", "1.6", "600000000"));
         for (int index = 0; index < 5400; index++) {
@@ -1116,8 +1118,9 @@ class ShortTermServiceTest {
         assertThat(report.coverage().executionReliable()).isTrue();
         assertThat(report.marketSentiment().phase()).isEqualTo("退潮");
         assertThat(report.marketSentiment().limitDownLike()).isEqualTo(599);
-        assertThat(report.quoteNote()).doesNotContain("极端弱市闸门");
-        assertThat(eastMoneyClient.requestedKlineSymbols).isNotEmpty();
+        assertThat(report.marketRegime().state()).isEqualTo("RISK_OFF");
+        assertThat(report.quoteNote()).contains("极端弱市闸门");
+        assertThat(eastMoneyClient.requestedKlineSymbols).isEmpty();
     }
 
     @Test
@@ -1229,9 +1232,10 @@ class ShortTermServiceTest {
         ShortTermCandidate candidate = find(report, "600301");
         assertThat(report.coverage().executionReliable()).as(report.coverage().toString()).isTrue();
         assertThat(report.marketSentiment().phase()).isEqualTo("高潮");
-        assertThat(candidate.action()).isEqualTo("RIGHT_EARLY_LIGHT_TRIAL");
+        assertThat(report.marketRegime().state()).isEqualTo("CROWDED_VOLATILE");
+        assertThat(candidate.action()).isEqualTo("REGIME_LIGHT_TRIAL");
         assertThat(candidate.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
-        assertThat(candidate.todayAdvice().summary()).contains("高潮", "轻仓");
+        assertThat(candidate.todayAdvice().summary()).contains("拥挤高波动", "轻仓");
     }
 
     @Test
@@ -1489,8 +1493,64 @@ class ShortTermServiceTest {
 
         assertThat(report.hotDirections()).filteredOn(direction -> "新材料".equals(direction.label()))
                 .singleElement().satisfies(direction -> assertThat(direction.sampleCount()).isEqualTo(4));
+        assertThat(report.marketRegime().sampleCount()).isEqualTo(4);
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("300711");
         assertThat(find(report, "600711").score().marketHeatContribution()).isNotZero();
+    }
+
+    @Test
+    void exposesVolatilityQualitySignalFamilyAndVisibleRankingContribution() {
+        eastMoneyClient.quotes = List.of(
+                quote("600715", "波动质量样本", "10.62", "1.20", "18", "1.6", "600000000")
+        );
+        eastMoneyClient.klines.put("600715", confirmedRightEarlyKLines("600715", "10.62", "230000"));
+        eastMoneyClient.financials.put("600715", goodFinancial("600715"));
+
+        ShortTermCandidate candidate = find(
+                service.report(3, 100, 10, null, null, null, null, null, null, null),
+                "600715"
+        );
+
+        assertThat(candidate.volatilityQuality()).isNotNull();
+        assertThat(candidate.signalProfile()).isNotNull();
+        assertThat(candidate.signalProfile().activeFamilies()).isNotEmpty();
+        assertThat(candidate.score().volatilityContribution()).isEqualByComparingTo(
+                candidate.volatilityQuality().contribution()
+        );
+        assertThat(candidate.score().visibleRankingAdjustment()).isEqualByComparingTo(
+                candidate.score().rankingScore().subtract(candidate.score().technicalRankingScore())
+        );
+    }
+
+    @Test
+    void repairMarketDowngradesWouldBeAddToRegimeLightTrial() {
+        Instant timestamp = Instant.parse("2026-07-07T06:49:00Z");
+        List<EastMoneyQuote> quotes = new ArrayList<>();
+        quotes.add(withTurnover(quoteAt(
+                "600716", "修复期右侧", "通用设备", timestamp, "1.60", "900000000"), "3.00"));
+        for (int index = 0; index < 51; index++) {
+            quotes.add(quoteAt(String.format("601%03d", index), "微涨" + index,
+                    "普通行业", timestamp, "0.40", "1000000"));
+        }
+        for (int index = 0; index < 48; index++) {
+            quotes.add(quoteAt(String.format("603%03d", index), "微跌" + index,
+                    "普通行业", timestamp, "-0.30", "1000000"));
+        }
+        eastMoneyClient.quotes = quotes;
+        eastMoneyClient.snapshotExpectedCount = quotes.size();
+        eastMoneyClient.snapshotFetchedAt = timestamp;
+        eastMoneyClient.klines.put("600716", confirmedRightEarlyKLines("600716", "10.62", "230000"));
+        eastMoneyClient.financials.put("600716", goodFinancial("600716"));
+        eastMoneyClient.intraday.put("600716", confirmedTail("600716"));
+
+        ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:49:30Z"), SHANGHAI))
+                .report(3, 100, 10, null, null, null, null, null, null, null);
+
+        ShortTermCandidate candidate = find(report, "600716");
+        assertThat(report.marketRegime().state()).isEqualTo("REPAIR");
+        assertThat(candidate.action()).isEqualTo("REGIME_LIGHT_TRIAL");
+        assertThat(candidate.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
+        assertThat(candidate.todayAdvice().summary()).contains("修复", "轻仓");
     }
 
     @Test

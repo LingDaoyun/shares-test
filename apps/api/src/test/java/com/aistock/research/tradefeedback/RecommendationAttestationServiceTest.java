@@ -7,6 +7,7 @@ import com.aistock.research.tech.TechTrackedStock;
 import com.aistock.research.tech.TechTrackingReport;
 import com.aistock.research.shortterm.ShortTermCoverageSnapshot;
 import com.aistock.research.shortterm.ShortTermCrossSectionContext;
+import com.aistock.research.shortterm.ShortTermMarketRegime;
 import com.aistock.research.shortterm.ShortTermReport;
 import com.aistock.research.shortterm.ShortTermTechnicalReviewCoverage;
 import com.aistock.research.trading.TradingAdvice;
@@ -153,6 +154,12 @@ class RecommendationAttestationServiceTest {
         ShortTermCrossSectionContext crossSectionContext = new ShortTermCrossSectionContext(
                 95, 12, 9, "点时全市场", List.of("同行样本偏少")
         );
+        ShortTermMarketRegime marketRegime = new ShortTermMarketRegime(
+                "TREND_EXPANSION", "有序趋势扩张",
+                new BigDecimal("68"), new BigDecimal("0.80"), new BigDecimal("1.20"),
+                new BigDecimal("65"), new BigDecimal("0.60"), new BigDecimal("0.10"), 95,
+                "NORMAL", "测试市场状态", List.of()
+        );
         ShortTermReport report = new ShortTermReport(
                 "全市场短线",
                 95,
@@ -175,7 +182,8 @@ class RecommendationAttestationServiceTest {
                 NOW.minusSeconds(20),
                 NOW,
                 technicalCoverage,
-                crossSectionContext
+                crossSectionContext,
+                marketRegime
         );
 
         ShortTermReport attested = service.attest(report);
@@ -185,6 +193,7 @@ class RecommendationAttestationServiceTest {
         assertThat(attested.dataCutoffAt()).isEqualTo(NOW.minusSeconds(20));
         assertThat(attested.technicalReviewCoverage()).isEqualTo(technicalCoverage);
         assertThat(attested.crossSectionContext()).isEqualTo(crossSectionContext);
+        assertThat(attested.marketRegime()).isEqualTo(marketRegime);
     }
 
     @Test

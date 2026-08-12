@@ -189,7 +189,7 @@ public class RecommendationAttestationService {
                 report.ruleSet(), report.weightProfile(), report.candidates(), report.hotDirections(),
                 report.marketSentiment(), report.marketFundDirection(), report.exclusions(), Map.copyOf(tokens),
                 report.coverage(), report.reviewedSymbols(), report.dataCutoffAt(), report.generatedAt(),
-                report.technicalReviewCoverage(), report.crossSectionContext());
+                report.technicalReviewCoverage(), report.crossSectionContext(), report.marketRegime());
     }
 
     public ShortTermScanJobStatus attest(ShortTermScanJobStatus status) {
