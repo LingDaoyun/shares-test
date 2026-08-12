@@ -419,3 +419,10 @@ ALTER TABLE short_term_signal_outcome
 
 CREATE INDEX IF NOT EXISTS idx_short_term_outcome_lookup
   ON short_term_signal_outcome(observation_id, horizon, status);
+
+CREATE TABLE IF NOT EXISTS runtime_config_section (
+  section_key VARCHAR(64) PRIMARY KEY,
+  payload_json TEXT NOT NULL,
+  revision BIGINT NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+);

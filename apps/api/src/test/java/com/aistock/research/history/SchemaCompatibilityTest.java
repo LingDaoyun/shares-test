@@ -26,6 +26,7 @@ class SchemaCompatibilityTest {
 
             assertThat(schema.toUpperCase()).doesNotContain(" CLOB");
             assertThat(schema).contains("payload_json TEXT NOT NULL");
+            assertThat(schema).contains("CREATE TABLE IF NOT EXISTS runtime_config_section");
         }
     }
 }
