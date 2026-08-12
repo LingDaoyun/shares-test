@@ -3,6 +3,7 @@ package com.aistock.research.shortterm;
 import com.aistock.research.history.ResearchHistoryService;
 import com.aistock.research.shortterm.schedule.ShortTermFinalResultGate;
 import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
+import com.aistock.research.shortterm.validation.ShortTermObservationService;
 import com.aistock.research.trading.TradingClockService;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,6 +46,7 @@ public class ShortTermScanJobService {
     private final ResearchHistoryService researchHistoryService;
     private final TradingClockService tradingClockService;
     private final ShortTermFinalResultGate finalResultGate;
+    private final ShortTermObservationService observationService;
     private final Clock clock;
     private final Duration scanTimeout;
     private final ConcurrentMap<String, MutableJob> jobs = new ConcurrentHashMap<>();
@@ -58,10 +60,12 @@ public class ShortTermScanJobService {
             ResearchHistoryService researchHistoryService,
             TradingClockService tradingClockService,
             ShortTermFinalResultGate finalResultGate,
+            ShortTermObservationService observationService,
             @Value("${research.short-term.scan-job-timeout:PT15M}") String scanTimeout
     ) {
         this(
                 shortTermService, researchHistoryService, tradingClockService, finalResultGate,
+                observationService,
                 Clock.system(TradingClockService.CHINA_MARKET_ZONE),
                 parseScanTimeout(scanTimeout));
     }
@@ -73,7 +77,8 @@ public class ShortTermScanJobService {
             ShortTermFinalResultGate finalResultGate,
             Clock clock
     ) {
-        this(shortTermService, researchHistoryService, tradingClockService, finalResultGate, clock, DEFAULT_SCAN_TIMEOUT);
+        this(shortTermService, researchHistoryService, tradingClockService, finalResultGate,
+                null, clock, DEFAULT_SCAN_TIMEOUT);
     }
 
     ShortTermScanJobService(
@@ -84,10 +89,24 @@ public class ShortTermScanJobService {
             Clock clock,
             Duration scanTimeout
     ) {
+        this(shortTermService, researchHistoryService, tradingClockService, finalResultGate,
+                null, clock, scanTimeout);
+    }
+
+    ShortTermScanJobService(
+            ShortTermService shortTermService,
+            ResearchHistoryService researchHistoryService,
+            TradingClockService tradingClockService,
+            ShortTermFinalResultGate finalResultGate,
+            ShortTermObservationService observationService,
+            Clock clock,
+            Duration scanTimeout
+    ) {
         this.shortTermService = shortTermService;
         this.researchHistoryService = researchHistoryService;
         this.tradingClockService = tradingClockService;
         this.finalResultGate = finalResultGate;
+        this.observationService = observationService;
         this.clock = clock.withZone(TradingClockService.CHINA_MARKET_ZONE);
         this.scanTimeout = scanTimeout == null || scanTimeout.isNegative() || scanTimeout.isZero()
                 ? DEFAULT_SCAN_TIMEOUT
@@ -156,6 +175,7 @@ public class ShortTermScanJobService {
             ShortTermFinalResultGate.Result result =
                     finalResultGate.evaluateManual(report, finishedAt);
             recordHistorySafely(report);
+            recordObservationSafely(job.jobId(), report, result, finishedAt);
             job.succeed(report, result, finishedAt);
         } catch (Exception exception) {
             logger.warn("短线右侧扫描任务失败，jobId={}", job.jobId(), exception);
@@ -171,6 +191,23 @@ public class ShortTermScanJobService {
             researchHistoryService.recordShortTermReport(report);
         } catch (RuntimeException exception) {
             logger.warn("短线扫描历史归档失败，不影响本次实时报告，原因：{}", exception.getMessage());
+        }
+    }
+
+    private void recordObservationSafely(
+            String jobId,
+            ShortTermReport report,
+            ShortTermFinalResultGate.Result result,
+            Instant publishedAt
+    ) {
+        if (observationService == null || result == null) {
+            return;
+        }
+        try {
+            observationService.captureManual(
+                    jobId, report, result.status(), result.blockedReasons(), publishedAt);
+        } catch (RuntimeException exception) {
+            logger.warn("短线手动扫描观察样本归档失败，不影响本次实时报告，原因：{}", exception.getMessage());
         }
     }
 

@@ -337,3 +337,77 @@ CREATE TABLE IF NOT EXISTS short_term_scheduled_snapshot (
 
 CREATE INDEX IF NOT EXISTS idx_short_term_snapshot_latest
   ON short_term_scheduled_snapshot(trade_date, updated_at, snapshot_key);
+
+CREATE TABLE IF NOT EXISTS short_term_signal_observation (
+  observation_id VARCHAR(64) PRIMARY KEY,
+  publication_key VARCHAR(160) NOT NULL,
+  publication_type VARCHAR(32) NOT NULL,
+  strategy_version VARCHAR(80) NOT NULL,
+  symbol VARCHAR(6) NOT NULL,
+  company_name VARCHAR(128) NOT NULL,
+  candidate_rank INTEGER NOT NULL,
+  action VARCHAR(64) NOT NULL,
+  signal_family VARCHAR(80) NOT NULL,
+  market_regime VARCHAR(64) NOT NULL,
+  recommendation_price NUMERIC(20, 6),
+  recommendation_trade_date DATE,
+  data_cutoff_at TIMESTAMP WITH TIME ZONE,
+  published_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  source_name VARCHAR(128) NOT NULL,
+  coverage_ratio NUMERIC(10, 6),
+  coverage_expected_count INTEGER NOT NULL,
+  coverage_fetched_count INTEGER NOT NULL,
+  validation_eligible BOOLEAN NOT NULL,
+  calibration_eligible BOOLEAN NOT NULL,
+  validation_block_reason VARCHAR(1000),
+  payload_json TEXT NOT NULL,
+  buy_commission_percent NUMERIC(10, 6) NOT NULL,
+  sell_commission_percent NUMERIC(10, 6) NOT NULL,
+  sell_stamp_duty_percent NUMERIC(10, 6) NOT NULL,
+  buy_slippage_percent NUMERIC(10, 6) NOT NULL,
+  sell_slippage_percent NUMERIC(10, 6) NOT NULL,
+  outcome_state VARCHAR(32) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  version BIGINT NOT NULL DEFAULT 0,
+  CONSTRAINT uk_short_term_observation_publication UNIQUE (publication_key, symbol)
+);
+
+ALTER TABLE short_term_signal_observation
+  ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_short_term_observation_pending
+  ON short_term_signal_observation(validation_eligible, outcome_state, published_at, observation_id);
+
+CREATE INDEX IF NOT EXISTS idx_short_term_observation_cohort
+  ON short_term_signal_observation(
+    calibration_eligible, strategy_version, signal_family, market_regime, observation_id);
+
+CREATE TABLE IF NOT EXISTS short_term_signal_outcome (
+  outcome_id VARCHAR(64) PRIMARY KEY,
+  observation_id VARCHAR(64) NOT NULL,
+  horizon VARCHAR(8) NOT NULL,
+  target_trade_date DATE NOT NULL,
+  evaluation_price NUMERIC(20, 6),
+  gross_return_percent NUMERIC(14, 6),
+  net_return_percent NUMERIC(14, 6),
+  max_favorable_excursion_percent NUMERIC(14, 6),
+  max_adverse_excursion_percent NUMERIC(14, 6),
+  status VARCHAR(64) NOT NULL,
+  source_name VARCHAR(128),
+  market_timestamp TIMESTAMP WITH TIME ZONE,
+  detail VARCHAR(1000),
+  calculated_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  version BIGINT NOT NULL DEFAULT 0,
+  CONSTRAINT fk_short_term_outcome_observation
+    FOREIGN KEY (observation_id) REFERENCES short_term_signal_observation(observation_id),
+  CONSTRAINT uk_short_term_outcome_horizon UNIQUE (observation_id, horizon)
+);
+
+ALTER TABLE short_term_signal_outcome
+  ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_short_term_outcome_lookup
+  ON short_term_signal_outcome(observation_id, horizon, status);

@@ -35,6 +35,16 @@ server:
 research:
   short-term:
     scan-job-timeout: PT15M
+    validation:
+      enabled: true
+      outcome-cron: "0 30 16 * * MON-FRI"
+      batch-size: 100
+      minimum-cohort-samples: 30
+      buy-commission-percent: 0.03
+      sell-commission-percent: 0.03
+      sell-stamp-duty-percent: 0.05
+      buy-slippage-percent: 0.05
+      sell-slippage-percent: 0.05
     chip:
       enabled: true
       lookback-bars: 120

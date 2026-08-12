@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 @Service
@@ -39,6 +40,7 @@ public class TradingClockService {
             LocalDate.parse("2026-10-01"), LocalDate.parse("2026-10-02"), LocalDate.parse("2026-10-05"),
             LocalDate.parse("2026-10-06"), LocalDate.parse("2026-10-07")
     );
+    private static final Set<Integer> VERIFIED_CALENDAR_YEARS = Set.of(2026);
 
     private final Clock clock;
 
@@ -89,6 +91,24 @@ public class TradingClockService {
             cursor = nextTradingDay(cursor);
         }
         return cursor;
+    }
+
+    public Optional<LocalDate> verifiedTradingDayAfter(LocalDate date, int offset) {
+        if (date == null || offset < 0 || !VERIFIED_CALENDAR_YEARS.contains(date.getYear())) {
+            return Optional.empty();
+        }
+        LocalDate cursor = date;
+        int remaining = offset;
+        while (remaining > 0) {
+            cursor = cursor.plusDays(1);
+            if (!VERIFIED_CALENDAR_YEARS.contains(cursor.getYear())) {
+                return Optional.empty();
+            }
+            if (!isMarketClosedDay(cursor)) {
+                remaining--;
+            }
+        }
+        return Optional.of(cursor);
     }
 
     public LocalDate currentMarketDate() {

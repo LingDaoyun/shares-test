@@ -3,6 +3,7 @@ package com.aistock.research.shortterm;
 import com.aistock.research.history.ResearchHistoryService;
 import com.aistock.research.shortterm.schedule.ShortTermFinalResultGate;
 import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
+import com.aistock.research.shortterm.validation.ShortTermObservationService;
 import com.aistock.research.trading.TradingClockService;
 import com.aistock.research.trading.TradingSessionSnapshot;
 import org.springframework.boot.test.util.TestPropertyValues;
@@ -38,6 +39,7 @@ class ShortTermScanJobServiceTest {
         context.registerBean(ResearchHistoryService.class, () -> mock(ResearchHistoryService.class));
         context.registerBean(TradingClockService.class, () -> mock(TradingClockService.class));
         context.registerBean(ShortTermFinalResultGate.class, () -> mock(ShortTermFinalResultGate.class));
+        context.registerBean(ShortTermObservationService.class, () -> mock(ShortTermObservationService.class));
         context.register(ShortTermScanJobService.class);
 
         try {
@@ -117,6 +119,35 @@ class ShortTermScanJobServiceTest {
                     com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.FAILED);
             assertThat(finished.report()).isNull();
             assertThat(finished.message()).contains("实时行情加载失败");
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void shouldArchiveManualObservationWithItsActualResultGateStatus() throws Exception {
+        ShortTermService shortTermService = mock(ShortTermService.class);
+        ResearchHistoryService historyService = mock(ResearchHistoryService.class);
+        ShortTermObservationService observationService = mock(ShortTermObservationService.class);
+        TradingClockService tradingClock = mock(TradingClockService.class);
+        ShortTermFinalResultGate gate = mock(ShortTermFinalResultGate.class);
+        ShortTermReport report = sampleReport();
+        Instant now = Instant.parse("2026-07-23T06:49:00Z");
+        when(tradingClock.currentMarketDate()).thenReturn(LocalDate.parse("2026-07-23"));
+        when(shortTermService.report(eq(ShortTermScanRequest.empty()))).thenReturn(report);
+        when(gate.evaluateManual(eq(report), any())).thenReturn(new ShortTermFinalResultGate.Result(
+                ShortTermSnapshotStatus.FINAL_READY, "手动终选已就绪", List.of()));
+        ShortTermScanJobService service = new ShortTermScanJobService(
+                shortTermService, historyService, tradingClock, gate, observationService,
+                Clock.fixed(now, ZoneOffset.UTC), Duration.ofMinutes(5));
+
+        try {
+            ShortTermScanJobStatus started = service.start(ShortTermScanRequest.empty());
+            awaitFinished(service, started.jobId());
+
+            verify(observationService).captureManual(
+                    eq(started.jobId()), eq(report), eq(ShortTermSnapshotStatus.FINAL_READY),
+                    eq(List.of()), eq(now));
         } finally {
             service.shutdown();
         }

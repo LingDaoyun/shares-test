@@ -3,8 +3,10 @@ package com.aistock.research.history;
 import com.aistock.research.decision.InvestmentDecisionReport;
 import com.aistock.research.shortterm.ShortTermCandidate;
 import com.aistock.research.shortterm.ShortTermReport;
+import com.aistock.research.shortterm.validation.ShortTermObservationService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,15 +24,27 @@ public class ResearchHistoryService {
     private final AnalysisHistoryRepository analysisRepository;
     private final DecisionHistoryRepository decisionRepository;
     private final ObjectMapper objectMapper;
+    private final ShortTermObservationService observationService;
 
     public ResearchHistoryService(
             AnalysisHistoryRepository analysisRepository,
             DecisionHistoryRepository decisionRepository,
             ObjectMapper objectMapper
     ) {
+        this(analysisRepository, decisionRepository, objectMapper, null);
+    }
+
+    @Autowired
+    public ResearchHistoryService(
+            AnalysisHistoryRepository analysisRepository,
+            DecisionHistoryRepository decisionRepository,
+            ObjectMapper objectMapper,
+            ShortTermObservationService observationService
+    ) {
         this.analysisRepository = analysisRepository;
         this.decisionRepository = decisionRepository;
         this.objectMapper = objectMapper;
+        this.observationService = observationService;
     }
 
     @Transactional
@@ -148,6 +162,9 @@ public class ResearchHistoryService {
                         recordedAt
                 ));
             }
+        }
+        if (snapshotIdentity != null && observationService != null) {
+            observationService.captureScheduledFinal(snapshotIdentity, report, recordedAt);
         }
     }
 

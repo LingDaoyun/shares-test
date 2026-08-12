@@ -90,17 +90,17 @@
 - integrate scheduled/manual final report archival
 - update feedback summaries and tests
 
-- [ ] Persist every published executable/watch candidate idempotently without creating a user holding.
-- [ ] Persist point-in-time payload, source, coverage, cutoff, signal family, regime, action, and validation eligibility.
-- [ ] Mature T1/T2 close return, configured net return, MFE, and MAE after future bars become available.
-- [ ] Define T1/T2 as market trading days, baseline them on the cutoff recommendation price, and mark a suspended/missing symbol bar unavailable without shifting horizons.
-- [ ] Persist commission, stamp-duty, and optional slippage assumptions used by each net-return label.
-- [ ] Keep unavailable source results retryable and immutable matured labels protected.
-- [ ] Aggregate by rule version, signal family, and market regime.
-- [ ] Require minimum sample counts before probability/expected-return presentation.
-- [ ] Add repository, chronology, idempotency, source-failure, and cohort tests.
-- [ ] Reviewer Agent checks point-in-time integrity, selection bias, idempotency, cost treatment, and schema compatibility.
-- [ ] Fix findings, re-run tests, and commit the phase.
+- [x] Persist every published executable/watch candidate idempotently without creating a user holding.
+- [x] Persist point-in-time payload, source, coverage, cutoff, signal family, regime, action, and validation eligibility.
+- [x] Mature T1/T2 close return, configured net return, MFE, and MAE after future bars become available.
+- [x] Define T1/T2 as market trading days, baseline them on the cutoff recommendation price, and mark a suspended/missing symbol bar unavailable without shifting horizons.
+- [x] Persist commission, stamp-duty, and optional slippage assumptions used by each net-return label.
+- [x] Keep unavailable source results retryable and immutable matured labels protected.
+- [x] Aggregate by rule version, signal family, and market regime.
+- [x] Require minimum sample counts before probability/expected-return presentation.
+- [x] Add repository, chronology, idempotency, source-failure, and cohort tests.
+- [x] Reviewer Agent checks point-in-time integrity, selection bias, idempotency, cost treatment, and schema compatibility.
+- [x] Fix findings, re-run tests, and commit the phase.
 
 ## Phase 5: Frontend Explainability And Final Verification
 

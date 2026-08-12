@@ -95,6 +95,16 @@ class TradingClockServiceTest {
     }
 
     @Test
+    void verifiedCalendarFailsClosedWhenTheTargetYearHasNoOfficialCalendar() {
+        TradingClockService service = serviceAt("2026-12-31T06:50:00Z");
+
+        assertThat(service.verifiedTradingDayAfter(LocalDate.parse("2026-12-31"), 1))
+                .isEmpty();
+        assertThat(service.verifiedTradingDayAfter(LocalDate.parse("2026-06-18"), 2))
+                .contains(LocalDate.parse("2026-06-23"));
+    }
+
+    @Test
     void completesCurrentDailyBarOnlyAtOrAfterRegularClose() {
         LocalDate tradeDate = LocalDate.parse("2026-07-07");
         TradingClockService beforeClose = serviceAt("2026-07-07T06:59:00Z");

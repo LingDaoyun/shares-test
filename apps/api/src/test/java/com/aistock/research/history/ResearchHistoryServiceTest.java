@@ -5,6 +5,7 @@ import com.aistock.research.shortterm.ShortTermCandidate;
 import com.aistock.research.shortterm.ShortTermReport;
 import com.aistock.research.shortterm.ShortTermScoreBreakdown;
 import com.aistock.research.shortterm.ShortTermMarketSentiment;
+import com.aistock.research.shortterm.validation.ShortTermObservationService;
 import com.aistock.research.trading.TradingAdvice;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -110,5 +111,26 @@ class ResearchHistoryServiceTest {
         verify(decisionRepository, times(1)).save(decisionCaptor.capture());
         assertThat(decisionCaptor.getValue().toEntry().analysisId())
                 .isEqualTo(analysisCaptor.getValue().getAnalysisId());
+    }
+
+    @Test
+    void scheduledArchiveAlsoCapturesAnIndependentStrategyObservation() throws Exception {
+        ShortTermObservationService observationService = mock(ShortTermObservationService.class);
+        ResearchHistoryService serviceWithObservation = new ResearchHistoryService(
+                analysisRepository, decisionRepository, objectMapper, observationService);
+        ShortTermCandidate candidate = mock(ShortTermCandidate.class);
+        ShortTermReport report = mock(ShortTermReport.class);
+        when(candidate.symbol()).thenReturn("600001");
+        when(candidate.name()).thenReturn("右侧股份");
+        when(report.candidates()).thenReturn(List.of(candidate));
+        when(objectMapper.writeValueAsString(any(ShortTermHistoryPayload.class)))
+                .thenReturn("{\"symbol\":\"600001\"}");
+
+        serviceWithObservation.recordShortTermReport("2026-08-12:FINAL:fingerprint", report);
+
+        verify(observationService).captureScheduledFinal(
+                org.mockito.ArgumentMatchers.eq("2026-08-12:FINAL:fingerprint"),
+                org.mockito.ArgumentMatchers.same(report),
+                any(Instant.class));
     }
 }
