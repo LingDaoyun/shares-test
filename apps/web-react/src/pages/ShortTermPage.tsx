@@ -8,7 +8,6 @@ import { Card } from '../components/ui/Card'
 import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOverlay'
 import { Loader } from '../components/ui/Loader'
 import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
-import { ChipDistributionChart } from '../components/shortterm/ChipDistributionChart'
 import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
 import { BuyEntryButton } from '../components/tradefeedback/BuyEntryButton'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
@@ -19,7 +18,7 @@ import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCount
 import { loadShortTermViewPreferences, saveShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import type { ShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import { useShortTermScanStore } from '../store/shortTermScanStore'
-import type { ChipVerificationStatus, ShortTermCandidate, ShortTermChipSnapshot, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -591,7 +590,6 @@ function CandidateRow({
           {candidate.score.marketHeatScore >= 68 ? <Tag tone="brand">热度 {formatNumber(candidate.score.marketHeatScore)}</Tag> : null}
           <Tag tone="neutral">财报 {formatNumber(candidate.financial.qualityScore)}</Tag>
           <Tag tone={tailTone(candidate.tailSignal.status)}>尾盘：{candidate.tailSignal.statusLabel}</Tag>
-          <ChipSummaryTags chip={candidate.chip} />
           <Tag tone={candidate.quoteFreshness.blocksRealtimeDecision ? 'warning' : 'success'}>
             行情：{candidate.quoteFreshness.statusLabel}
           </Tag>
@@ -724,8 +722,6 @@ function CandidateDetail({
           <ScoreMetric label="风险提示分（不计主分）" value={candidate.score.riskPenalty} />
         </div>
 
-        <ChipStructurePanel candidate={candidate} />
-
         <GoldenCrossDetail snapshot={candidate.technical.goldenCross} />
 
         <TailSignalPanel signal={candidate.tailSignal} />
@@ -768,93 +764,6 @@ function CandidateDetail({
         </div>
     </div>
   )
-}
-
-function ChipSummaryTags({ chip }: { chip: ShortTermChipSnapshot | null | undefined }) {
-  if (!chip) return <Tag tone="neutral">筹码：历史未算</Tag>
-  return (
-    <>
-      <Tag tone={chipVerificationTone(chip.verificationStatus)}>
-        {chip.verificationStatus === 'VERIFIED'
-          ? '筹码核验'
-          : chip.verificationStatus === 'SINGLE_SOURCE'
-            ? '筹码：本地估算'
-            : `筹码：${chip.verificationLabel}`}
-      </Tag>
-      {chip.contributionScore != null ? <Tag tone="neutral">排序贡献 {formatNumber(chip.contributionScore)}</Tag> : null}
-      {chip.distanceToAverageCostPercent != null ? (
-        <Tag tone="neutral">距成本 {formatSignedPercent(chip.distanceToAverageCostPercent)}</Tag>
-      ) : null}
-    </>
-  )
-}
-
-function ChipStructurePanel({ candidate }: { candidate: ShortTermCandidate }) {
-  const chip = candidate.chip
-  const chipDataGaps = chip?.dataGaps ?? []
-  const participatesInRanking = candidate.score.v3RankingScore != null
-    && candidate.score.rankingScore != null
-    && Math.abs(candidate.score.v3RankingScore - candidate.score.rankingScore) < 0.005
-  return (
-    <section className="border-t border-line-soft pt-4" aria-label="筹码结构与外部认证">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-ink-900">筹码结构与外部认证</h3>
-        {chip ? (
-          <Tag tone={chipVerificationTone(chip.verificationStatus)}>{chip.verificationLabel}</Tag>
-        ) : null}
-      </div>
-      {!chip ? (
-        <p className="mt-3 border-l-2 border-line-soft pl-3 text-sm leading-relaxed text-ink-500">
-          历史版本未计算。该报告保留原排序，不用后验筹码数据改写当时结论。
-        </p>
-      ) : (
-        <>
-          <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-3">
-            <Metric label="平均成本" value={formatPerSharePrice(chip.averageCost)} />
-            <Metric label="距平均成本" value={formatSignedPercent(chip.distanceToAverageCostPercent)} />
-            <Metric label="获利筹码" value={formatPercent(chip.winnerRatePercent)} />
-            <Metric label="上方筹码" value={formatPercent(chip.overheadChipRatioPercent)} />
-            <Metric label="70% 成本区间" value={`${formatPrice(chip.cost70Low)} - ${formatPrice(chip.cost70High)}`} />
-            <Metric label="70% 成本带宽" value={formatPercent(chip.cost70ConcentrationPercent)} />
-            <Metric label="前高参考" value={formatPerSharePrice(chip.priorHighPrice)} />
-            <Metric label="前高区残余筹码" value={formatPercent(chip.priorHighZoneResidualRatioPercent)} />
-            <Metric label="前高后累计换手" value={formatPercent(chip.turnoverSincePriorHighPercent)} />
-            <Metric label="筹码结构分" value={formatNumber(chip.chipStructureScore)} />
-            <Metric label="认证系数" value={formatNumber(chip.verificationCoefficient)} />
-            <Metric label="筹码排序贡献" value={formatNumber(chip.contributionScore)} />
-            <Metric label="主排序关系" value={participatesInRanking ? '参与同层排序' : '历史/旁路诊断'} />
-            <Metric label="本地 / 外部日期" value={`${chip.localTradeDate ?? '待补'} / ${chip.externalTradeDate ?? '待补'}`} />
-            <Metric label="计算口径" value={chip.calculationMode === 'INTRADAY_ESTIMATE' ? '盘中估算' : '完整日 K'} />
-          </div>
-          <ChipDistributionChart
-            currentPrice={candidate.latestPrice}
-            distributionBuckets={chip.distributionBuckets ?? []}
-            concentrationZones={chip.concentrationZones ?? []}
-            dominantPeakPrice={chip.dominantPeakPrice}
-            dominantZoneLow={chip.dominantZoneLow}
-            dominantZoneHigh={chip.dominantZoneHigh}
-            dominantZoneChipRatioPercent={chip.dominantZoneChipRatioPercent}
-            nearestOverheadZone={chip.nearestOverheadZone}
-          />
-          <p className="mt-3 text-xs leading-relaxed text-ink-500">
-            筹码是基于换手率与价格区间估算的成本分布画像。有效本地筹码在 ACTIVE 模式下占排序的 25%，只调整同一动作层级内的顺序，不绕过技术与风险门禁。
-          </p>
-          {chipDataGaps.length ? (
-            <div className="mt-3 border-l-2 border-amber-300 pl-3 text-xs leading-relaxed text-amber-700">
-              {chipDataGaps.join('；')}
-            </div>
-          ) : null}
-        </>
-      )}
-    </section>
-  )
-}
-
-function chipVerificationTone(status: ChipVerificationStatus) {
-  if (status === 'VERIFIED') return 'success' as const
-  if (status === 'SINGLE_SOURCE') return 'sky' as const
-  if (status === 'CONFLICT' || status === 'STALE') return 'warning' as const
-  return 'neutral' as const
 }
 
 function GoldenCrossDetail({ snapshot }: { snapshot: ShortTermGoldenCrossSnapshot | null | undefined }) {

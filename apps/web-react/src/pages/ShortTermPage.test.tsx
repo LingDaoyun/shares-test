@@ -414,7 +414,7 @@ describe('ShortTermPage manual scan flow', () => {
     expect(document.querySelector('button[aria-label="买入 候选600795 600795"]')).not.toBeNull()
   })
 
-  it('shows verified chip diagnostics as standalone evidence in the row and detail', async () => {
+  it('does not render chip data even when the candidate response contains a complete snapshot', async () => {
     const verifiedCandidate = {
       ...candidate('600795'),
       score: {
@@ -510,34 +510,26 @@ describe('ShortTermPage manual scan flow', () => {
       ...baseReport,
       candidates: [verifiedCandidate]
     } as never)
-    expect(document.body.textContent).toContain('筹码核验')
-    expect(document.body.textContent).toContain('排序贡献 21.50')
-    expect(document.body.textContent).toContain('距成本 +3.17%')
+    expect(document.body.textContent).not.toContain('筹码')
+    expect(document.body.textContent).not.toContain('排序贡献 21.50')
+    expect(document.body.textContent).not.toContain('距成本 +3.17%')
 
     await clickButton('候选600795')
-    expect(document.body.textContent).toContain('筹码结构与外部认证')
-    expect(document.body.textContent).toContain('本地估算 · 外部数据已核验')
-    expect(document.body.textContent).toContain('筹码排序贡献')
-    expect(document.body.textContent).toContain('主排序关系')
-    expect(document.body.textContent).toContain('参与同层排序')
-    expect(document.body.textContent).not.toContain('V2 / V3 排名')
-    expect(document.body.textContent).toContain('主筹码峰')
-    expect(document.body.textContent).toContain('主要集中区')
-    expect(document.body.textContent).toContain('43.60%')
-    expect(document.body.textContent).toContain('最近上方筹码区')
-    expect(document.body.textContent).toContain('前高区残余筹码')
-    expect(document.body.textContent).toContain('7.50%')
+    expect(document.body.textContent).not.toContain('筹码')
+    expect(document.body.textContent).not.toContain('本地估算 · 外部数据已核验')
+    expect(document.body.textContent).not.toContain('主筹码峰')
+    expect(document.body.textContent).not.toContain('最近上方筹码区')
   })
 
-  it('labels legacy candidates whose historical report has no chip snapshot', async () => {
+  it('does not render a chip placeholder for legacy candidates', async () => {
     await renderWithManualReport(root, reportWithCandidates(['600795']))
     await clickButton('候选600795')
 
-    expect(document.body.textContent).toContain('筹码结构与外部认证')
-    expect(document.body.textContent).toContain('历史版本未计算')
+    expect(document.body.textContent).not.toContain('筹码')
+    expect(document.body.textContent).not.toContain('历史版本未计算')
   })
 
-  it('opens a partial legacy report without ruleSet or chip dataGaps', async () => {
+  it('opens a partial legacy report without rendering its chip data', async () => {
     const legacyReport = {
       ...emptyReport,
       candidateCount: 1,
@@ -556,9 +548,9 @@ describe('ShortTermPage manual scan flow', () => {
     await renderWithManualReport(root, legacyReport as never)
     await clickButton('候选600795')
 
-    expect(document.body.textContent).toContain('筹码结构与外部认证')
-    expect(document.body.textContent).toContain('仅本地模型')
-    expect(document.body.textContent).toContain('历史版本未计算完整筹码峰')
+    expect(document.body.textContent).not.toContain('筹码')
+    expect(document.body.textContent).not.toContain('仅本地模型')
+    expect(document.body.textContent).not.toContain('历史版本未计算完整筹码峰')
   })
 
   it('does not render or request the short-term overnight validation panel', async () => {
