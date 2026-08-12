@@ -11,6 +11,7 @@ interface ScheduledSnapshotStatusProps {
 
 const toneClasses: Record<ShortTermSnapshotStatus, string> = {
   FINAL_READY: 'border-emerald-200 bg-emerald-50/60 text-emerald-900',
+  FINAL_PENDING: 'border-line bg-white text-ink-800',
   CACHE_PREVIEW: 'border-sky-200 bg-sky-50/60 text-sky-900',
   PRESELECT_READY: 'border-line bg-white text-ink-800',
   RUNNING: 'border-line bg-white text-ink-800',
@@ -81,6 +82,8 @@ function statusLabel(snapshot: ShortTermScheduledSnapshot, origin: ReportOrigin)
     switch (status) {
       case 'FINAL_READY':
         return '手动最终结果已就绪'
+      case 'FINAL_PENDING':
+        return '手动结果等待截止认证'
       case 'CACHE_PREVIEW':
         return '手动缓存预览'
       case 'PRESELECT_READY':
@@ -101,6 +104,8 @@ function statusLabel(snapshot: ShortTermScheduledSnapshot, origin: ReportOrigin)
   switch (status) {
     case 'FINAL_READY':
       return '14:49:40 前买入确认已就绪'
+    case 'FINAL_PENDING':
+      return '尾盘结果等待截止认证'
     case 'CACHE_PREVIEW':
       return '缓存行情预览'
     case 'PRESELECT_READY':

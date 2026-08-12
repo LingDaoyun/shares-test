@@ -654,6 +654,8 @@ export interface ShortTermScoreBreakdown {
   marketHeatContribution?: number | null
   crossSectionAdjustment?: number | null
   rankingScore?: number
+  volatilityContribution?: number | null
+  visibleRankingAdjustment?: number | null
 }
 
 export interface ShortTermRelativeStrength {
@@ -680,6 +682,42 @@ export interface ShortTermIndustryLeadership {
   percentile: number | null
   contribution: number
   evidence: string
+}
+
+export interface ShortTermVolatilityQuality {
+  atrPercent: number | null
+  distanceToMa20Atr: number | null
+  contractionRatio5To20: number | null
+  breakoutExpansionRatio: number | null
+  breakoutFromHigh20Atr: number | null
+  state: string
+  label: string
+  contractionBreakout: boolean
+  contribution: number
+  dataGaps: string[]
+}
+
+export interface ShortTermSignalProfile {
+  primaryFamily: string
+  primaryLabel: string
+  activeFamilies: string[]
+  evidence: string[]
+  dataGaps: string[]
+}
+
+export interface ShortTermMarketRegime {
+  state: string
+  label: string
+  breadthPercent: number | null
+  medianChangePercent: number | null
+  averageAbsoluteChangePercent: number | null
+  advancingTurnoverSharePercent: number | null
+  limitUpRatioPercent: number | null
+  limitDownRatioPercent: number | null
+  sampleCount: number
+  maxAction: string
+  explanation: string
+  dataGaps: string[]
 }
 
 export type ChipVerificationStatus =
@@ -889,6 +927,8 @@ export interface ShortTermCandidate {
   chip?: ShortTermChipSnapshot | null
   relativeStrength?: ShortTermRelativeStrength | null
   industryLeadership?: ShortTermIndustryLeadership | null
+  volatilityQuality?: ShortTermVolatilityQuality | null
+  signalProfile?: ShortTermSignalProfile | null
 }
 
 export interface ShortTermTechnicalReviewCoverage {
@@ -930,11 +970,38 @@ export interface ShortTermReport {
   generatedAt: string
   technicalReviewCoverage?: ShortTermTechnicalReviewCoverage | null
   crossSectionContext?: ShortTermCrossSectionContext | null
+  marketRegime?: ShortTermMarketRegime | null
+}
+
+export interface ShortTermValidationCohortRequest {
+  signalFamily: string
+  marketRegime: string
+  horizon: 'T1' | 'T2'
+}
+
+export interface ShortTermValidationBatchRequest {
+  cohorts: ShortTermValidationCohortRequest[]
+}
+
+export interface ShortTermValidationSummary {
+  ruleVersion: string
+  signalFamily: string
+  marketRegime: string
+  horizon: 'T1' | 'T2'
+  status: 'AVAILABLE' | 'INSUFFICIENT_SAMPLE' | 'VALIDATION_DISABLED'
+  minimumSampleCount: number
+  sampleCount: number
+  positiveRatePercent: number | null
+  averageNetReturnPercent: number | null
+  medianNetReturnPercent: number | null
+  averageMfePercent: number | null
+  averageMaePercent: number | null
 }
 
 export type ShortTermSnapshotStatus =
   | 'RUNNING'
   | 'PRESELECT_READY'
+  | 'FINAL_PENDING'
   | 'FINAL_READY'
   | 'CACHE_PREVIEW'
   | 'NO_TRADE'
@@ -948,9 +1015,12 @@ export interface ShortTermScheduledSnapshot {
   strategyVersion: string
   message: string
   dataCutoffAt: string | null
+  startedAt?: string | null
   completedAt: string | null
   blockedReasons: string[]
   report: ShortTermReport | null
+  reportPayloadHash?: string | null
+  payloadCommittedByAt?: string | null
 }
 
 export interface ShortTermMarketSentiment {

@@ -6,19 +6,23 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchOvernightBacktest,
+  fetchLatestShortTermScheduledSnapshot,
   fetchShortTermScanJob,
+  fetchShortTermValidationSummaries,
   startShortTermScanJob
 } from '../api/client'
 import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
 import { toast } from '../components/ui/Toast'
 import { SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY } from '../lib/shortTermViewPreferences'
-import { resetShortTermScanStoreForTest } from '../store/shortTermScanStore'
+import { resetShortTermScanStoreForTest, useShortTermScanStore } from '../store/shortTermScanStore'
 import type { ShortTermReport, ShortTermScheduledSnapshot, ShortTermSnapshotStatus } from '../types'
 import { ShortTermPage } from './ShortTermPage'
 
 vi.mock('../api/client', () => ({
   fetchOvernightBacktest: vi.fn(),
+  fetchLatestShortTermScheduledSnapshot: vi.fn(),
   fetchShortTermScanJob: vi.fn(),
+  fetchShortTermValidationSummaries: vi.fn(),
   startShortTermScanJob: vi.fn(),
   fetchV2StrategyBundle: vi.fn().mockRejectedValue(new Error('测试中不加载 V2 策略束'))
 }))
@@ -102,7 +106,21 @@ const emptyReport = {
   },
   reviewedSymbols: [],
   dataCutoffAt: '2026-07-23T14:49:20+08:00',
-  generatedAt: '2026-07-23T14:49:30+08:00'
+  generatedAt: '2026-07-23T14:49:30+08:00',
+  marketRegime: {
+    state: 'RISK_ON',
+    label: '风险偏好回升',
+    breadthPercent: 58.4,
+    medianChangePercent: 0.62,
+    averageAbsoluteChangePercent: 1.85,
+    advancingTurnoverSharePercent: 61.2,
+    limitUpRatioPercent: 1.1,
+    limitDownRatioPercent: 0.08,
+    sampleCount: 5388,
+    maxAction: 'LIGHT_TRIAL',
+    explanation: '市场宽度和成交额结构允许轻仓试错。',
+    dataGaps: []
+  }
 } as ShortTermReport
 
 const finalReadySnapshot: ShortTermScheduledSnapshot = {
@@ -115,6 +133,16 @@ const finalReadySnapshot: ShortTermScheduledSnapshot = {
   completedAt: '2026-07-23T14:49:30+08:00',
   blockedReasons: [],
   report: emptyReport
+}
+
+const waitingScheduledSnapshot: ShortTermScheduledSnapshot = {
+  ...finalReadySnapshot,
+  stage: 'PRESELECT',
+  status: 'RUNNING',
+  message: '等待 0 30 14 * * MON-FRI 自动预选',
+  dataCutoffAt: null,
+  completedAt: null,
+  report: null
 }
 
 const candidate = (symbol: string, name = `候选${symbol}`) => ({
@@ -171,12 +199,15 @@ const candidate = (symbol: string, name = `候选${symbol}`) => ({
     financialScore: 65,
     riskPenalty: 5,
     finalScore: 74,
-    stageAdjustment: 11,
+    stageAdjustment: 6,
     fundFlowAdjustment: 1.2,
     marketHeatContribution: 1,
     relativeStrengthContribution: 2.4,
     industryLeadershipContribution: -0.4,
     crossSectionAdjustment: 3,
+    technicalRankingScore: 80,
+    volatilityContribution: 0.8,
+    visibleRankingAdjustment: 5,
     rankingScore: 85
   },
   technical: {
@@ -254,6 +285,25 @@ const candidate = (symbol: string, name = `候选${symbol}`) => ({
     percentile: 68,
     contribution: -0.4,
     evidence: '当前成交额排名 7/20'
+  },
+  volatilityQuality: {
+    atrPercent: 2.36,
+    distanceToMa20Atr: 0.82,
+    contractionRatio5To20: 0.76,
+    breakoutExpansionRatio: 1.28,
+    breakoutFromHigh20Atr: 0.41,
+    state: 'CONTRACTION_BREAKOUT',
+    label: '缩量整理后扩张',
+    contractionBreakout: true,
+    contribution: 0.8,
+    dataGaps: []
+  },
+  signalProfile: {
+    primaryFamily: 'GOLDEN_CROSS_BREAKOUT',
+    primaryLabel: '金叉放量突破',
+    activeFamilies: ['GOLDEN_CROSS_BREAKOUT'],
+    evidence: ['MA5 上穿 MA10，量比 1.5'],
+    dataGaps: []
   }
 })
 
@@ -293,6 +343,8 @@ describe('ShortTermPage manual scan flow', () => {
     root = createRoot(host)
     resetShortTermScanStoreForTest()
     vi.mocked(fetchOvernightBacktest).mockResolvedValue({} as never)
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue(waitingScheduledSnapshot)
+    vi.mocked(fetchShortTermValidationSummaries).mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -305,9 +357,10 @@ describe('ShortTermPage manual scan flow', () => {
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
   })
 
-  it('does not fetch a scheduled snapshot or render the plan task on mount', async () => {
+  it('loads the scheduled snapshot once on mount without starting a manual scan', async () => {
     await renderPage(root)
 
+    expect(fetchLatestShortTermScheduledSnapshot).toHaveBeenCalledTimes(1)
     expect(startShortTermScanJob).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()
     expect(document.querySelector('section[aria-live="polite"]')).toBeNull()
@@ -316,6 +369,106 @@ describe('ShortTermPage manual scan flow', () => {
     expect(document.body.textContent).not.toContain('deepseek / deepseek-v4-pro')
     expect(document.body.textContent).not.toContain('计划任务')
     expect(document.body.textContent).not.toContain('等待自动扫描')
+  })
+
+  it('shows a live animation while the scheduled final scan is running', async () => {
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...waitingScheduledSnapshot,
+      stage: 'FINAL',
+      message: '尾盘终选正在执行'
+    })
+
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('尾盘自动扫描正在执行')
+    expect(document.body.textContent).toContain('页面正在跟随后台计划任务刷新')
+    expect(document.querySelector('[data-testid="scheduled-scan-pulse"]')).not.toBeNull()
+  })
+
+  it('preloads the completed scheduled report when the page opens after the scan', async () => {
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600795'])
+    })
+
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('候选600795')
+    expect(document.body.textContent).toContain('14:49:40 前买入确认已就绪')
+    expect(startShortTermScanJob).not.toHaveBeenCalled()
+  })
+
+  it('lets a newer scheduled final run take control after an earlier manual scan', async () => {
+    useShortTermScanStore.setState({
+      origin: 'MANUAL',
+      snapshot: {
+        ...finalReadySnapshot,
+        stage: 'MANUAL',
+        completedAt: '2026-07-23T10:05:00+08:00',
+        report: reportWithCandidates(['600900'])
+      },
+      report: reportWithCandidates(['600900'])
+    })
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...waitingScheduledSnapshot,
+      stage: 'FINAL',
+      startedAt: '2026-07-23T14:47:00+08:00',
+      message: '尾盘终选正在执行'
+    } as ShortTermScheduledSnapshot)
+
+    await renderPage(root)
+
+    expect(useShortTermScanStore.getState().origin).toBe('SCHEDULED')
+    expect(document.querySelector('[data-testid="scheduled-scan-pulse"]')).not.toBeNull()
+    expect(document.body.textContent).not.toContain('候选600900')
+  })
+
+  it('prevents an in-flight manual scan from overwriting a newer scheduled final result', async () => {
+    let finishManualJob!: (value: Awaited<ReturnType<typeof fetchShortTermScanJob>>) => void
+    const manualJob = new Promise<Awaited<ReturnType<typeof fetchShortTermScanJob>>>((resolve) => {
+      finishManualJob = resolve
+    })
+    vi.mocked(startShortTermScanJob).mockResolvedValue({
+      jobId: 'manual-in-flight',
+      status: 'RUNNING',
+      tradeDate: '2026-07-23',
+      resultStatus: 'RUNNING',
+      strategyVersion: 'short-term-right-side-v4-transparent-ranking',
+      blockedReasons: [],
+      createdAt: '2026-07-23T10:00:00+08:00',
+      startedAt: '2026-07-23T10:00:01+08:00',
+      finishedAt: null,
+      message: '手动扫描中',
+      report: null
+    })
+    vi.mocked(fetchShortTermScanJob).mockReturnValue(manualJob)
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      startedAt: '2026-07-23T14:47:00+08:00',
+      completedAt: '2026-07-23T14:49:30+08:00',
+      report: reportWithCandidates(['600795'])
+    })
+
+    const manualRun = useShortTermScanStore.getState().runManualScan({} as never)
+    await flushPromises()
+    await useShortTermScanStore.getState().refreshScheduledSnapshot()
+    finishManualJob({
+      jobId: 'manual-in-flight',
+      status: 'SUCCEEDED',
+      tradeDate: '2026-07-23',
+      resultStatus: 'FINAL_READY',
+      strategyVersion: 'short-term-right-side-v4-transparent-ranking',
+      blockedReasons: [],
+      createdAt: '2026-07-23T10:00:00+08:00',
+      startedAt: '2026-07-23T10:00:01+08:00',
+      finishedAt: '2026-07-23T10:01:00+08:00',
+      message: '旧手动扫描完成',
+      report: reportWithCandidates(['600900'])
+    })
+    await manualRun
+
+    expect(useShortTermScanStore.getState().origin).toBe('SCHEDULED')
+    expect(useShortTermScanStore.getState().report?.candidates.map((item) => item.symbol)).toEqual(['600795'])
   })
 
   it('defaults to the remembered compact result view after a manual scan result loads', async () => {
@@ -672,24 +825,102 @@ describe('ShortTermPage manual scan flow', () => {
         }
       }]
     } as Record<string, unknown>
+    const legacyScore = (legacyReport.candidates as Array<Record<string, unknown>>)[0].score as Record<string, unknown>
+    delete legacyScore.technicalRankingScore
+    delete legacyScore.rankingScore
+    delete legacyScore.visibleRankingAdjustment
+    delete legacyScore.stageAdjustment
+    delete legacyScore.marketHeatContribution
+    delete legacyScore.relativeStrengthContribution
+    delete legacyScore.industryLeadershipContribution
+    delete legacyScore.crossSectionAdjustment
     delete legacyReport.ruleSet
     await renderWithManualReport(root, legacyReport as never)
+
+    expect(document.body.textContent).toContain('结构分待补')
+    expect(document.body.textContent).not.toContain('结构分 74.00')
+    expect(document.body.textContent).toContain('排序分待补')
+    expect(document.body.textContent).not.toContain('排序分 74.00')
     await clickButton('候选600795')
 
     expect(document.body.textContent).not.toContain('筹码')
     expect(document.body.textContent).not.toContain('仅本地模型')
     expect(document.body.textContent).not.toContain('历史版本未计算完整筹码峰')
+    expect(document.body.textContent).not.toContain('阶段校准')
+    expect(document.body.textContent).not.toContain('横截面合计')
   })
 
-  it('does not render or request the short-term overnight validation panel', async () => {
+  it('loads honest T1/T2 cohort validation without reviving the legacy backtest panel', async () => {
+    vi.mocked(fetchShortTermValidationSummaries).mockResolvedValue([{
+      ruleVersion: 'short-term-right-side-v4-transparent-ranking',
+      signalFamily: 'GOLDEN_CROSS_BREAKOUT',
+      marketRegime: 'RISK_ON',
+      horizon: 'T1',
+      status: 'INSUFFICIENT_SAMPLE',
+      minimumSampleCount: 30,
+      sampleCount: 2,
+      positiveRatePercent: null,
+      averageNetReturnPercent: null,
+      medianNetReturnPercent: null,
+      averageMfePercent: null,
+      averageMaePercent: null
+    }, {
+      ruleVersion: 'short-term-right-side-v4-transparent-ranking',
+      signalFamily: 'GOLDEN_CROSS_BREAKOUT',
+      marketRegime: 'RISK_ON',
+      horizon: 'T2',
+      status: 'INSUFFICIENT_SAMPLE',
+      minimumSampleCount: 30,
+      sampleCount: 0,
+      positiveRatePercent: null,
+      averageNetReturnPercent: null,
+      medianNetReturnPercent: null,
+      averageMfePercent: null,
+      averageMaePercent: null
+    }])
     await renderWithManualReport(root, reportWithCandidates(['600795']))
+    await flushPromises()
 
     expect(fetchOvernightBacktest).not.toHaveBeenCalled()
+    expect(fetchShortTermValidationSummaries).toHaveBeenCalledWith({
+      cohorts: [
+        { signalFamily: 'GOLDEN_CROSS_BREAKOUT', marketRegime: 'RISK_ON', horizon: 'T1' },
+        { signalFamily: 'GOLDEN_CROSS_BREAKOUT', marketRegime: 'RISK_ON', horizon: 'T2' }
+      ]
+    })
     expect(toast.success).toHaveBeenCalledWith('手动分析已完成，已生成当前时点候选，已生成 1 个候选')
-    expect(document.querySelector('section[aria-live="polite"]')).toBeNull()
-    expect(document.body.textContent).not.toContain('技术信号历史验证')
-    expect(document.body.textContent).not.toContain('隔夜样本')
+    expect(document.querySelector('section[aria-live="polite"]')?.textContent)
+      .toContain('手动最终结果已就绪')
+    await clickButton('候选600795')
+    expect(document.body.textContent).toContain('信号解释与历史验证')
+    expect(document.body.textContent).toContain('T1 · 样本积累中 2/30')
+    expect(document.body.textContent).toContain('T2 · 样本积累中 0/30')
+    expect(document.body.textContent).not.toContain('正收益占比 0.00%')
     expect(document.body.textContent).not.toContain('未回放')
+  })
+
+  it('reuses one in-flight validation request during the StrictMode effect replay', async () => {
+    useShortTermScanStore.setState({ origin: 'MANUAL', report: reportWithCandidates(['600795']) })
+
+    await renderPage(root)
+
+    expect(fetchShortTermValidationSummaries).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps candidate order unchanged when cohort validation is unavailable', async () => {
+    vi.mocked(fetchShortTermValidationSummaries).mockRejectedValue(new Error('验证接口暂不可用'))
+    useShortTermScanStore.setState({
+      origin: 'MANUAL',
+      report: reportWithCandidates(['600795', '600900'])
+    })
+
+    await renderPage(root)
+
+    const rows = [...document.querySelectorAll('button')]
+      .filter((item) => item.textContent?.includes('候选600'))
+      .map((item) => item.textContent)
+    expect(rows[0]).toContain('候选600795')
+    expect(rows[1]).toContain('候选600900')
   })
 
   it.each(['重新扫描', '应用阈值'])(
@@ -857,6 +1088,7 @@ describe('ShortTermPage manual scan flow', () => {
 describe('ScheduledSnapshotStatus', () => {
   const expectations: Array<[ShortTermSnapshotStatus, string, string]> = [
     ['FINAL_READY', '14:49:40 前买入确认已就绪', 'emerald'],
+    ['FINAL_PENDING' as ShortTermSnapshotStatus, '尾盘结果等待截止认证', 'border-line'],
     ['CACHE_PREVIEW', '缓存行情预览', 'sky'],
     ['PRESELECT_READY', '自动预选已就绪', 'border-line'],
     ['RUNNING', '自动任务执行中', 'border-line'],

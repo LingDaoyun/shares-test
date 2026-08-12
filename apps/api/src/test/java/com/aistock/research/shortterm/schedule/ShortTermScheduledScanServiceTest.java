@@ -146,16 +146,27 @@ class ShortTermScheduledScanServiceTest {
         ShortTermReport raw = finalReport(List.of(mock(ShortTermCandidate.class)), NOW.minusSeconds(30),
                 reliableCoverage("0.96"));
         ShortTermReport attested = finalReport(raw.candidates(), raw.dataCutoffAt(), raw.coverage());
+        String fingerprint = service.resolvedParameters().fingerprint();
+        String snapshotKey = TRADE_DATE + ":FINAL:" + fingerprint;
         when(shortTermService.finalReport(eq(REQUEST), eq(Set.of("600795")))).thenReturn(raw);
         when(attestationService.attest(raw)).thenReturn(attested);
+        when(store.finishFinalBeforeDeadline(
+                any(), eq(raw), eq(raw.dataCutoffAt()),
+                eq(Instant.parse("2026-07-23T06:49:40Z")), eq(clock),
+                eq("14:49:40 前买入确认已就绪")))
+                .thenReturn(new ShortTermScheduledSnapshot(
+                        snapshotKey, TRADE_DATE, FINAL, FINAL_READY, 1,
+                        fingerprint, "{}", raw.dataCutoffAt(),
+                        NOW.minusSeconds(10), NOW, FINAL_READY.name(), List.of(), raw,
+                        "a".repeat(64), NOW));
 
         service.runNow(FINAL);
 
-        String snapshotKey = TRADE_DATE + ":FINAL:" + service.resolvedParameters().fingerprint();
         InOrder order = inOrder(store, attestationService, historyService);
-        order.verify(store).finish(
-                eq(new ShortTermSnapshotClaim(snapshotKey, 1)), eq(FINAL_READY), eq(raw),
-                eq(raw.dataCutoffAt()), eq(NOW), eq("14:49:40 前买入确认已就绪"), eq(List.of()));
+        order.verify(store).finishFinalBeforeDeadline(
+                eq(new ShortTermSnapshotClaim(snapshotKey, 1)), eq(raw), eq(raw.dataCutoffAt()),
+                eq(Instant.parse("2026-07-23T06:49:40Z")), eq(clock),
+                eq("14:49:40 前买入确认已就绪"));
         order.verify(attestationService).attest(raw);
         order.verify(historyService).recordShortTermReport(snapshotKey, attested);
     }
@@ -169,15 +180,45 @@ class ShortTermScheduledScanServiceTest {
         ShortTermReport attested = finalReport(raw.candidates(), raw.dataCutoffAt(), raw.coverage());
         when(shortTermService.finalReport(eq(REQUEST), eq(Set.of("600795")))).thenReturn(raw);
         when(attestationService.attest(raw)).thenReturn(attested);
+        when(store.finishFinalBeforeDeadline(
+                any(), eq(raw), eq(raw.dataCutoffAt()), any(), eq(clock), any()))
+                .thenReturn(snapshot(FINAL, FINAL_READY, raw, NOW.minusSeconds(10), NOW));
         doThrow(new IllegalStateException("history unavailable"))
                 .when(historyService).recordShortTermReport(any(String.class), eq(attested));
 
         service.runNow(FINAL);
 
-        verify(store).finish(any(), eq(FINAL_READY), eq(raw), eq(raw.dataCutoffAt()),
-                eq(NOW), eq("14:49:40 前买入确认已就绪"), eq(List.of()));
+        verify(store).finishFinalBeforeDeadline(
+                any(), eq(raw), eq(raw.dataCutoffAt()),
+                eq(Instant.parse("2026-07-23T06:49:40Z")), eq(clock),
+                eq("14:49:40 前买入确认已就绪"));
         verify(store, never()).fail(any(), any(), any(), anyList());
         verify(store, never()).finish(any(), eq(DATA_BLOCKED), any(), any(), any(), any(), anyList());
+    }
+
+    @Test
+    void doesNotArchiveAResultThatCrossesTheDeadlineDuringPersistence() {
+        stubClaim(FINAL, 1);
+        stubReadyPreselection();
+        ShortTermReport report = finalReport(List.of(mock(ShortTermCandidate.class)), NOW.minusSeconds(30),
+                reliableCoverage("0.96"));
+        ShortTermScheduledSnapshot blocked = snapshot(
+                FINAL, DATA_BLOCKED, report, NOW.minusSeconds(10),
+                Instant.parse("2026-07-23T06:49:41Z"));
+        when(shortTermService.finalReport(eq(REQUEST), eq(Set.of("600795")))).thenReturn(report);
+        when(store.finishFinalBeforeDeadline(
+                any(), eq(report), eq(report.dataCutoffAt()),
+                eq(Instant.parse("2026-07-23T06:49:40Z")), eq(clock), any()))
+                .thenReturn(blocked);
+
+        service.runNow(FINAL);
+
+        verify(store).finishFinalBeforeDeadline(
+                any(), eq(report), eq(report.dataCutoffAt()),
+                eq(Instant.parse("2026-07-23T06:49:40Z")), eq(clock),
+                eq("14:49:40 前买入确认已就绪"));
+        verify(attestationService, never()).attest(any(ShortTermReport.class));
+        verify(historyService, never()).recordShortTermReport(any());
     }
 
     @Test
@@ -341,6 +382,13 @@ class ShortTermScheduledScanServiceTest {
                 List.of(mock(ShortTermCandidate.class)), NOW.minusSeconds(30), reliableCoverage("0.96"));
         when(shortTermService.finalReport(REQUEST, Set.of("600795"))).thenReturn(finalReport);
         when(attestationService.attest(finalReport)).thenReturn(finalReport);
+        when(store.finishFinalBeforeDeadline(
+                any(), eq(finalReport), eq(finalReport.dataCutoffAt()), any(), eq(clock), any()))
+                .thenReturn(new ShortTermScheduledSnapshot(
+                        staleFinal.snapshotKey(), TRADE_DATE, FINAL, FINAL_READY, 3,
+                        parameters.fingerprint(), parameters.json(), finalReport.dataCutoffAt(),
+                        NOW.minusSeconds(10), NOW, "14:49:40 前买入确认已就绪", List.of(), finalReport,
+                        "a".repeat(64), NOW));
 
         service.recoverCurrentDayAfterStartup();
 
@@ -370,20 +418,79 @@ class ShortTermScheduledScanServiceTest {
     }
 
     @Test
-    void startupDoesNotRecoverRunningSnapshotsAfterFinalDeadline() {
+    void startupFailsClosedLegacyFinalReadyBeforeHistoryArchival() {
+        ShortTermReport report = finalReport(
+                List.of(mock(ShortTermCandidate.class)), NOW.minusSeconds(30),
+                reliableCoverage("0.96"));
+        ShortTermScheduledSnapshot legacy = new ShortTermScheduledSnapshot(
+                TRADE_DATE + ":FINAL:legacy", TRADE_DATE, FINAL, FINAL_READY, 1,
+                "legacy", "{}", report.dataCutoffAt(), NOW.minusSeconds(60),
+                NOW.minusSeconds(10), "旧版本终选", List.of(), report);
+        ShortTermScheduledSnapshot blocked = new ShortTermScheduledSnapshot(
+                legacy.snapshotKey(), TRADE_DATE, FINAL, DATA_BLOCKED, 1,
+                "legacy", "{}", report.dataCutoffAt(), NOW.minusSeconds(60), NOW,
+                "尾盘终选缺少有效截止认证证明",
+                List.of("FINAL_CERTIFICATION_PROOF_INVALID"), report);
+        Instant deadline = Instant.parse("2026-07-23T06:49:40Z");
+        when(store.finalReady(TRADE_DATE)).thenReturn(List.of(legacy));
+        when(store.expireUncertifiedFinal(legacy, deadline)).thenReturn(blocked);
+        when(store.latest(TRADE_DATE, FINAL)).thenReturn(Optional.of(blocked));
+
+        service.recoverCurrentDayAfterStartup();
+
+        verify(store).expireUncertifiedFinal(legacy, deadline);
+        verify(historyService, never()).recordShortTermReport(any());
+        verify(attestationService, never()).attest(any(ShortTermReport.class));
+    }
+
+    @Test
+    void startupSkipsRecoveryWhenTheMarketDateIsUnavailable() {
+        when(tradingClock.currentMarketDate()).thenReturn(null);
+
+        service.recoverCurrentDayAfterStartup();
+
+        verify(store, never()).finalReady(any());
+        verify(store, never()).latest(any(LocalDate.class), any(ShortTermSnapshotStage.class));
+    }
+
+    @Test
+    void startupExpiresRunningFinalWithoutRecoveringItAfterFinalDeadline() {
         Clock lateClock = Clock.fixed(Instant.parse("2026-07-23T06:54:00Z"), ZONE);
         ShortTermScheduledScanService lateService = new ShortTermScheduledScanService(
                 settings, tradingClock, store, shortTermService, historyService,
                 attestationService, new ObjectMapper().findAndRegisterModules(),
                 executor, lateClock, STALE_TIMEOUT);
+        ShortTermScheduledSnapshot running = snapshot(
+                FINAL, RUNNING, null, NOW.minusSeconds(60), null);
         when(store.latest(TRADE_DATE, FINAL)).thenReturn(Optional.empty());
+        when(store.running(TRADE_DATE, FINAL)).thenReturn(List.of(running));
 
         lateService.recoverCurrentDayAfterStartup();
 
-        verify(store, never()).running(any(), any());
+        verify(store).expireRunningFinal(running);
         verify(store, never()).recoverStaleRunning(
                 any(LocalDate.class), any(ShortTermSnapshotStage.class), any(String.class),
                 any(Integer.class), any(Instant.class), any(Instant.class));
+    }
+
+    @Test
+    void startupFailsClosedAnUncertifiedPendingFinalEvenAfterTheDeadline() {
+        Clock lateClock = Clock.fixed(Instant.parse("2026-07-23T06:54:00Z"), ZONE);
+        ShortTermScheduledScanService lateService = new ShortTermScheduledScanService(
+                settings, tradingClock, store, shortTermService, historyService,
+                attestationService, new ObjectMapper().findAndRegisterModules(),
+                executor, lateClock, STALE_TIMEOUT);
+        ShortTermScheduledSnapshot pending = snapshot(
+                FINAL, ShortTermSnapshotStatus.FINAL_PENDING,
+                finalReport(List.of(), NOW.minusSeconds(30), reliableCoverage("0.96")),
+                NOW.minusSeconds(60), null);
+        when(store.latest(TRADE_DATE, FINAL)).thenReturn(Optional.of(pending));
+        when(store.pendingFinals(TRADE_DATE)).thenReturn(List.of(pending));
+
+        lateService.recoverCurrentDayAfterStartup();
+
+        verify(store).expirePendingFinal(pending);
+        verify(store).running(TRADE_DATE, FINAL);
     }
 
     @Test
@@ -429,6 +536,51 @@ class ShortTermScheduledScanServiceTest {
         verify(shortTermService, never()).finalReport(any(), anySet());
         verify(store).finish(any(), eq(DATA_BLOCKED), eq(null), eq(null), eq(NOW),
                 eq("尾盘最终快照缺失"), eq(List.of("FINAL_MISSING")));
+    }
+
+    @Test
+    void readinessGuardExpiresAnUnfinishedFinalBeforeClassifyingTheSnapshot() {
+        stubClaim(READINESS_GUARD, 1);
+        ShortTermScheduledSnapshot running = snapshot(
+                FINAL, RUNNING, null, NOW.minusSeconds(60), null);
+        ShortTermScheduledSnapshot blocked = snapshot(
+                FINAL, DATA_BLOCKED, null, NOW.minusSeconds(60), NOW);
+        when(store.running(TRADE_DATE, FINAL)).thenReturn(List.of(running));
+        when(store.latest(TRADE_DATE, FINAL)).thenReturn(Optional.of(blocked));
+
+        service.runNow(READINESS_GUARD);
+
+        verify(store).expireRunningFinal(running);
+        verify(store).finish(any(), eq(DATA_BLOCKED), eq(null), eq(null), eq(NOW),
+                eq("尾盘最终快照执行失败"), eq(List.of("FINAL_FAILED")));
+        verify(shortTermService, never()).finalReport(any(), anySet());
+    }
+
+    @Test
+    void readinessGuardFailsClosedALegacyFinalReadyWithoutCertificationProof() {
+        stubClaim(READINESS_GUARD, 1);
+        ShortTermReport report = finalReport(
+                List.of(mock(ShortTermCandidate.class)), NOW.minusSeconds(20),
+                reliableCoverage("0.95"));
+        ShortTermScheduledSnapshot legacy = new ShortTermScheduledSnapshot(
+                TRADE_DATE + ":FINAL:legacy", TRADE_DATE, FINAL, FINAL_READY, 1,
+                "legacy", "{}", report.dataCutoffAt(), NOW.minusSeconds(60),
+                NOW.minusSeconds(10), "旧版本终选", List.of(), report);
+        ShortTermScheduledSnapshot blocked = new ShortTermScheduledSnapshot(
+                legacy.snapshotKey(), TRADE_DATE, FINAL, DATA_BLOCKED, 1,
+                "legacy", "{}", report.dataCutoffAt(), NOW.minusSeconds(60), NOW,
+                "尾盘终选缺少有效截止认证证明",
+                List.of("FINAL_CERTIFICATION_PROOF_INVALID"), report);
+        Instant deadline = Instant.parse("2026-07-23T06:49:40Z");
+        when(store.latest(TRADE_DATE, FINAL)).thenReturn(Optional.of(legacy));
+        when(store.expireUncertifiedFinal(legacy, deadline)).thenReturn(blocked);
+
+        service.runNow(READINESS_GUARD);
+
+        verify(store).expireUncertifiedFinal(legacy, deadline);
+        verify(store).finish(any(), eq(DATA_BLOCKED), eq(null), eq(null), eq(NOW),
+                eq("尾盘最终快照执行失败"), eq(List.of("FINAL_FAILED")));
+        verify(attestationService, never()).attest(any(ShortTermReport.class));
     }
 
     @Test
@@ -485,7 +637,8 @@ class ShortTermScheduledScanServiceTest {
                 TRADE_DATE + ":FINAL:prior-fingerprint", TRADE_DATE, FINAL, FINAL_READY, 1,
                 "prior-fingerprint", "{}", report.dataCutoffAt(),
                 NOW.minusSeconds(60), NOW.minusSeconds(10),
-                "旧配置终选有效", List.of(), report);
+                "旧配置终选有效", List.of(), report,
+                "a".repeat(64), NOW.minusSeconds(10));
         when(store.latest(TRADE_DATE, FINAL)).thenReturn(Optional.of(priorConfigurationFinal));
 
         service.runNow(READINESS_GUARD);
@@ -597,11 +750,13 @@ class ShortTermScheduledScanServiceTest {
             Instant startedAt,
             Instant completedAt
     ) {
+        String reportPayloadHash = stage == FINAL && status == FINAL_READY ? "a".repeat(64) : null;
+        Instant payloadCommittedByAt = reportPayloadHash == null ? null : completedAt;
         return new ShortTermScheduledSnapshot(
                 TRADE_DATE + ":" + stage + ":fingerprint", TRADE_DATE, stage, status, 1,
                 "fingerprint", "{}", report == null ? null : report.dataCutoffAt(),
                 startedAt, completedAt,
-                status.name(), List.of(), report);
+                status.name(), List.of(), report, reportPayloadHash, payloadCommittedByAt);
     }
 
     private ShortTermReport preselectReport(List<String> reviewedSymbols) {

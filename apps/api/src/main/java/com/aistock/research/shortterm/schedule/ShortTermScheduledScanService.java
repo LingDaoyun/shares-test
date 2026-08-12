@@ -13,6 +13,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -41,6 +46,7 @@ import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.NO
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.PRESELECT_READY;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.RUNNING;
 
+@Service
 public class ShortTermScheduledScanService {
 
     private static final Logger log = LoggerFactory.getLogger(ShortTermScheduledScanService.class);
@@ -59,6 +65,7 @@ public class ShortTermScheduledScanService {
     private final Duration staleRunTimeout;
     private final ShortTermFinalResultGate finalResultGate;
 
+    @Autowired
     public ShortTermScheduledScanService(
             ShortTermAutomationSettings settings,
             TradingClockService tradingClock,
@@ -67,7 +74,7 @@ public class ShortTermScheduledScanService {
             ResearchHistoryService historyService,
             RecommendationAttestationService attestationService,
             ObjectMapper objectMapper,
-            ExecutorService executor
+            @Qualifier("shortTermScheduledExecutor") ExecutorService executor
     ) {
         this(
                 settings, tradingClock, store, shortTermService, historyService, attestationService,
@@ -110,15 +117,32 @@ public class ShortTermScheduledScanService {
         enqueue(List.of(prepared.orElseThrow()));
     }
 
+    @EventListener(ApplicationReadyEvent.class)
     public void recoverCurrentDayAfterStartup() {
         LocalDate tradeDate = tradingClock.currentMarketDate();
+        if (tradeDate == null) {
+            log.warn("Skipping scheduled short-term recovery because the market date is unavailable");
+            return;
+        }
+        Instant publicationDeadline = finalPublicationDeadline(tradeDate);
+        for (ShortTermScheduledSnapshot finalReady : store.finalReady(tradeDate)) {
+            if (!finalReady.hasCertifiedPublicationProof(publicationDeadline)) {
+                store.expireUncertifiedFinal(finalReady, publicationDeadline);
+            }
+        }
         Optional<ShortTermScheduledSnapshot> latestFinal = store.latest(tradeDate, FINAL);
-        latestFinal.filter(snapshot -> snapshot.status() == FINAL_READY && snapshot.report() != null)
-                .ifPresent(snapshot -> archiveFinalHistory(snapshot.snapshotKey(), snapshot.report()));
+        latestFinal.map(snapshot -> failClosedIfUncertified(snapshot, tradeDate))
+                .filter(snapshot -> snapshot.status() == FINAL_READY)
+                .ifPresent(this::archiveFinalHistory);
+        store.pendingFinals(tradeDate).forEach(store::expirePendingFinal);
 
         Instant restartedAt = clock.instant();
+        boolean finalDeadlineExpired = afterFinalDeadline(tradeDate, restartedAt);
+        if (finalDeadlineExpired) {
+            store.running(tradeDate, FINAL).forEach(store::expireRunningFinal);
+        }
         if (!settings.enabled() || tradingClock.isMarketClosedDay(tradeDate)
-                || afterFinalDeadline(tradeDate, restartedAt)) {
+                || finalDeadlineExpired) {
             return;
         }
 
@@ -311,13 +335,21 @@ public class ShortTermScheduledScanService {
             return;
         }
 
-        store.finish(
-                run.claim(), FINAL_READY, report, report.dataCutoffAt(), completedAt,
-                result.message(), List.of());
-        archiveFinalHistory(run.claim().snapshotKey(), report);
+        ShortTermScheduledSnapshot published = store.finishFinalBeforeDeadline(
+                run.claim(), report, report.dataCutoffAt(),
+                finalPublicationDeadline(run.tradeDate()), clock, result.message());
+        published = failClosedIfUncertified(published, run.tradeDate());
+        if (published.status() == FINAL_READY) {
+            archiveFinalHistory(published);
+        }
     }
 
-    private void archiveFinalHistory(String snapshotIdentity, ShortTermReport report) {
+    private void archiveFinalHistory(ShortTermScheduledSnapshot snapshot) {
+        String snapshotIdentity = snapshot.snapshotKey();
+        ShortTermReport report = snapshot.report();
+        if (!snapshot.hasCertifiedPublicationProof(finalPublicationDeadline(snapshot.tradeDate()))) {
+            throw new IllegalStateException("Cannot archive an uncertified scheduled final");
+        }
         try {
             ShortTermReport attested = attestationService.attest(report);
             if (attested == null) {
@@ -331,8 +363,24 @@ public class ShortTermScheduledScanService {
         }
     }
 
+    private ShortTermScheduledSnapshot failClosedIfUncertified(
+            ShortTermScheduledSnapshot snapshot,
+            LocalDate tradeDate
+    ) {
+        if (snapshot.status() != FINAL_READY) {
+            return snapshot;
+        }
+        Instant publicationDeadline = finalPublicationDeadline(tradeDate);
+        if (snapshot.hasCertifiedPublicationProof(publicationDeadline)) {
+            return snapshot;
+        }
+        return store.expireUncertifiedFinal(snapshot, publicationDeadline);
+    }
+
     private void runReadinessGuard(PreparedRun run) {
         Instant checkedAt = clock.instant();
+        store.pendingFinals(run.tradeDate()).forEach(store::expirePendingFinal);
+        store.running(run.tradeDate(), FINAL).forEach(store::expireRunningFinal);
         Optional<ShortTermScheduledSnapshot> finalSnapshot = store.latest(run.tradeDate(), FINAL);
         if (finalSnapshot.isEmpty()) {
             publishBlocked(
@@ -340,7 +388,8 @@ public class ShortTermScheduledScanService {
                     List.of("FINAL_MISSING"), checkedAt);
             return;
         }
-        ShortTermScheduledSnapshot snapshot = finalSnapshot.orElseThrow();
+        ShortTermScheduledSnapshot snapshot = failClosedIfUncertified(
+                finalSnapshot.orElseThrow(), run.tradeDate());
         if (snapshot.status() == FAILED || snapshot.status() == DATA_BLOCKED) {
             publishBlocked(
                     run.claim(), null, null, "尾盘最终快照执行失败",
@@ -376,6 +425,10 @@ public class ShortTermScheduledScanService {
         LocalDateTime marketTime = LocalDateTime.ofInstant(instant, resolvedZone());
         return !marketTime.toLocalDate().equals(tradeDate)
                 || marketTime.toLocalTime().isAfter(settings.finalDeadline());
+    }
+
+    private Instant finalPublicationDeadline(LocalDate tradeDate) {
+        return tradeDate.atTime(settings.finalDeadline()).atZone(resolvedZone()).toInstant();
     }
 
     private ZoneId resolvedZone() {

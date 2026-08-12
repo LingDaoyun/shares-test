@@ -35,7 +35,7 @@
 - [x] Return the active contribution and factor state in the score breakdown.
 - [x] Change default/Nacos chip activation to `SHADOW`.
 - [x] Enforce final deadline `14:49:40` and compatible cron/default validation.
-- [x] Test `14:49:39`, exactly `14:49:40`, `14:49:41`, `Asia/Shanghai`, and a run that starts before but persists after the deadline.
+- [x] Test `14:49:39`, exactly `14:49:40`, `14:49:41`, `Asia/Shanghai`, and two-phase payload commit/certification across the deadline.
 - [x] Select T1/T2 feedback for `SHORT_TERM`; retain T20 for long-term cohorts.
 - [x] Run targeted and complete backend tests.
 - [x] Reviewer Agent inspects ranking invariants, time boundaries, refreshed configuration, and query correctness.
@@ -110,11 +110,12 @@
 - short-term page/components and tests
 - runtime configuration defaults when required
 
-- [ ] Show signal family, market regime, setup score, rank score, and all active contributions.
-- [ ] Show validation status/sample count without fake probabilities.
-- [ ] Keep shadow factors absent from recommendation evidence.
-- [ ] Preserve detail overlay, manual scan, scheduled animation, and buy-entry flows.
-- [ ] Run all backend/frontend tests, frontend production build, and `git diff --check`.
-- [ ] Restart the application and smoke-test `http://127.0.0.1:5176/#/short-term`.
-- [ ] Final Reviewer Agent compares implementation against every design acceptance criterion and reviews the complete diff.
-- [ ] Fix findings, repeat final verification, and commit the final phase.
+- [x] Show signal family, market regime, setup score, rank score, and all active contributions.
+- [x] Show validation status/sample count without fake probabilities.
+- [x] Keep shadow factors absent from recommendation evidence.
+- [x] Preserve detail overlay, manual scan, scheduled animation, and buy-entry flows.
+- [x] Hide `FINAL_PENDING` payloads and fail closed legacy `FINAL_READY` rows without database-time publication proof.
+- [x] Run all backend/frontend tests, frontend production build, and `git diff --check`.
+- [x] Restart the application and smoke-test `http://127.0.0.1:5176/#/short-term`.
+- [x] Final Reviewer Agent compares implementation against every design acceptance criterion and reviews the complete diff.
+- [x] Fix findings, repeat final verification, and commit the final phase.

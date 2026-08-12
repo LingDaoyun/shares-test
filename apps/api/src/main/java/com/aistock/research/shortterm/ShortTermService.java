@@ -15,7 +15,6 @@ import com.aistock.research.quality.EvidenceCompletenessInput;
 import com.aistock.research.quality.EvidenceCompletenessService;
 import com.aistock.research.quality.RecommendationQuality;
 import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
-import com.aistock.research.shortterm.chip.ChipVerificationStatus;
 import com.aistock.research.shortterm.chip.ShortTermChipAnalysisService;
 import com.aistock.research.shortterm.chip.ShortTermChipSnapshot;
 import com.aistock.research.trading.TradingAdvice;
@@ -137,7 +136,7 @@ public class ShortTermService {
                     List.of("煤炭", "煤业", "能源", "电力", "石油", "油气")
             )
     );
-    private static final String QUOTE_NOTE = "短线右侧模块先做全 A 股行情漏斗，再对候选拉取近一年 K 线、最近年报、同日资金流和推算筹码成本；PE/PB 仅作估值语境，筹码只作影子诊断，不参与生产排序。";
+    private static final String QUOTE_NOTE = "短线右侧模块先做全 A 股行情漏斗，再对候选拉取近一年 K 线、最近年报和同日资金流；PE/PB 仅作估值语境，影子实验因子不进入生产排序或推荐证据。";
 
     private final EastMoneyClient eastMoneyClient;
     private final EvidenceCompletenessService evidenceCompletenessService;
@@ -549,9 +548,7 @@ public class ShortTermService {
                         "波动质量使用 ATR 归一化衡量距 20 日线位置、近期真实波幅收缩与突破扩张，独立贡献限制在 -3 至 +3 分并完整展示。",
                         "市场状态由点时全市场上涨广度、收益中位数、绝对波动、涨跌停近似比例和上涨侧成交额共同划分；退潮不推荐，修复或拥挤高波动只允许轻仓。",
                         "金叉动量、下影承接反转和波动收缩突破保持为独立信号族，页面与历史快照保留主信号族和全部激活证据。",
-                        "筹码结构是独立证据层，只展示成本分布、上方筹码和前高残余筹码；不与金叉、量能、换手率混算主分。",
-                        "筹码由东方财富换手率和日 K 在 Java 本地复算，Tushare 只认证最近完整交易日；认证失败不阻断扫描，也不能改变动作建议。",
-                        "当前筹码配置为 " + chipSettings.activationMode() + "；即使历史配置仍为 ACTIVE，筹码也只保留影子诊断，不能改变生产排序或动作。",
+                        "影子实验因子只保留后台诊断，不进入候选解释、风险理由、证据链、生产排序或动作建议。",
                         "默认输出八个短线候选：可执行层在前、观察层补足展示，但不会为了凑数制造加仓建议。",
                         "PE、PB 和普通财务质量只作上下文与风险说明；热门方向、5/10/20 日相对强度与行业成交额地位仅作有界排序修正。",
                         "热门方向可帮助全市场预选，但不能覆盖金叉、放量、换手、上影线和硬风险门禁。",
@@ -764,7 +761,7 @@ public class ShortTermService {
                 List.of(
                         "实盘扫描先校验全市场覆盖率和点时语义，再计算上涨/下跌家数、涨停近似数和跌停近似数。",
                         "当全市场进入极端弱市，短线右侧信号不再用于推荐；强势个股只作为复盘样本，不能输出买入候选。",
-                        "该闸门优先级高于热门方向、金叉、量能、筹码和财报质量，目的是避免系统在系统性杀跌中被逆势假强骗入。"
+                        "该闸门优先级高于热门方向、金叉、量能和财报质量，目的是避免系统在系统性杀跌中被逆势假强骗入。"
                 ),
                 ruleSet,
                 WEIGHT_PROFILE,
@@ -942,22 +939,22 @@ public class ShortTermService {
                 buyZoneLow(price, technical),
                 buyZoneHigh(price, technical, ruleSet),
                 stopPrice(price, technical),
-                chipStrengths(supplyDemandStrengths(
+                supplyDemandStrengths(
                         strengths(quote, technical, financial, valuationContext),
                         supplyDemand
-                ), chip),
-                chipRisks(supplyDemandRisks(
+                ),
+                supplyDemandRisks(
                         risks(quote, technical, financial, ruleSet, valuationContext, quoteFreshness),
                         supplyDemand
-                ), chip),
+                ),
                 entryRules(decision, ruleSet),
                 exitRules(ruleSet),
                 pendingEvidenceCompleteness(quote, technical, financial, quoteFreshness),
-                chipEvidence(supplyDemandEvidence(
+                supplyDemandEvidence(
                         evidence(quote, technical, financial, item.technical(), valuationContext, quoteFreshness, ruleSet),
                         fundFlow,
                         supplyDemand
-                ), chip),
+                ),
                 null,
                 chip,
                 safeRelativeStrength,
@@ -2554,26 +2551,6 @@ public class ShortTermService {
         return strengths.stream().distinct().limit(8).toList();
     }
 
-    private List<String> chipStrengths(List<String> base, ShortTermChipSnapshot chip) {
-        List<String> strengths = new ArrayList<>(base == null ? List.of() : base);
-        if (chip == null) {
-            return strengths;
-        }
-        if (chip.verificationStatus() == ChipVerificationStatus.VERIFIED
-                && chip.contributionScore() != null
-                && chip.contributionScore().compareTo(BigDecimal.ZERO) > 0) {
-            strengths.add("筹码模型已认证：当前价距推算成本中枢 "
-                    + valueText(chip.distanceToAverageCostPercent()) + "% ，影子诊断分 "
-                    + valueText(chip.contributionScore()) + "（未参与生产排序）。");
-        }
-        if (chip.overheadChipRatioPercent() != null
-                && chip.overheadChipRatioPercent().compareTo(new BigDecimal("35")) <= 0) {
-            strengths.add("推算上方筹码约 " + valueText(chip.overheadChipRatioPercent())
-                    + "% ，上方供给压力相对较低。");
-        }
-        return strengths.stream().distinct().limit(9).toList();
-    }
-
     private List<String> risks(
             EastMoneyQuote quote,
             ShortTermTechnicalSnapshot technical,
@@ -2659,29 +2636,6 @@ public class ShortTermService {
                 .filter(item -> item != null && !item.isBlank())
                 .distinct()
                 .limit(10)
-                .toList();
-    }
-
-    private List<String> chipRisks(List<String> base, ShortTermChipSnapshot chip) {
-        List<String> risks = new ArrayList<>(base == null ? List.of() : base);
-        if (chip == null) {
-            risks.add("历史版本未计算筹码结构，缺少成本分布画像。");
-            return risks.stream().distinct().limit(11).toList();
-        }
-        if (chip.verificationStatus() == ChipVerificationStatus.SINGLE_SOURCE) {
-            risks.add("筹码结构由本地成交与换手模型推算，尚未使用外部数据交叉验证。");
-        } else if (chip.verificationStatus() == ChipVerificationStatus.CONFLICT) {
-            risks.add("本地与外部筹码模型冲突，本轮筹码影子诊断分为0。");
-        } else if (chip.verificationStatus() == ChipVerificationStatus.STALE) {
-            risks.add("筹码认证日期过期，本轮筹码影子诊断分为0。");
-        } else if (chip.verificationStatus() == ChipVerificationStatus.INSUFFICIENT) {
-            risks.add("K线或换手率质量不足，无法形成可靠筹码成本分布画像。");
-        }
-        risks.addAll(chip.dataGaps());
-        return risks.stream()
-                .filter(item -> item != null && !item.isBlank())
-                .distinct()
-                .limit(11)
                 .toList();
     }
 
@@ -2854,7 +2808,7 @@ public class ShortTermService {
                 "上方抛压",
                 "结合近期上涨 K 线上影、最新收盘位置与前 20 日压力位，抛压弱度 "
                         + valueText(supplyDemand.overheadPressureReliefScore())
-                        + " 分；该项用于解释上方供给压力，不与筹码成本分布混算。",
+                        + " 分；该项只解释近期价格行为中的上方供给压力。",
                 null,
                 20
         ));
@@ -2866,37 +2820,6 @@ public class ShortTermService {
                     25
             ));
         }
-        return evidence;
-    }
-
-    private List<ShortTermEvidence> chipEvidence(
-            List<ShortTermEvidence> base,
-            ShortTermChipSnapshot chip
-    ) {
-        List<ShortTermEvidence> evidence = new ArrayList<>(base == null ? List.of() : base);
-        if (chip == null) {
-            evidence.add(new ShortTermEvidence(
-                    "筹码结构",
-                    "历史版本未计算；没有使用中性分补齐。",
-                    null,
-                    0
-            ));
-            return evidence;
-        }
-        evidence.add(new ShortTermEvidence(
-                "筹码结构",
-                chip.verificationLabel() + "；推算平均成本 " + valueText(chip.averageCost())
-                        + " 元，70%成本区 " + valueText(chip.cost70Low()) + "-"
-                        + valueText(chip.cost70High()) + " 元，上方筹码 "
-                        + valueText(chip.overheadChipRatioPercent()) + "% ，结构分 "
-                        + valueText(chip.chipStructureScore()) + "，认证系数 "
-                        + valueText(chip.verificationCoefficient()) + "，筹码影子诊断分 "
-                        + valueText(chip.contributionScore()) + "（未参与生产排序）。",
-                chip.externalTradeDate() == null
-                        ? null
-                        : "https://tushare.pro/document/2?doc_id=293",
-                25
-        ));
         return evidence;
     }
 

@@ -5,8 +5,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.Trigger;
 import org.springframework.scheduling.TriggerContext;
+import org.springframework.scheduling.annotation.SchedulingConfigurer;
 import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 import org.springframework.scheduling.support.CronTrigger;
+import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.EnumMap;
@@ -17,7 +19,8 @@ import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStage.FIN
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStage.PRESELECT;
 import static com.aistock.research.shortterm.schedule.ShortTermSnapshotStage.READINESS_GUARD;
 
-public class ShortTermScanScheduler {
+@Component
+public class ShortTermScanScheduler implements SchedulingConfigurer {
 
     private static final Logger log = LoggerFactory.getLogger(ShortTermScanScheduler.class);
     private static final Map<ShortTermSnapshotStage, String> DEFAULT_CRONS = Map.of(
@@ -42,6 +45,7 @@ public class ShortTermScanScheduler {
         triggers.put(READINESS_GUARD, trigger(READINESS_GUARD, settings::readinessCron));
     }
 
+    @Override
     public void configureTasks(ScheduledTaskRegistrar taskRegistrar) {
         register(taskRegistrar, PRESELECT);
         register(taskRegistrar, FINAL);

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { fetchShortTermScanJob, startShortTermScanJob } from '../api/client'
+import { fetchLatestShortTermScheduledSnapshot, fetchShortTermScanJob, startShortTermScanJob } from '../api/client'
 import type { ShortTermParams } from '../api/client'
 import { toast } from '../components/ui/Toast'
 import { extractErrorMessage } from '../lib/format'
@@ -9,22 +9,27 @@ export type ShortTermScanOrigin = 'SCHEDULED' | 'MANUAL'
 
 interface ShortTermScanState {
   origin: ShortTermScanOrigin
+  scheduledSnapshot: ShortTermScheduledSnapshot | null
   snapshot: ShortTermScheduledSnapshot | null
   report: ShortTermReport | null
   loading: boolean
   error: string
   scanMessage: string
   activeJobId: string
+  refreshScheduledSnapshot: () => Promise<void>
   runManualScan: (params: ShortTermParams) => Promise<void>
 }
 
 let manualRunGeneration = 0
 let pollTimer: number | undefined
 let completionToastKey = ''
+let scheduledLoadGeneration = 0
+let scheduledSnapshotRequest: Promise<ShortTermScheduledSnapshot> | null = null
 
 function initialState() {
   return {
-    origin: 'MANUAL' as ShortTermScanOrigin,
+    origin: 'SCHEDULED' as ShortTermScanOrigin,
+    scheduledSnapshot: null,
     snapshot: null,
     report: null,
     loading: false,
@@ -41,8 +46,42 @@ function clearPollTimer() {
   }
 }
 
-export const useShortTermScanStore = create<ShortTermScanState>((set) => ({
+export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
   ...initialState(),
+
+  refreshScheduledSnapshot: async () => {
+    const generation = scheduledLoadGeneration
+    const request = scheduledSnapshotRequest ?? fetchLatestShortTermScheduledSnapshot()
+    scheduledSnapshotRequest = request
+    try {
+      const scheduledSnapshot = await request
+      if (generation !== scheduledLoadGeneration) return
+      const takesControl = scheduledSnapshotTakesControl(get(), scheduledSnapshot)
+      if (!takesControl) {
+        set({ scheduledSnapshot })
+        return
+      }
+      manualRunGeneration += 1
+      clearPollTimer()
+      set({
+        origin: 'SCHEDULED',
+        scheduledSnapshot,
+        snapshot: scheduledSnapshot,
+        report: visibleSnapshotReport(scheduledSnapshot),
+        loading: false,
+        error: '',
+        scanMessage: scheduledSnapshot.message,
+        activeJobId: ''
+      })
+      notifySnapshotCompleted('SCHEDULED', scheduledSnapshot)
+    } catch {
+      // The lightweight background refresh must not replace a usable manual result.
+    } finally {
+      if (scheduledSnapshotRequest === request) {
+        scheduledSnapshotRequest = null
+      }
+    }
+  },
 
   runManualScan: async (params) => {
     const generation = manualRunGeneration + 1
@@ -64,6 +103,7 @@ export const useShortTermScanStore = create<ShortTermScanState>((set) => ({
         strategyVersion: current.snapshot?.strategyVersion ?? '',
         message: '提交实时扫描任务',
         dataCutoffAt: null,
+        startedAt: new Date().toISOString(),
         completedAt: null,
         blockedReasons: [],
         report: null
@@ -83,7 +123,8 @@ export const useShortTermScanStore = create<ShortTermScanState>((set) => ({
           status: started.resultStatus,
           strategyVersion: started.strategyVersion,
           blockedReasons: started.blockedReasons,
-          message: runningMessage
+          message: runningMessage,
+          startedAt: started.startedAt ?? started.createdAt ?? current.snapshot.startedAt
         } : current.snapshot
       }))
 
@@ -183,13 +224,19 @@ export const useShortTermScanStore = create<ShortTermScanState>((set) => ({
 
 export function resetShortTermScanStoreForTest() {
   manualRunGeneration += 1
+  scheduledLoadGeneration += 1
+  scheduledSnapshotRequest = null
   clearPollTimer()
   completionToastKey = ''
   useShortTermScanStore.setState(initialState())
 }
 
 function visibleSnapshotReport(snapshot: ShortTermScheduledSnapshot) {
-  if (snapshot.status === 'DATA_BLOCKED' || snapshot.status === 'FAILED' || snapshot.status === 'RUNNING') {
+  if (snapshot.status === 'DATA_BLOCKED'
+    || snapshot.status === 'FAILED'
+    || snapshot.status === 'RUNNING'
+    || snapshot.status === 'FINAL_PENDING'
+    || snapshot.status === 'PRESELECT_READY') {
     return null
   }
   return snapshot.report
@@ -203,6 +250,7 @@ function snapshotFromManualJob(job: ShortTermScanJobStatus): ShortTermScheduledS
     strategyVersion: job.strategyVersion,
     message: job.message,
     dataCutoffAt: job.report?.dataCutoffAt ?? null,
+    startedAt: job.startedAt ?? job.createdAt,
     completedAt: job.finishedAt,
     blockedReasons: job.blockedReasons,
     report: job.report
@@ -231,4 +279,26 @@ function snapshotCompletionToastMessage(snapshot: ShortTermScheduledSnapshot) {
 
 function currentShanghaiDate() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
+}
+
+function scheduledSnapshotTakesControl(
+  current: Pick<ShortTermScanState, 'origin' | 'snapshot' | 'report'>,
+  scheduled: ShortTermScheduledSnapshot
+) {
+  if (current.origin === 'SCHEDULED') return true
+  if (!current.snapshot) return current.report === null
+  if (scheduled.tradeDate > current.snapshot.tradeDate) return true
+  if (scheduled.tradeDate < current.snapshot.tradeDate) return false
+  if (scheduled.stage !== 'FINAL') return false
+
+  const scheduledTime = snapshotActivityTime(scheduled)
+  const currentTime = snapshotActivityTime(current.snapshot)
+  return scheduledTime !== null && (currentTime === null || scheduledTime > currentTime)
+}
+
+function snapshotActivityTime(snapshot: ShortTermScheduledSnapshot) {
+  const value = snapshot.completedAt ?? snapshot.startedAt ?? snapshot.dataCutoffAt
+  if (!value) return null
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
 }

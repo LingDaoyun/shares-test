@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CandlestickChart, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import type { ShortTermParams } from '../api/client'
+import { fetchShortTermValidationSummaries } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
@@ -9,6 +10,12 @@ import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOv
 import { Loader } from '../components/ui/Loader'
 import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
 import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
+import {
+  hasClosedShortTermScoreSnapshot,
+  ShortTermSignalEvidencePanel
+} from '../components/shortterm/ShortTermSignalEvidencePanel'
+import type { ShortTermValidationViewState } from '../components/shortterm/ShortTermSignalEvidencePanel'
+import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
 import { BuyEntryButton } from '../components/tradefeedback/BuyEntryButton'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
@@ -18,7 +25,7 @@ import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCount
 import { loadShortTermViewPreferences, saveShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import type { ShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import { useShortTermScanStore } from '../store/shortTermScanStore'
-import type { ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermSupportReversalSignal, ShortTermTailSignal, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermScheduledSnapshot, ShortTermSupportReversalSignal, ShortTermTailSignal, ShortTermValidationBatchRequest, ShortTermValidationSummary, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -61,17 +68,31 @@ const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'n
   DATA_REVIEW: 'neutral'
 }
 
+const SCHEDULED_SCAN_POLL_MS = 5_000
+
 export function ShortTermPage() {
   const [draft, setDraft] = useState<DraftParams>(DEFAULT_DRAFT)
   const [viewPreferences, setViewPreferences] = useState<ShortTermViewPreferences>(() => loadShortTermViewPreferences())
   const origin = useShortTermScanStore((state) => state.origin)
+  const scheduledSnapshot = useShortTermScanStore((state) => state.scheduledSnapshot)
+  const snapshot = useShortTermScanStore((state) => state.snapshot)
   const report = useShortTermScanStore((state) => state.report)
   const loading = useShortTermScanStore((state) => state.loading)
   const error = useShortTermScanStore((state) => state.error)
   const scanMessage = useShortTermScanStore((state) => state.scanMessage)
   const activeJobId = useShortTermScanStore((state) => state.activeJobId)
+  const refreshScheduledSnapshot = useShortTermScanStore((state) => state.refreshScheduledSnapshot)
   const runManualScan = useShortTermScanStore((state) => state.runManualScan)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  const [validationSummaries, setValidationSummaries] = useState<ShortTermValidationSummary[]>([])
+  const [validationState, setValidationState] = useState<ShortTermValidationViewState>('IDLE')
+  const validationRequests = useRef(new Map<string, Promise<ShortTermValidationSummary[]>>())
+
+  useEffect(() => {
+    void refreshScheduledSnapshot()
+    const timer = window.setInterval(() => void refreshScheduledSnapshot(), SCHEDULED_SCAN_POLL_MS)
+    return () => window.clearInterval(timer)
+  }, [refreshScheduledSnapshot])
 
   useEffect(() => {
     if (selectedSymbol && !report?.candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
@@ -89,12 +110,54 @@ export function ShortTermPage() {
     saveShortTermViewPreferences(viewPreferences)
   }, [viewPreferences])
 
+  useEffect(() => {
+    const request = validationRequest(report)
+    if (!request.cohorts.length) {
+      setValidationSummaries([])
+      setValidationState('IDLE')
+      return
+    }
+    let cancelled = false
+    setValidationState('LOADING')
+    const requestKey = JSON.stringify(request.cohorts)
+    let validationPromise = validationRequests.current.get(requestKey)
+    if (!validationPromise) {
+      validationPromise = fetchShortTermValidationSummaries(request)
+      validationRequests.current.set(requestKey, validationPromise)
+    }
+    void validationPromise
+      .then((summaries) => {
+        if (cancelled) return
+        setValidationSummaries(summaries)
+        setValidationState('READY')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setValidationSummaries([])
+        setValidationState('FAILED')
+      })
+      .finally(() => {
+        if (validationRequests.current.get(requestKey) === validationPromise) {
+          validationRequests.current.delete(requestKey)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [report])
+
   function updateViewPreference(key: keyof ShortTermViewPreferences, checked: boolean) {
     setViewPreferences((current) => ({ ...current, [key]: checked }))
   }
 
   return (
     <div className="flex flex-col gap-4">
+      {origin === 'SCHEDULED' && scheduledSnapshot && isScheduledScanRunning(scheduledSnapshot) ? (
+        <ScheduledScanPulse snapshot={scheduledSnapshot} />
+      ) : snapshot && !isWaitingScheduledSnapshot(snapshot) ? (
+        <ScheduledSnapshotStatus snapshot={snapshot} origin={origin} />
+      ) : null}
+
       <Card
         title={
           <span className="inline-flex items-center gap-2">
@@ -224,6 +287,7 @@ export function ShortTermPage() {
                     candidate={candidate}
                     selected={selected?.symbol === candidate.symbol}
                     onSelect={() => setSelectedSymbol(candidate.symbol)}
+                    marketRegimeLabel={report.marketRegime?.label}
                   />
                 ))}
               </div>
@@ -244,6 +308,9 @@ export function ShortTermPage() {
                 weightProfile={report.weightProfile}
                 generatedAt={report.generatedAt}
                 tradeCaptureToken={report.tradeCaptureTokens?.[selected.symbol] ?? null}
+                marketRegime={report.marketRegime}
+                validationSummaries={validationSummaries}
+                validationState={validationState}
               />
             ) : null}
           </DetailOverlay>
@@ -251,6 +318,47 @@ export function ShortTermPage() {
       ) : null}
     </div>
   )
+}
+
+export function ScheduledScanPulse({ snapshot }: { snapshot: ShortTermScheduledSnapshot }) {
+  return (
+    <section
+      className="overflow-hidden rounded-lg border border-sky-200 bg-sky-50/70 px-4 py-3 text-sky-900"
+      data-testid="scheduled-scan-pulse"
+      aria-live="polite"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="relative flex h-9 w-9 items-center justify-center rounded-full border border-sky-300 bg-white">
+            <span className="absolute h-9 w-9 animate-ping rounded-full bg-sky-200 opacity-40" />
+            <RefreshCw className="relative h-4 w-4 animate-spin" aria-hidden="true" />
+          </span>
+          <div>
+            <p className="text-sm font-semibold">尾盘自动扫描正在执行</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-sky-700">
+              页面正在跟随后台计划任务刷新，完成后会自动切换到最新候选。
+            </p>
+          </div>
+        </div>
+        <div className="text-right text-xs text-sky-700">
+          <p className="font-mono">{snapshot.tradeDate}</p>
+          <p>{snapshot.message || '后台扫描中'}</p>
+        </div>
+      </div>
+      <div className="mt-3 h-1 overflow-hidden rounded-full bg-sky-100">
+        <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-500" />
+      </div>
+    </section>
+  )
+}
+
+function isScheduledScanRunning(snapshot: ShortTermScheduledSnapshot) {
+  return (snapshot.status === 'RUNNING' || snapshot.status === 'FINAL_PENDING')
+    && !isWaitingScheduledSnapshot(snapshot)
+}
+
+function isWaitingScheduledSnapshot(snapshot: ShortTermScheduledSnapshot) {
+  return snapshot.status === 'RUNNING' && snapshot.message.trim().startsWith('等待 ')
 }
 
 const resultViewOptions: Array<{
@@ -557,14 +665,18 @@ function shortTermDiagnostics(report: ShortTermReport | null) {
 function CandidateRow({
   candidate,
   selected,
-  onSelect
+  onSelect,
+  marketRegimeLabel
 }: {
   candidate: ShortTermCandidate
   selected: boolean
   onSelect: () => void
+  marketRegimeLabel: string | undefined
 }) {
   const goldenCross = candidate.technical.goldenCross
   const supportReversal = candidate.technical.supportReversal
+  const scoreSnapshotClosed = hasClosedShortTermScoreSnapshot(candidate)
+  const rankingScore = scoreSnapshotClosed ? candidate.score.rankingScore : null
   return (
     <button
       type="button"
@@ -579,6 +691,9 @@ function CandidateRow({
           <Tag tone="sky">{candidate.phaseLabel}</Tag>
           {supportReversal?.state === 'CONFIRMED' ? (
             <Tag tone="success">{supportReversal.stateLabel}</Tag>
+          ) : null}
+          {candidate.signalProfile && candidate.signalProfile.primaryFamily !== 'UNAVAILABLE' ? (
+            <Tag tone="brand">{candidate.signalProfile.primaryLabel}</Tag>
           ) : null}
         </div>
         <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-ink-500">{candidate.reason}</p>
@@ -598,6 +713,17 @@ function CandidateRow({
           <Tag tone={candidate.quoteFreshness.blocksRealtimeDecision ? 'warning' : 'success'}>
             行情：{candidate.quoteFreshness.statusLabel}
           </Tag>
+          {marketRegimeLabel ? <Tag tone="sky">大盘：{marketRegimeLabel}</Tag> : null}
+          {Number.isFinite(candidate.score.technicalRankingScore) ? (
+            <Tag tone="neutral">结构分 {formatNumber(candidate.score.technicalRankingScore)}</Tag>
+          ) : (
+            <Tag tone="warning">结构分待补</Tag>
+          )}
+          {rankingScore === null ? (
+            <Tag tone="warning">排序分待补</Tag>
+          ) : (
+            <Tag tone="neutral">排序分 {formatNumber(rankingScore)}</Tag>
+          )}
         </div>
       </div>
 
@@ -611,7 +737,7 @@ function CandidateRow({
       </div>
 
       <div className="flex items-center justify-between gap-3 md:flex-col md:items-end md:justify-center">
-        <CompositeScoreBadge value={candidate.score.rankingScore ?? candidate.score.finalScore} />
+        <CompositeScoreBadge value={rankingScore} />
         <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
         <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
         <Tag tone={tailTone(candidate.tailSignal.status)}>{candidate.tailSignal.statusLabel}</Tag>
@@ -624,18 +750,26 @@ function CandidateDetail({
   candidate,
   weightProfile,
   generatedAt,
-  tradeCaptureToken
+  tradeCaptureToken,
+  marketRegime,
+  validationSummaries,
+  validationState
 }: {
   candidate: ShortTermCandidate
   weightProfile: ShortTermWeightProfile
   generatedAt: string
   tradeCaptureToken: string | null
+  marketRegime: ShortTermReport['marketRegime']
+  validationSummaries: ShortTermValidationSummary[]
+  validationState: ShortTermValidationViewState
 }) {
+  const scoreSnapshotClosed = hasClosedShortTermScoreSnapshot(candidate)
+  const rankingScore = scoreSnapshotClosed ? candidate.score.rankingScore : null
   return (
     <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft pb-4">
           <div className="flex flex-wrap items-center gap-2">
-            <ScoreBadge value={candidate.score.rankingScore ?? candidate.score.finalScore} />
+            <ScoreBadge value={rankingScore} />
             <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
             <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
           </div>
@@ -661,6 +795,13 @@ function CandidateDetail({
         <OvernightTradePlanPanel plan={candidate.tradePlan} />
 
         <p className="text-sm leading-relaxed text-ink-600">{candidate.reason}</p>
+
+        <ShortTermSignalEvidencePanel
+          candidate={candidate}
+          marketRegime={marketRegime}
+          summaries={validationSummaries}
+          validationState={validationState}
+        />
 
         <div className="grid grid-cols-2 gap-2">
           <Metric label="每股价格" value={formatPerSharePrice(candidate.latestPrice)} />
@@ -694,23 +835,34 @@ function CandidateDetail({
             <ScoreMetric label="承接反转分" value={candidate.score.supportReversalScore} />
           ) : null}
           <ScoreMetric label="四因子原始分" value={candidate.score.finalScore} />
-          <ScoreMetric label="阶段校准" value={candidate.score.stageAdjustment ?? 0} />
-          {candidate.score.fundFlowAdjustment != null ? (
-            <ScoreMetric label="资金流微调（最多±2）" value={candidate.score.fundFlowAdjustment} />
-          ) : null}
-          {candidate.score.marketHeatContribution != null ? (
-            <ScoreMetric label="热点方向修正（最多±2）" value={candidate.score.marketHeatContribution} />
-          ) : null}
-          {candidate.score.relativeStrengthContribution != null ? (
-            <ScoreMetric label="相对强度修正（最多±4）" value={candidate.score.relativeStrengthContribution} />
-          ) : null}
-          {candidate.score.industryLeadershipContribution != null ? (
-            <ScoreMetric label="行业地位修正（最多±2）" value={candidate.score.industryLeadershipContribution} />
-          ) : null}
-          {candidate.score.crossSectionAdjustment != null ? (
-            <ScoreMetric label="横截面合计（最多±8）" value={candidate.score.crossSectionAdjustment} />
-          ) : null}
-          <ScoreMetric label="排序分" value={candidate.score.rankingScore ?? candidate.score.finalScore} />
+          {scoreSnapshotClosed ? (
+            <>
+              <ScoreMetric
+                label="阶段校准"
+                value={(candidate.score.technicalRankingScore as number) - candidate.score.finalScore}
+              />
+              {candidate.score.fundFlowAdjustment != null ? (
+                <ScoreMetric label="资金流微调（最多±2）" value={candidate.score.fundFlowAdjustment} />
+              ) : null}
+              {candidate.score.marketHeatContribution != null ? (
+                <ScoreMetric label="热点方向修正（最多±2）" value={candidate.score.marketHeatContribution} />
+              ) : null}
+              {candidate.score.relativeStrengthContribution != null ? (
+                <ScoreMetric label="相对强度修正（最多±4）" value={candidate.score.relativeStrengthContribution} />
+              ) : null}
+              {candidate.score.industryLeadershipContribution != null ? (
+                <ScoreMetric label="行业地位修正（最多±2）" value={candidate.score.industryLeadershipContribution} />
+              ) : null}
+              {candidate.score.crossSectionAdjustment != null ? (
+                <ScoreMetric label="横截面合计（最多±8）" value={candidate.score.crossSectionAdjustment} />
+              ) : null}
+              <ScoreMetric label="排序分" value={rankingScore as number} />
+            </>
+          ) : (
+            <div className="col-span-2 border border-amber-200 bg-amber-50/60 px-3 py-2 text-xs leading-relaxed text-amber-800">
+              历史报告缺少完整排序快照，不展示推算后的阶段项、贡献项或排序分。
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line-soft pt-3 text-xs text-ink-500">
@@ -1014,6 +1166,22 @@ function turnoverBandLabel(band: string | null | undefined) {
   if (band === 'INSUFFICIENT') return '活跃不足'
   if (band === 'OVERHEATED') return '换手过热'
   return '待补充'
+}
+
+function validationRequest(report: ShortTermReport | null): ShortTermValidationBatchRequest {
+  const marketRegime = report?.marketRegime?.state
+  if (!report || !marketRegime || marketRegime === 'UNAVAILABLE') {
+    return { cohorts: [] }
+  }
+  const families = [...new Set(report.candidates
+    .map((candidate) => candidate.signalProfile?.primaryFamily)
+    .filter((family): family is string => Boolean(family && family !== 'UNAVAILABLE')))]
+  return {
+    cohorts: families.flatMap((signalFamily) => ([
+      { signalFamily, marketRegime, horizon: 'T1' as const },
+      { signalFamily, marketRegime, horizon: 'T2' as const }
+    ]))
+  }
 }
 
 function NumberField({

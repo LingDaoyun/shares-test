@@ -849,8 +849,16 @@ class ShortTermServiceTest {
         assertThat(find(active, "600608").score().rankDelta()).isPositive();
         assertThat(find(active, "600608").score().rankingScore())
                 .isEqualByComparingTo(find(active, "600608").score().v2RankingScore());
-        assertThat(find(active, "600608").risks())
-                .contains("筹码因子仅影子记录，未参与生产排序");
+        assertThat(active.quoteNote()).doesNotContain("筹码");
+        assertThat(active.methodology()).noneMatch(item -> item.contains("筹码"));
+        assertThat(active.candidates()).allSatisfy(candidate -> {
+            assertThat(candidate.strengths()).noneMatch(item -> item.contains("筹码"));
+            assertThat(candidate.risks()).noneMatch(item -> item.contains("筹码"));
+            assertThat(candidate.evidence()).allSatisfy(item -> {
+                assertThat(item.title()).doesNotContain("筹码");
+                assertThat(item.summary()).doesNotContain("筹码");
+            });
+        });
         assertThat(eastMoneyClient.turnoverEnrichmentCalls).isPositive();
     }
 

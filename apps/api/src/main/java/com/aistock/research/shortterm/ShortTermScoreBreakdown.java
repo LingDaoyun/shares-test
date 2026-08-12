@@ -35,15 +35,6 @@ public record ShortTermScoreBreakdown(
         BigDecimal volatilityContribution,
         BigDecimal visibleRankingAdjustment
 ) {
-    public ShortTermScoreBreakdown {
-        volatilityContribution = volatilityContribution == null ? BigDecimal.ZERO : volatilityContribution;
-        visibleRankingAdjustment = visibleRankingAdjustment == null
-                ? rankingScore == null || technicalRankingScore == null
-                ? BigDecimal.ZERO
-                : rankingScore.subtract(technicalRankingScore)
-                : visibleRankingAdjustment;
-    }
-
     public ShortTermScoreBreakdown(
             BigDecimal technicalScore,
             BigDecimal goldenCrossScore,

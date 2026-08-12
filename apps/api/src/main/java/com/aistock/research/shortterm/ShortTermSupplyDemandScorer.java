@@ -66,9 +66,6 @@ public class ShortTermSupplyDemandScorer {
                 .add(flowScore.available()
                         ? flowScore.score().multiply(V3_BUY_WEIGHT)
                         : BigDecimal.ZERO);
-        if (activationMode == ChipActivationMode.ACTIVE && chip != null) {
-            dataGaps.add("筹码因子仅影子记录，未参与生产排序");
-        }
         BigDecimal rankingScore = v2RankingScore;
         return new ShortTermSupplyDemandScore(
                 scale(flowScore.mainRatio()),

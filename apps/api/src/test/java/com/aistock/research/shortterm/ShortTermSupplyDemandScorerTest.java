@@ -159,7 +159,7 @@ class ShortTermSupplyDemandScorerTest {
 
         assertThat(score.rankingScore()).isEqualByComparingTo(score.v2RankingScore());
         assertThat(score.chipContributionScore()).isEqualByComparingTo("18.00");
-        assertThat(score.dataGaps()).contains("筹码因子仅影子记录，未参与生产排序");
+        assertThat(score.dataGaps()).noneMatch(item -> item.contains("筹码"));
     }
 
     private EastMoneyFundFlowSnapshot flow(

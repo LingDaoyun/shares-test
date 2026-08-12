@@ -115,7 +115,8 @@ The existing simplified backtest remains available only as a research replay and
 - Final task starts early enough to publish before 14:50.
 - The final actionable cutoff is `14:49:40 Asia/Shanghai`.
 - Data after the cutoff may update replay/history but may not retroactively create an actionable same-day buy recommendation.
-- A report may start earlier but is non-executable if its publication/terminal persistence completes after the cutoff. Boundary tests cover `14:49:39`, exactly `14:49:40`, and `14:49:41` in `Asia/Shanghai`.
+- Final publication uses two transactions. Transaction A must commit the complete immutable payload and move `RUNNING -> FINAL_PENDING` before the cutoff. Transaction B starts only after A returns and uses the database transaction timestamp as an upper-bound proof that A committed no later than the cutoff; B may commit slightly after the cutoff because `FINAL_PENDING` remains non-executable and its report stays hidden until certification commits.
+- If transaction B observes database time after the cutoff, certification is interrupted, or a process restarts with `RUNNING`/`FINAL_PENDING`, the snapshot fails closed to `DATA_BLOCKED`. Existing `FINAL_READY` rows without a valid payload hash and certification timestamp are also downgraded rather than backfilled. Boundary tests cover `14:49:39`, exactly `14:49:40`, and `14:49:41` in `Asia/Shanghai`.
 
 ## Frontend Contract
 

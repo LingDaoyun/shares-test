@@ -15,7 +15,10 @@ import type {
   PolicyTheme,
   RecommendationEvidenceBundle,
   ShortTermReport,
+  ShortTermScheduledSnapshot,
   ShortTermScanJobStatus,
+  ShortTermValidationBatchRequest,
+  ShortTermValidationSummary,
   RuleDefinition,
   PolicySourceConfig,
   RuntimeConfigSnapshot,
@@ -134,6 +137,15 @@ export function startShortTermScanJob(params: ShortTermParams = {}) {
 
 export function fetchShortTermScanJob(jobId: string) {
   return http.get<ShortTermScanJobStatus>(`/short-term/scan-jobs/${jobId}`).then((res) => res.data)
+}
+
+export function fetchLatestShortTermScheduledSnapshot() {
+  return http.get<ShortTermScheduledSnapshot>('/short-term/scheduled-snapshots/latest')
+    .then((res) => res.data)
+}
+
+export function fetchShortTermValidationSummaries(request: ShortTermValidationBatchRequest) {
+  return http.post<ShortTermValidationSummary[]>('/short-term/validation/summaries', request).then((res) => res.data)
 }
 
 export interface BacktestParams {

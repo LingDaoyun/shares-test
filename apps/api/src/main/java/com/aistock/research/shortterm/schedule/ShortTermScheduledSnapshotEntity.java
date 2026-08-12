@@ -42,6 +42,12 @@ public class ShortTermScheduledSnapshotEntity implements Persistable<String> {
     @Column(name = "report_json", columnDefinition = "TEXT")
     private String reportJson;
 
+    @Column(name = "report_payload_hash", length = 64)
+    private String reportPayloadHash;
+
+    @Column(name = "payload_committed_by_at")
+    private Instant payloadCommittedByAt;
+
     @Column(name = "data_cutoff_at")
     private Instant dataCutoffAt;
 
@@ -106,6 +112,8 @@ public class ShortTermScheduledSnapshotEntity implements Persistable<String> {
     public String getParameterFingerprint() { return parameterFingerprint; }
     public String getParametersJson() { return parametersJson; }
     public String getReportJson() { return reportJson; }
+    public String getReportPayloadHash() { return reportPayloadHash; }
+    public Instant getPayloadCommittedByAt() { return payloadCommittedByAt; }
     public Instant getDataCutoffAt() { return dataCutoffAt; }
     public Instant getStartedAt() { return startedAt; }
     public Instant getCompletedAt() { return completedAt; }

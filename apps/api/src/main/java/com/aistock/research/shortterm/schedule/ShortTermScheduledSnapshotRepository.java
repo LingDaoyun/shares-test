@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -36,6 +37,9 @@ public interface ShortTermScheduledSnapshotRepository
             String parameterFingerprint
     );
 
+    @Query(value = "SELECT CURRENT_TIMESTAMP", nativeQuery = true)
+    OffsetDateTime currentDatabaseTime();
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("""
@@ -45,6 +49,8 @@ public interface ShortTermScheduledSnapshotRepository
                 snapshot.startedAt = :startedAt,
                 snapshot.completedAt = null,
                 snapshot.reportJson = null,
+                snapshot.reportPayloadHash = null,
+                snapshot.payloadCommittedByAt = null,
                 snapshot.dataCutoffAt = null,
                 snapshot.message = :runningMessage,
                 snapshot.blockedReasonsJson = null,
@@ -68,6 +74,8 @@ public interface ShortTermScheduledSnapshotRepository
                 snapshot.startedAt = :restartedAt,
                 snapshot.completedAt = null,
                 snapshot.reportJson = null,
+                snapshot.reportPayloadHash = null,
+                snapshot.payloadCommittedByAt = null,
                 snapshot.dataCutoffAt = null,
                 snapshot.message = :runningMessage,
                 snapshot.blockedReasonsJson = null,
@@ -113,4 +121,118 @@ public interface ShortTermScheduledSnapshotRepository
             @Param("message") String message,
             @Param("blockedReasonsJson") String blockedReasonsJson
     );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            update ShortTermScheduledSnapshotEntity snapshot
+            set snapshot.status = :pendingStatus,
+                snapshot.reportJson = :reportJson,
+                snapshot.dataCutoffAt = :dataCutoffAt,
+                snapshot.reportPayloadHash = :reportPayloadHash,
+                snapshot.payloadCommittedByAt = null,
+                snapshot.completedAt = null,
+                snapshot.message = :message,
+                snapshot.blockedReasonsJson = null,
+                snapshot.updatedAt = :stagedAt
+            where snapshot.snapshotKey = :snapshotKey
+              and snapshot.status = :runningStatus
+              and snapshot.attemptCount = :attemptCount
+            """)
+    int stageFinalPayload(
+            @Param("snapshotKey") String snapshotKey,
+            @Param("attemptCount") int attemptCount,
+            @Param("runningStatus") ShortTermSnapshotStatus runningStatus,
+            @Param("pendingStatus") ShortTermSnapshotStatus pendingStatus,
+            @Param("reportJson") String reportJson,
+            @Param("reportPayloadHash") String reportPayloadHash,
+            @Param("dataCutoffAt") java.time.Instant dataCutoffAt,
+            @Param("stagedAt") java.time.Instant stagedAt,
+            @Param("message") String message
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            update ShortTermScheduledSnapshotEntity snapshot
+            set snapshot.status = :finalStatus,
+                snapshot.payloadCommittedByAt = :certificationAt,
+                snapshot.completedAt = :certificationAt,
+                snapshot.message = :message,
+                snapshot.blockedReasonsJson = :blockedReasonsJson,
+                snapshot.updatedAt = :certificationAt
+            where snapshot.snapshotKey = :snapshotKey
+              and snapshot.status = :pendingStatus
+              and snapshot.attemptCount = :attemptCount
+              and snapshot.reportPayloadHash = :reportPayloadHash
+              and :certificationAt <= :publicationDeadline
+            """)
+    int certifyPendingFinal(
+            @Param("snapshotKey") String snapshotKey,
+            @Param("attemptCount") int attemptCount,
+            @Param("pendingStatus") ShortTermSnapshotStatus pendingStatus,
+            @Param("finalStatus") ShortTermSnapshotStatus finalStatus,
+            @Param("reportPayloadHash") String reportPayloadHash,
+            @Param("certificationAt") java.time.Instant certificationAt,
+            @Param("publicationDeadline") java.time.Instant publicationDeadline,
+            @Param("message") String message,
+            @Param("blockedReasonsJson") String blockedReasonsJson
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            update ShortTermScheduledSnapshotEntity snapshot
+            set snapshot.status = :blockedStatus,
+                snapshot.completedAt = :completedAt,
+                snapshot.message = :message,
+                snapshot.blockedReasonsJson = :blockedReasonsJson,
+                snapshot.updatedAt = :completedAt
+            where snapshot.snapshotKey = :snapshotKey
+              and snapshot.status = :pendingStatus
+              and snapshot.attemptCount = :attemptCount
+            """)
+    int blockPendingFinal(
+            @Param("snapshotKey") String snapshotKey,
+            @Param("attemptCount") int attemptCount,
+            @Param("pendingStatus") ShortTermSnapshotStatus pendingStatus,
+            @Param("blockedStatus") ShortTermSnapshotStatus blockedStatus,
+            @Param("completedAt") java.time.Instant completedAt,
+            @Param("message") String message,
+            @Param("blockedReasonsJson") String blockedReasonsJson
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            update ShortTermScheduledSnapshotEntity snapshot
+            set snapshot.status = :blockedStatus,
+                snapshot.completedAt = :completedAt,
+                snapshot.message = :message,
+                snapshot.blockedReasonsJson = :blockedReasonsJson,
+                snapshot.updatedAt = :completedAt
+            where snapshot.snapshotKey = :snapshotKey
+              and snapshot.stage = :finalStage
+              and snapshot.status = :finalReadyStatus
+              and snapshot.attemptCount = :attemptCount
+              and (snapshot.reportJson is null
+                   or snapshot.reportJson = 'null'
+                   or snapshot.reportPayloadHash is null
+                   or snapshot.reportPayloadHash = ''
+                   or length(trim(snapshot.reportPayloadHash)) <> 64
+                   or snapshot.payloadCommittedByAt is null
+                   or snapshot.payloadCommittedByAt > :publicationDeadline)
+            """)
+    int blockUncertifiedFinal(
+            @Param("snapshotKey") String snapshotKey,
+            @Param("attemptCount") int attemptCount,
+            @Param("finalStage") ShortTermSnapshotStage finalStage,
+            @Param("finalReadyStatus") ShortTermSnapshotStatus finalReadyStatus,
+            @Param("blockedStatus") ShortTermSnapshotStatus blockedStatus,
+            @Param("publicationDeadline") java.time.Instant publicationDeadline,
+            @Param("completedAt") java.time.Instant completedAt,
+            @Param("message") String message,
+            @Param("blockedReasonsJson") String blockedReasonsJson
+    );
+
 }

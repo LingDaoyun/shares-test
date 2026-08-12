@@ -326,6 +326,8 @@ CREATE TABLE IF NOT EXISTS short_term_scheduled_snapshot (
   parameter_fingerprint VARCHAR(64) NOT NULL,
   parameters_json TEXT NOT NULL,
   report_json TEXT,
+  report_payload_hash VARCHAR(64),
+  payload_committed_by_at TIMESTAMP WITH TIME ZONE,
   data_cutoff_at TIMESTAMP WITH TIME ZONE,
   started_at TIMESTAMP WITH TIME ZONE NOT NULL,
   completed_at TIMESTAMP WITH TIME ZONE,
@@ -334,6 +336,12 @@ CREATE TABLE IF NOT EXISTS short_term_scheduled_snapshot (
   blocked_reason VARCHAR(2000),
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
+
+ALTER TABLE short_term_scheduled_snapshot
+  ADD COLUMN IF NOT EXISTS report_payload_hash VARCHAR(64);
+
+ALTER TABLE short_term_scheduled_snapshot
+  ADD COLUMN IF NOT EXISTS payload_committed_by_at TIMESTAMP WITH TIME ZONE;
 
 CREATE INDEX IF NOT EXISTS idx_short_term_snapshot_latest
   ON short_term_scheduled_snapshot(trade_date, updated_at, snapshot_key);
