@@ -86,7 +86,7 @@ export function SettingsPage() {
         apiKey: apiKey ? apiKey : null
       })
       replaceLlm({ ...updated, apiKey: '' })
-      toast.success('大模型配置已保存到 Nacos')
+      toast.success('大模型配置已保存并生效')
       await refreshLlmConfig()
     } catch (e) {
       toast.error(extractErrorMessage(e))
@@ -121,7 +121,7 @@ export function SettingsPage() {
         form.policySources.map((source) => ({ ...source }))
       )
       replacePolicySources(updated)
-      toast.success('政策源配置已保存到 Nacos')
+      toast.success('政策源配置已保存并生效')
     } catch (e) {
       toast.error(extractErrorMessage(e))
     } finally {
@@ -144,7 +144,7 @@ export function SettingsPage() {
             <Tag tone={form.llm.apiKeyConfigured ? 'success' : 'danger'}>
               {form.llm.apiKeyConfigured ? 'Key 已配置' : 'Key 缺失'}
             </Tag>
-            <Tag>{form.dataId} / {form.group}</Tag>
+            <Tag>数据库配置 · 模型修订 {form.llmRevision}</Tag>
           </div>
         </div>
 
@@ -173,7 +173,7 @@ export function SettingsPage() {
             <input
               type="password"
               className="field"
-              placeholder="留空则保留 Nacos 中已有 Key"
+              placeholder="留空则保留数据库中已有 Key"
               value={form.llm.apiKey ?? ''}
               onChange={(e) => patchLlm({ apiKey: e.target.value })}
             />
@@ -235,9 +235,12 @@ export function SettingsPage() {
       <Card
         title="政策源配置"
         extra={
-          <Button icon={<Plus className="h-4 w-4" />} onClick={addPolicySource}>
-            新增来源
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Tag>数据库配置 · 政策源修订 {form.policySourcesRevision}</Tag>
+            <Button icon={<Plus className="h-4 w-4" />} onClick={addPolicySource}>
+              新增来源
+            </Button>
+          </div>
         }
       >
         <div className="flex flex-col gap-2">
@@ -335,7 +338,7 @@ function SectionActions({
         disabled={loading}
         onClick={onSave}
       >
-        保存到 Nacos
+        保存配置
       </Button>
     </div>
   )

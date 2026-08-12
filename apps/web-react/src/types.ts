@@ -57,8 +57,9 @@ export interface LlmRuntimeConfig {
 }
 
 export interface RuntimeConfigSnapshot {
-  dataId: string
-  group: string
+  storage: 'database'
+  llmRevision: number
+  policySourcesRevision: number
   llm: LlmRuntimeConfig
   policySources: PolicySourceConfig[]
   updatedAt: string

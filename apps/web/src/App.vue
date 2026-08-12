@@ -1452,7 +1452,7 @@
             <el-tag :type="runtimeConfigForm.llm.apiKeyConfigured ? 'success' : 'danger'" effect="plain">
               {{ runtimeConfigForm.llm.apiKeyConfigured ? 'Key 已配置' : 'Key 缺失' }}
             </el-tag>
-            <el-tag effect="plain">{{ runtimeConfigForm.dataId }} / {{ runtimeConfigForm.group }}</el-tag>
+            <el-tag effect="plain">数据库配置 · 模型修订 {{ runtimeConfigForm.llmRevision }}</el-tag>
           </div>
         </div>
 
@@ -1484,7 +1484,7 @@
                 v-model="runtimeConfigForm.llm.apiKey"
                 type="password"
                 show-password
-                placeholder="留空则保留 Nacos 中已有 Key"
+                placeholder="留空则保留数据库中已有 Key"
               />
             </el-form-item>
             <el-form-item label="API Key 环境变量名">
@@ -1516,7 +1516,10 @@
             <p class="eyebrow">POLICY SOURCES</p>
             <h2>政策源配置</h2>
           </div>
-          <el-button :icon="Plus" plain @click="addPolicySource">新增来源</el-button>
+          <div class="ai-config-tags">
+            <el-tag effect="plain">数据库配置 · 政策源修订 {{ runtimeConfigForm.policySourcesRevision }}</el-tag>
+            <el-button :icon="Plus" plain @click="addPolicySource">新增来源</el-button>
+          </div>
         </div>
 
         <div class="source-editor">
@@ -1538,7 +1541,7 @@
         <div class="settings-actions">
           <el-button :icon="Refresh" :loading="runtimeConfigLoading" @click="loadRuntimeConfig">重新读取</el-button>
           <el-button type="primary" :icon="Check" :loading="runtimeConfigSaving" @click="saveRuntimeConfig">
-            保存到 Nacos
+            保存配置
           </el-button>
         </div>
       </div>
@@ -1872,8 +1875,9 @@ const activeCompanyAnalysis = computed(() => {
 
 function emptyRuntimeConfig(): RuntimeConfigSnapshot {
   return {
-    dataId: 'ai-stock-api.yml',
-    group: 'AI_STOCK',
+    storage: 'database',
+    llmRevision: 0,
+    policySourcesRevision: 0,
     llm: {
       provider: 'deepseek',
       apiKey: '',
@@ -2370,22 +2374,9 @@ async function saveRuntimeConfig() {
     payload.llm.apiKey = nextApiKey ? nextApiKey : null
     const updated = await updateRuntimeConfig(payload)
     runtimeConfig.value = updated
-    runtimeConfigForm.value = cloneRuntimeConfig({
-      ...payload,
-      llm: {
-        ...payload.llm,
-        apiKey: '',
-        apiKeyConfigured: Boolean(nextApiKey) || runtimeConfigForm.value.llm.apiKeyConfigured,
-        apiKeySource: Boolean(nextApiKey) ? 'research.ai.llm.api-key' : runtimeConfigForm.value.llm.apiKeySource
-      },
-      updatedAt: new Date().toISOString()
-    })
-    ElMessage.success('配置已发布到 Nacos')
+    runtimeConfigForm.value = cloneRuntimeConfig(updated)
+    ElMessage.success('配置已保存并生效')
     await refreshLlmConfig()
-    window.setTimeout(() => {
-      void loadRuntimeConfig()
-      void refreshLlmConfig()
-    }, 1500)
   } catch (error) {
     ElMessage.error(extractErrorMessage(error))
   } finally {

@@ -15,8 +15,9 @@ import { defaultLlmRuntimeConfig, defaultPolicySources } from '../lib/runtimeCon
 
 export function emptyRuntimeConfig(): RuntimeConfigSnapshot {
   return {
-    dataId: 'ai-stock-api.yml',
-    group: 'AI_STOCK',
+    storage: 'database',
+    llmRevision: 0,
+    policySourcesRevision: 0,
     llm: defaultLlmRuntimeConfig(),
     policySources: defaultPolicySources(),
     updatedAt: new Date().toISOString()

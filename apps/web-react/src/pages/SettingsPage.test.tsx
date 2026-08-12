@@ -11,6 +11,7 @@ import {
 } from '../api/client'
 import { defaultLlmRuntimeConfig, defaultPolicySources } from '../lib/runtimeConfigDefaults'
 import { emptyRuntimeConfig, useAppStore } from '../store/appStore'
+import { toast } from '../components/ui/Toast'
 import { SettingsPage } from './SettingsPage'
 
 vi.mock('../api/client', () => ({
@@ -70,11 +71,11 @@ describe('SettingsPage section actions', () => {
     expect(actionButtons('大模型配置')).toHaveLength(3)
     expect(actionButtons('政策源配置')).toHaveLength(3)
 
-    await click(buttonIn('大模型配置', '保存到 Nacos'))
+    await click(buttonIn('大模型配置', '保存配置'))
     expect(mockedUpdateLlm).toHaveBeenCalledTimes(1)
     expect(mockedUpdatePolicies).not.toHaveBeenCalled()
 
-    await click(buttonIn('政策源配置', '保存到 Nacos'))
+    await click(buttonIn('政策源配置', '保存配置'))
     expect(mockedUpdatePolicies).toHaveBeenCalledTimes(1)
   })
 
@@ -103,12 +104,26 @@ describe('SettingsPage section actions', () => {
   it('keeps policy actions enabled while the LLM section is saving', async () => {
     mockedUpdateLlm.mockReturnValue(new Promise(() => undefined))
 
-    act(() => buttonIn('大模型配置', '保存到 Nacos').click())
+    act(() => buttonIn('大模型配置', '保存配置').click())
     await act(async () => Promise.resolve())
 
-    expect(buttonIn('大模型配置', '保存到 Nacos').disabled).toBe(true)
-    expect(buttonIn('政策源配置', '保存到 Nacos').disabled).toBe(false)
+    expect(buttonIn('大模型配置', '保存配置').disabled).toBe(true)
+    expect(buttonIn('政策源配置', '保存配置').disabled).toBe(false)
     expect(buttonIn('政策源配置', '重新读取').disabled).toBe(false)
+  })
+
+  it('shows database metadata and no Nacos identifiers', () => {
+    expect(section('大模型配置').textContent).toContain('数据库配置')
+    expect(section('大模型配置').textContent).toContain('模型修订 0')
+    expect(section('政策源配置').textContent).toContain('政策源修订 0')
+    expect(host.textContent).not.toContain('Nacos')
+    expect(host.textContent).not.toContain('AI_STOCK')
+  })
+
+  it('reports that a saved model is immediately effective', async () => {
+    await click(buttonIn('大模型配置', '保存配置'))
+
+    expect(toast.success).toHaveBeenCalledWith('大模型配置已保存并生效')
   })
 
   function section(title: string) {
@@ -121,7 +136,7 @@ describe('SettingsPage section actions', () => {
 
   function actionButtons(title: string) {
     return [...section(title).querySelectorAll<HTMLButtonElement>('button')]
-      .filter((button) => ['重新读取', '重置为默认', '保存到 Nacos'].includes(button.textContent?.trim() ?? ''))
+      .filter((button) => ['重新读取', '重置为默认', '保存配置'].includes(button.textContent?.trim() ?? ''))
   }
 
   function buttonIn(title: string, label: string) {
