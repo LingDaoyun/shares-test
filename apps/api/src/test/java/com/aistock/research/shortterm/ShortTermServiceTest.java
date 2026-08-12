@@ -885,7 +885,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void deserializesLegacyV2CandidateWithoutChipAndV3RankingFields() throws Exception {
+    void deserializesLegacyV2CandidateWithoutNewRankingAndSignalFields() throws Exception {
         eastMoneyClient.quotes = List.of(
                 quote("600607", "历史样本", "10.62", "1.20", "18", "1.6", "600000000")
         );
@@ -898,6 +898,8 @@ class ShortTermServiceTest {
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
         com.fasterxml.jackson.databind.node.ObjectNode legacy = mapper.valueToTree(current);
         legacy.remove("chip");
+        legacy.remove("volatilityQuality");
+        legacy.remove("signalProfile");
         com.fasterxml.jackson.databind.node.ObjectNode score =
                 (com.fasterxml.jackson.databind.node.ObjectNode) legacy.get("score");
         List.of(
@@ -910,6 +912,8 @@ class ShortTermServiceTest {
         assertThat(restored.symbol()).isEqualTo("600607");
         assertThat(restored.chip()).isNull();
         assertThat(restored.score().v3RankingScore()).isNull();
+        assertThat(restored.volatilityQuality().state()).isEqualTo("UNAVAILABLE");
+        assertThat(restored.signalProfile().primaryFamily()).isEqualTo("UNAVAILABLE");
     }
 
     @Test

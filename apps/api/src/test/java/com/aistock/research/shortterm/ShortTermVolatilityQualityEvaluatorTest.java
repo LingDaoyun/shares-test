@@ -65,6 +65,20 @@ class ShortTermVolatilityQualityEvaluatorTest {
     }
 
     @Test
+    void missingCutoffDateFailsClosedInsteadOfReadingUnboundedKLines() {
+        ShortTermVolatilityQuality quality = evaluator.evaluate(
+                contractionBreakoutRows(),
+                new BigDecimal("11.80"),
+                null,
+                snapshot("2.00", "1.00", "1.20")
+        );
+
+        assertThat(quality.state()).isEqualTo("UNAVAILABLE");
+        assertThat(quality.contribution()).isEqualByComparingTo("0.00");
+        assertThat(quality.dataGaps()).anyMatch(gap -> gap.contains("截止交易日"));
+    }
+
+    @Test
     void overextendedDistanceIsPenalizedInAtrUnits() {
         ShortTermVolatilityQuality quality = evaluator.evaluate(
                 ordinaryRows(),

@@ -78,12 +78,8 @@
 - [x] Keep safety gates hard; make ranking thresholds volatility/percentile aware.
 - [x] Limit repair/crowded states to light actions and keep risk-off non-executable.
 - [x] Add boundary, zero-range, missing-data, and action-downgrade tests.
-- [ ] Reviewer Agent checks formula correctness, duplicate-factor risk, regime leakage, and action safety.
-- [ ] Fix findings, re-run tests, and commit the phase.
-
-Checkpoint on 2026-08-12: implementation and 649-test backend regression are green. The first
-read-only reviewer was stopped for a Codex restart before returning a verdict; restart Phase 3 at
-the reviewer gate, then fix findings and replace this checkpoint with the final phase commit.
+- [x] Reviewer Agent checks formula correctness, duplicate-factor risk, regime leakage, and action safety.
+- [x] Fix findings, re-run tests, and commit the phase.
 
 ## Phase 4: Automatic T1/T2 Observation And Outcome Loop
 

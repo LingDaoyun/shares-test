@@ -23,9 +23,12 @@ public class ShortTermVolatilityQualityEvaluator {
             LocalDate cutoffDate,
             ShortTermTechnicalSnapshot technical
     ) {
+        if (cutoffDate == null) {
+            return ShortTermVolatilityQuality.unavailable("截止交易日缺失，拒绝读取无界K线序列");
+        }
         List<EastMoneyKLine> rows = source == null ? List.of() : source.stream()
                 .filter(row -> row != null && row.tradeDate() != null && row.close() != null)
-                .filter(row -> cutoffDate == null || !row.tradeDate().isAfter(cutoffDate))
+                .filter(row -> !row.tradeDate().isAfter(cutoffDate))
                 .sorted(Comparator.comparing(EastMoneyKLine::tradeDate))
                 .toList();
         if (rows.size() < 25 || technical == null) {
