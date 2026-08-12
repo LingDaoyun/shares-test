@@ -94,7 +94,7 @@ public class AgentCommitteePromptService {
                 - 样本不足 20 时不得建议调整分数；达到 20 时，可靠性修正也只能使用输入中的 ±5 上限。
                 - 为控制提示词长度，最多注入 12 个符合条件的 GLOBAL 队列，按样本量和稳定标识排序。
                 - 此证据只可用于 committee_summary、counter_evidence 和 consensus_adjustment.stage。
-                - 不得修改确定性共识分或 Nacos 配置，也不得将 GLOBAL 队列证据描述为当前公司的策略命中记录。
+                - 不得修改确定性共识分或数据库运行配置，也不得将 GLOBAL 队列证据描述为当前公司的策略命中记录。
 
                 输出格式要求：
                 - 必须是合法 JSON 对象。

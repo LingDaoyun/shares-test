@@ -38,17 +38,14 @@ POST /api/ai/trend-analysis
 
 其中 `/api/ai/trend-analysis` 会真实调用当前配置的大模型 Provider，并要求模型按严格 JSON Schema 输出。
 
-当前支持 OpenAI 兼容协议，可通过 Nacos 切换：
+当前支持 OpenAI 兼容协议，可在系统配置页切换。设置写入数据库的 `LLM` 栏目，并对下一次模型调用生效：
 
-```yaml
-research:
-  ai:
-    llm:
-      provider: deepseek
-      api-key: ${DEEPSEEK_API_KEY:}
-      model: deepseek-v4-pro
-      base-url: https://api.deepseek.com
-      response-format: json_object
+```text
+provider=deepseek
+apiKeyEnv=DEEPSEEK_API_KEY
+model=deepseek-v4-pro
+baseUrl=https://api.deepseek.com
+responseFormat=json_object
 ```
 
 实际模型调用时，应要求模型只输出 JSON，并包含以下结构：
@@ -83,7 +80,7 @@ overall_assessment         总体判断
 - 反证和证据缺口识别。
 - 严格结构化输出。
 
-落地时不要把模型名写死在代码里，统一走 Nacos/环境变量：
+落地时不要把模型名写死在业务代码里，统一走数据库运行配置；密钥优先使用环境变量：
 
 ```text
 research.ai.llm.provider=deepseek | openai | moonshot | kimi-code
@@ -100,7 +97,7 @@ DeepSeek 暂按 JSON Object 模式接入，严格字段校验由后端解析 JSO
 
 ## API Key 原则
 
-API Key 不进入 Git，不写入配置文件，不写入前端。后端只能从环境变量或密钥管理服务读取。
+API Key 不进入 Git、不写入普通配置文件，也不出现在前端响应。部署优先通过环境变量或密钥管理服务注入；兼容场景可由系统配置页保存到数据库，但数据库权限和备份必须按密钥数据管理。
 
 当前实现已经接入可配置模型调用入口。如果运行环境没有 LLM API Key，服务会直接阻断并提示配置 Key。
 

@@ -17,14 +17,14 @@ AI 股票研究与交易复盘系统，面向 A 股的长线价值研究、政�
 - `特别关注`：用户主动关注股票后的持续跟踪与分析历史。
 - `交易复盘`：把推荐加入复盘，记录买卖成交、收益结果和策略反馈。
 - `规则目录`：查看和维护可配置规则。
-- `系统配置`：维护各模块参数，部分配置通过 Nacos 下发。
+- `系统配置`：在现有数据库中动态维护大模型与政策源配置，保存后对下一次业务调用生效。
 
 ## 技术栈
 
 ```text
 前端：React 18 + TypeScript + Vite + Tailwind
 后端：Java 17 + Spring Boot 3
-配置：Nacos
+运行时配置：H2/PostgreSQL 数据库
 存储：Docker 默认 H2 文件库，可切换 PostgreSQL/pgvector
 容器：Docker Compose
 AI：OpenAI 兼容接口，当前推荐 DeepSeek 配置
@@ -35,10 +35,9 @@ AI：OpenAI 兼容接口，当前推荐 DeepSeek 配置
 ```text
 apps/api          Spring Boot 后端
 apps/web-react    React 前端
-infra/nacos       Nacos 配置样例
 infra/db/init     PostgreSQL 初始化脚本
 docs              设计文档和补充说明
-scripts           本地启动和配置发布脚本
+scripts           本地启动和运维脚本
 docker-compose.yml
 ```
 
@@ -62,57 +61,22 @@ cd apps/web-react
 npm install
 ```
 
-### 2. 启动基础设施
+### 2. 启动可选基础设施
 
-如果本机没有 Nacos/PostgreSQL/Redis/MinIO，可以用 Compose 启动内置基础设施：
-
-```bash
-docker compose --profile infra up -d postgres redis minio nacos
-```
-
-如果本机已经有 Nacos，只需要保证地址可用，默认地址：
-
-```text
-http://127.0.0.1:8848
-```
-
-### 3. 发布 Nacos 配置
-
-基础配置文件：
-
-```text
-infra/nacos/ai-stock-api.yml
-infra/nacos/ai-stock-api-local.yml
-```
-
-发布默认配置：
+默认 Docker 部署使用持久化 H2 文件库，不需要额外配置服务。需要 PostgreSQL、Redis 或 MinIO 时，可按需启动：
 
 ```bash
-./scripts/publish-nacos-config.sh
+docker compose --profile infra up -d postgres redis minio
 ```
 
-发布本地覆盖配置示例：
+### 3. 配置模型密钥
 
-```bash
-NACOS_CONFIG_FILE=infra/nacos/ai-stock-api-local.yml \
-NACOS_CONFIG_DATA_ID=ai-stock-api-local.yml \
-./scripts/publish-nacos-config.sh
-```
-
-不要把真实 API Key 写入 Git。建议用 Nacos 控制台或 `.env.local` 注入本地密钥。
+复制 `.env.example` 为 `.env.local`，按实际 Provider 设置对应环境变量。不要把真实 API Key 写入 Git。模型名、Base URL 和政策源在系统配置页维护并写入数据库；API Key 也支持数据库保存，但部署环境优先使用环境变量。
 
 ### 4. 启动后端开发服务
 
-使用 Nacos：
-
 ```bash
-NACOS_SERVER_ADDR=127.0.0.1:8848 ./scripts/run-api-local.sh
-```
-
-绕过 Nacos：
-
-```bash
-SPRING_PROFILES_ACTIVE=local mvn -pl apps/api spring-boot:run
+./scripts/run-api-local.sh
 ```
 
 后端默认地址：
@@ -152,7 +116,7 @@ npm run build
 
 cd ../..
 mvn -pl apps/api -DskipTests package
-docker compose up -d --build api web
+docker compose --env-file .env.local up -d --build api web
 ```
 
 查看容器状态：
@@ -247,21 +211,21 @@ K线复核数：120
 常用配置位置：
 
 ```text
-infra/nacos/ai-stock-api.yml         通用 Nacos 配置模板
-infra/nacos/ai-stock-api-local.yml   本地短线/隔夜参数覆盖
-apps/api/src/main/resources          Spring Boot 默认配置
+系统配置页                           大模型与政策源动态配置
+runtime_config_section               动态配置数据库表
+apps/api/src/main/resources          其余稳定的 Spring Boot 配置
 ```
 
-AI 配置推荐使用 DeepSeek：
+AI 配置推荐使用 DeepSeek，可在系统配置页设置：
 
 ```text
-research.ai.llm.provider=deepseek
-research.ai.llm.model=deepseek-v4-pro
-research.ai.llm.base-url=https://api.deepseek.com
-research.ai.llm.response-format=json_object
+provider=deepseek
+model=deepseek-v4-pro
+baseUrl=https://api.deepseek.com
+responseFormat=json_object
 ```
 
-密钥推荐通过环境变量或 Nacos 控制台维护：
+密钥推荐通过环境变量维护：
 
 ```text
 DEEPSEEK_API_KEY=你的密钥
@@ -384,15 +348,18 @@ docker compose up -d --build web
 
 然后强刷浏览器。
 
-### Nacos 配置不生效
+### 系统配置保存后未生效
 
-检查三件事：
+检查以下信息：
 
 ```text
-dataId 是否正确
-group 是否为 AI_STOCK
-容器环境变量 NACOS_SERVER_ADDR 是否指向正确地址
+GET /api/runtime-config 返回的 storage 是否为 database
+对应栏目 revision 是否已增加
+前后端是否连接同一个 H2 卷或 PostgreSQL 实例
+GET /api/ai/llm-config 是否已返回新的有效模型
 ```
+
+详细说明见 `docs/runtime-config.md`。
 
 ### AI 分析不可用
 

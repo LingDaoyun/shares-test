@@ -42,7 +42,7 @@ class AgentCommitteePromptServiceTest {
                 "历史策略反馈只是带样本量的校准证据，不能覆盖公告、财务、流动性和风险否决。",
                 "样本不足 20 时不得建议调整分数；达到 20 时，可靠性修正也只能使用输入中的 ±5 上限。",
                 "最多注入 12 个",
-                "不得修改确定性共识分或 Nacos 配置",
+                "不得修改确定性共识分或数据库运行配置",
                 "committee_summary、counter_evidence 和 consensus_adjustment.stage"
         );
         assertThat(report.consensusScore()).isEqualByComparingTo("72.50");

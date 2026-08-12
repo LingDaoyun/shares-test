@@ -1,15 +1,6 @@
 spring:
   application:
     name: ai-stock-api
-  profiles:
-    default: nacos
-  cloud:
-    nacos:
-      config:
-        import-check:
-          enabled: false
-      discovery:
-        enabled: false
   datasource:
     url: ${JDBC_DATABASE_URL:jdbc:h2:mem:aistock;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE}
     driver-class-name: ${JDBC_DATABASE_DRIVER:org.h2.Driver}

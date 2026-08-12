@@ -15,7 +15,7 @@
 
 ## 1. 配置项
 
-默认配置在 `apps/api/src/main/resources/application.yml`，线上可由 Nacos 覆盖，Nacos 导入见 `apps/api/src/main/resources/application-nacos.yml`。
+这些稳定的数据源配置位于 `apps/api/src/main/resources/application.yml`，部署时可通过同名 Spring Boot 环境变量覆盖。大模型和政策源的动态配置另存于数据库，见 `docs/runtime-config.md`。
 
 | 配置键 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -29,7 +29,7 @@
 | `research.live-data.filing-pdf-max-pages` | `6` | 单份 PDF 最多解析页数，上限 20。 |
 | `research.short-term.chip.tushare.enabled` | `false` | 是否启用 Tushare 筹码认证。 |
 | `research.short-term.chip.tushare.base-url` | `https://api.tushare.pro` | Tushare API 地址。 |
-| `research.short-term.chip.tushare.token` | `${TUSHARE_TOKEN:}` | Tushare Token，必须通过环境变量或 Nacos 注入。 |
+| `research.short-term.chip.tushare.token` | `${TUSHARE_TOKEN:}` | Tushare Token，必须通过环境变量注入。 |
 | `research.short-term.chip.tushare.connect-timeout-ms` | `1200` | Tushare 连接超时。 |
 | `research.short-term.chip.tushare.read-timeout-ms` | `1800` | Tushare 读取超时，也用于并发排队等待。 |
 | `research.short-term.chip.tushare.max-concurrency` | `4` | Tushare 最大并发。 |
@@ -597,7 +597,7 @@ CSV 行字段映射：
 | 字段 | 当前取值 | 说明 |
 | --- | --- | --- |
 | `api_name` | `cyq_perf` | Tushare 每日筹码及胜率接口。 |
-| `token` | Nacos/环境变量注入 | Tushare Token，禁止写入 Git、日志、前端响应。 |
+| `token` | 环境变量注入 | Tushare Token，禁止写入 Git、日志、前端响应。 |
 | `params.ts_code` | Tushare `ts_code` | 如 `600000.SH`。 |
 | `params.trade_date` | `yyyyMMdd` | 交易日期，通常为最近完整交易日。 |
 | `fields` | `ts_code,trade_date,cost_5pct,cost_15pct,cost_50pct,cost_85pct,cost_95pct,weight_avg,winner_rate` | 返回字段。 |
@@ -753,7 +753,7 @@ CSV 行字段映射：
 | K 线完整性 | 腾讯优先，东方财富回退；如果只拿到部分数据，工程标记为 `HISTORICAL_KLINE_PARTIAL` 并拒绝把部分数据当完整证据。 |
 | 筹码认证 | Tushare 未配置、超时、限流或业务错误时，短线筹码展示降级为本地单源，不阻断扫描。 |
 | 巨潮公告 | 先用证券列表解析 `orgId`，失败后按交易所编码猜测；公告和 PDF 失败均不阻断公司主流程。 |
-| Token 安全 | Tushare Token 只来自 Nacos 或环境变量，不能写入仓库、日志、报告或前端响应。 |
+| Token 安全 | Tushare Token 只来自环境变量，不能写入仓库、日志、报告或前端响应。 |
 
 ## 9. 排查建议
 
