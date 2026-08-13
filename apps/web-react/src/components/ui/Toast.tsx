@@ -123,7 +123,7 @@ function ToastRow({ item }: { item: ToastItem }) {
 export function ToastViewport() {
   const toasts = useToastStore((state) => state.toasts)
   return (
-    <div className="pointer-events-none fixed bottom-6 right-6 z-50 flex w-80 flex-col gap-2">
+    <div className="pointer-events-none fixed top-6 right-6 z-50 flex w-80 flex-col gap-2">
       {toasts.map((item) => (
         <div key={item.id} className="pointer-events-auto">
           <ToastRow item={item} />

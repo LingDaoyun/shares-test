@@ -27,6 +27,14 @@ describe('Toast lifecycle', () => {
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
   })
 
+  it('anchors the global notification stack at the top-right', () => {
+    const viewport = host.firstElementChild as HTMLElement | null
+    const classes = viewport?.className.split(/\s+/) ?? []
+
+    expect(classes).toEqual(expect.arrayContaining(['fixed', 'top-6', 'right-6']))
+    expect(classes).not.toContain('bottom-6')
+  })
+
   it('keeps the 3200 ms default for existing unkeyed calls', () => {
     act(() => toast.info('普通通知'))
     expect(host.textContent).toContain('普通通知')
