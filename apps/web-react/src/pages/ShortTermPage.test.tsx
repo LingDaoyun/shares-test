@@ -108,7 +108,11 @@ const emptyReport = {
     coverageRatio: 0.9909,
     executionReliable: true,
     source: 'SINA',
-    fetchedAt: '2026-07-23T14:49:20+08:00'
+    fetchedAt: '2026-07-23T14:49:20+08:00',
+    rawExpectedCount: 5895,
+    rawFetchedCount: 5895,
+    excludedNoPriceCount: 395,
+    rawComplete: true
   },
   reviewedSymbols: [],
   dataCutoffAt: '2026-07-23T14:49:20+08:00',
@@ -338,6 +342,13 @@ function reportWithCandidates(
 }
 
 describe('ShortTermPage manual scan flow', () => {
+  it('keeps raw quote acquisition audit fields in the report contract', () => {
+    expect(emptyReport.coverage.rawExpectedCount).toBe(5895)
+    expect(emptyReport.coverage.rawFetchedCount).toBe(5895)
+    expect(emptyReport.coverage.excludedNoPriceCount).toBe(395)
+    expect(emptyReport.coverage.rawComplete).toBe(true)
+  })
+
   let host: HTMLDivElement
   let root: Root
 

@@ -879,6 +879,10 @@ export interface ShortTermCoverageSnapshot {
   executionReliable: boolean
   source: string
   fetchedAt: string | null
+  rawExpectedCount: number
+  rawFetchedCount: number
+  excludedNoPriceCount: number
+  rawComplete: boolean
 }
 
 export interface QuoteFreshnessSnapshot {
