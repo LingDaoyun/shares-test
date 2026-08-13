@@ -54,6 +54,7 @@ ShortTermService.preliminaryScore 会读取 PE、PB 与参考上限，ShortTermP
 10. 实施采用多 Agent 分阶段开发和独立对抗复核；发现 Critical 或 Important 问题即驳回，任何代码变更都会使旧审查结论失效，修复并重新完成两类复审后才能进入下一阶段。
 11. AI 讨论全链路完成后，短线结果视图默认展示“今日资金去向”，移除“扫描快照”结果卡及其显示开关；旧 scheduled snapshot 只读保留用于历史审计，不再作为新 AI 触发源。
 12. 取消所有短线自动调度：14:30 预选、14:47 尾盘最终和 14:49:50 就绪检查均不再注册或补跑；短线候选只由用户主动手动扫描生成，AI 只由成功手动结果或用户继续讨论触发。
+13. 时间敏感写统一由 GuardUse 深模块完成“业务锁齐全 -> authority 锁后取时 -> 不可复用 ticket -> 同事务 CAS/marker”；业务代码不能拿裸 decision。source 的认证事实与最终讨论用途正交，linkage 不复制 source deadline。
 
 本规格中“多角色讨论”的产品定义是四名角色对同一批快照并行独立审阅、页面并列呈现分歧，再由确定性真值表聚合；首版不让模型角色互相自由追问或多轮辩论。这样既保留多维视角和全过程，也把时延、费用与截止风险固定住。
 
@@ -204,7 +205,7 @@ source type 只定义 MANUAL_SCAN、CONTINUATION。阶段 S 删除 ShortTermScan
 1. 手动扫描在接受 HTTP 请求时先提交持久化 PENDING manual result，再由 worker 原子改为 RUNNING/SUCCEEDED/FAILED；只有 SUCCEEDED 提交后才可能触发 AI。内存 job 只作为缓存，重启后由持久任务恢复，不能成为唯一事实源。
 2. manual result 在首次提交时冻结 aiRequested、featureRevision 和 requestSemanticHash；以后开启 feature 不能追溯触发旧扫描。
 3. after-commit source/linkage 信号只负责低延迟唤醒，不是恢复事实源；其丢失或异常不得回滚、延迟或改写确定性结果。
-4. `ManualAiIdentityReconciler` 对 aiRequested=true、已成功、候选非空且 deterministicStatus 属于 FINAL_READY/CACHE_PREVIEW/RESEARCH_PREVIEW 的每个 MANUAL_SCAN，分别以唯一键幂等 ensure source admission 与 manual linkage。两者的缺失条件彼此独立：已有 admission 不能阻止补 linkage，已有 linkage 不能阻止补 admission；linkage=PENDING 时重新唤醒 linkage worker，admission=PENDING/DEFERRED_CUTOFF 且无 batch 时进入第 15.3 节唯一状态机。它也处理已持久化的 pending continuation，但绝不扫描旧 scheduled snapshot、创建 manual result 或重跑行情。
+4. `ManualAiIdentityReconciler` 对 aiRequested=true、已成功、候选非空且 deterministicStatus 属于 FINAL_READY/CACHE_PREVIEW/RESEARCH_PREVIEW 的每个 MANUAL_SCAN，以固定顺序幂等 ensure source admission，再 ensure 依附该 admission 的 manual linkage；linkage 不得先于 source 独立存在。已有 admission 不能阻止补 linkage；linkage=PENDING 时重新唤醒 linkage worker，admission=MATERIALIZATION_PENDING/DEFERRED_CUTOFF 且无 batch 时进入第 15.3 节唯一状态机。它也处理已持久化的 pending continuation，但绝不扫描旧 scheduled snapshot、创建 manual result 或重跑行情。
 5. AI 表、队列或 materializer 不可用时，确定性结果照常成功；前端根据 admissionStatus/reasonCode 显示 AI_MATERIALIZATION_PENDING 或 AI_UNAVAILABLE，不伪称已入队。
 6. materializer 为 source 的全部确定性候选先写 candidate admission，再按 ruleRank ASC、symbol ASC 选前八为 SELECTED 并创建 round；其余写 NOT_SELECTED_LIMIT、roundId=NULL。前端不能让这些候选永久显示等待。
 
@@ -260,7 +261,7 @@ Source admissionStatus：
 - TIME_AUTHORITY_UNAVAILABLE
 - MATERIALIZATION_FAILED
 
-advisoryUse：
+讨论用途 `materializedAdvisoryUse`（source materialize 前为 null；batch/round 创建时复制）：
 
 - SAME_DAY_RESEARCH
 - RESEARCH_ONLY
@@ -280,7 +281,7 @@ reason 到 source 状态的映射唯一固定：feature/模型配置不可用为
 
 | 实体 | 合法主转换 |
 | --- | --- |
-| Source | MATERIALIZATION_PENDING -> MATERIALIZED/DEFERRED_CUTOFF；DEFERRED_CUTOFF -> MATERIALIZED；PENDING/DEFERRED 也可到 NOT_APPLICABLE/FEATURE_DISABLED/BUDGET_EXHAUSTED/STORAGE_PRESSURE/TIME_AUTHORITY_UNAVAILABLE/MATERIALIZATION_FAILED |
+| Source | MATERIALIZATION_PENDING -> MATERIALIZED/DEFERRED_CUTOFF；DEFERRED_CUTOFF -> MATERIALIZED；MATERIALIZATION_PENDING/DEFERRED_CUTOFF 也可到 NOT_APPLICABLE/FEATURE_DISABLED/BUDGET_EXHAUSTED/STORAGE_PRESSURE/TIME_AUTHORITY_UNAVAILABLE/MATERIALIZATION_FAILED；六个不可逆终态与 MATERIALIZED 无出边 |
 | Batch | QUEUED -> RUNNING；QUEUED/RUNNING -> COMPLETED/PARTIAL/INCOMPLETE/TIMED_OUT/FAILED/CANCELLED |
 | Round | PENDING -> RUNNING；PENDING/RUNNING -> COMPLETED/PARTIAL/INCOMPLETE/TIMED_OUT/FAILED/CANCELLED |
 | Role | QUEUED -> CLAIMED -> RUNNING；QUEUED/CLAIMED/RUNNING -> TIMED_OUT/CANCELLED；RUNNING -> COMPLETED/INCOMPLETE/FAILED/OUTCOME_UNKNOWN |
@@ -298,31 +299,35 @@ executionStatus 的派生使用以下有序且穷尽合同，避免各端自行�
 
 - 一个有界 dispatcher 负责 materialization 和 batch 编排；每个 batch 固定创建四个并行 role session，每个 session 一次分析最多八只候选并为每个 symbol 输出独立 opinion，缺失 symbol 记 INSUFFICIENT，不补开第五个初始会话。模型网络期间不持数据库锁/事务。
 - 每个 role session 有 claimOwner、claimToken、单调 claimEpoch、leaseUntil、heartbeatAt；认领后的 outcome-affecting 写以 roleRunId+token+epoch+RUNNING 和第 15.19 节 content ledger 共同 fencing，旧租约迟到写零行。
-- deadline coordinator 只收口已有用户 batch。`DEADLINE_REACHED(roleContentDeadline)` decision 以 lowerNow 证明到线后投影 TIMED_OUT 并取消 transport；正文只有 `STRICT_BEFORE` decision 的 upperNow 严格早于 deadline 才可持久化。等于/晚于截止的正文不保存，只记有界 discardedLateBytes。
+- deadline coordinator 只收口已有用户 batch。`DEADLINE_REACHED(roleContentDeadline)` GuardUse 以 lowerNow 证明到线后投影 TIMED_OUT 并取消 transport；正文只有 `STRICT_BEFORE` GuardUse 的 upperNow 严格早于 deadline 才可持久化。等于/晚于截止的正文不保存，只记有界 discardedLateBytes。
 - PostgreSQL raw clock 使用 `clock_timestamp()`；H2 使用 non-deterministic `APP_WALL_CLOCK_NOW()` UTC alias。唯一 `app_time_authority_state` 行保存 authorityEpoch、durableRawHighWater、durableGuardHighWater；raw 只记录真实 DB wall clock 并检测回退，guard 保存保守上界。两者当前 epoch 只增，初始化原子 insert/重复键重读；未来余量绝不写 raw，也不拆多行。
-- 启动/恢复读取持久双高水位后，取得两次间隔>=100ms 的推进样本；watchdog 至少每 250ms 用同一 fence 推进。raw 回退/不推进、RTT>250ms、与 nano 间隔偏差>250ms 或 proof age>750ms 均 health=false。NOWAIT 竞争后的只读高水位只能安排重试，不能产生 decision。恢复必须 raw 追平旧 raw highwater 后再取得两次样本；epoch 维护只能把 raw/guard floor 各自提高，不能向过去重置。watchdog 不扫描市场或创建业务事实。
-- 健康样本在发 DB time SQL 前记录 requestStartNano、返回后立即记录 responseEndNano，RTT<=250ms；sampledDbNow 锚定 requestStartNano。proof 固定 instance/epoch/sample/timepoints，只在同 JVM 用；750ms age 从 responseEndNano 到 attemptStartNano 计算，nano 只算差值，不持久化/跨重启比较。
-- 所有硬门禁只经 `TimeAuthorityFence.issue(... GuardSubjectSnapshotV1, HealthProofV1, GuardPredicateV1)`。predicate 是封闭类型，逐字语义：`STRICT_BEFORE(t): upperNow<t`；`ON_OR_BEFORE(t): upperNow<=t`；`ON_OR_AFTER(t)`/`DEADLINE_REACHED(t): lowerNow>=t`；`NOT_IN_LOCAL_WINDOW(start,end): upperNow<start OR lowerNow>=end`。命中左/右分支分别为 BEFORE_WINDOW/AFTER_WINDOW，其余 CLOSED_WINDOW；禁止用 upperNow>=end 提前开窗。AND 组合、SQL adapter 与 Java oracle 使用同一向量。
-- 每个 `FenceAttemptV1` 不可复用。attemptStartNano 必须早于 proof 校验、专用连接获取、candidate 推导、参数构造/绑定和任何 SQL；candidate 固定为 `ceilMicros(proof.sampledDbNow+(attemptStartNano-proof.requestStartNano))`，以 UTC OffsetDateTime 绑定，不能在后续步骤重采样或复用旧 candidate。50ms 总预算覆盖连接等待、candidate、绑定、execute、raw 求值、行锁等待、结果消费、autocommit 与 commit acknowledgement，各步 timeout 只能使用剩余预算。commit ack 后立即记录 responseEndNano；总耗时>50ms、commit unknown、零/多行、epoch/raw 回退、异常/回滚均零 decision，即使高水位已提交。retry 使用全新 attemptId/start/candidate/连接/参数。
-- 同次 statement 内固定：`rawNow=rawDbNow`、`lowerNow=rawNow`、`newRaw=max(oldRaw,rawNow)`、`upperNow=max(oldGuard,rawNow+50ms,candidateNow+50ms)`、`newGuard=upperNow`；epoch 相等且 rawNow>=oldRaw 才更新。raw+50ms 覆盖 DB 向前跳后再等锁，旧 guard 不递归加余量。截止型 permitted decision.businessNow=upperNow；开窗/截止投影型=lowerNow；NOT_IN_WINDOW 命中 BEFORE/AFTER 时分别取 upper/lower，CLOSED rejection 固定 businessNow=null。调用方不能选择。
-- fence 使用无业务锁的专用连接执行唯一 autocommit statement。Stage 0 的 PostgreSQL 模板固定为 `WITH raw AS MATERIALIZED (SELECT clock_timestamp() AS raw_now) UPDATE app_time_authority_state t SET durable_raw_high_water=GREATEST(t.durable_raw_high_water,raw.raw_now), durable_guard_high_water=GREATEST(t.durable_guard_high_water,raw.raw_now+INTERVAL '50 milliseconds',CAST(? AS timestamptz)+INTERVAL '50 milliseconds'), updated_at=raw.raw_now, version=t.version+1 FROM raw WHERE t.authority_key='WALL_CLOCK' AND t.authority_epoch=? AND raw.raw_now>=t.durable_raw_high_water RETURNING t.authority_epoch,raw.raw_now AS lower_now,t.durable_raw_high_water,t.durable_guard_high_water AS upper_now,t.version,CASE <GuardPredicateV1> END AS permitted`。`<GuardPredicateV1>` 只能由封闭 enum 的逐字模板展开。
-- H2 2.2.224 模板固定为一个 JDBC statement：`SELECT authority_epoch,updated_at AS lower_now,durable_raw_high_water,durable_guard_high_water AS upper_now,version,CASE <GuardPredicateV1> END AS permitted FROM FINAL TABLE (MERGE INTO app_time_authority_state t USING (VALUES (APP_WALL_CLOCK_NOW(),CAST(? AS TIMESTAMP(6) WITH TIME ZONE))) s(raw_now,candidate_now) ON t.authority_key='WALL_CLOCK' WHEN MATCHED AND t.authority_epoch=? AND s.raw_now>=t.durable_raw_high_water THEN UPDATE SET durable_raw_high_water=GREATEST(t.durable_raw_high_water,s.raw_now),durable_guard_high_water=GREATEST(t.durable_guard_high_water,DATEADD(MICROSECOND,50000,s.raw_now),DATEADD(MICROSECOND,50000,s.candidate_now)),updated_at=s.raw_now,version=t.version+1)`。alias 返回 UTC OffsetDateTime；candidate 用 UTC `OffsetDateTime`+`JDBCType.TIMESTAMP_WITH_TIMEZONE`，禁止 Timestamp/LocalDateTime/无时区 cast。两库 predicate true/false 均推进双高水位/version并返回一行；epoch/raw rollback 零行，timeout/锁异常零 decision。
-- 时间锁通过连接/timeout 隔离：AI/WATCHDOG 独立小池、lock timeout<=1ms；DETERMINISTIC 有 AI 不可占的保留连接、lock timeout<=50ms；READ_MODEL 独立。fence 前不得持业务锁，单 SQL 不碰业务表。`GuardSubjectSnapshotV1` 冻结 subject/version/claim/status/deadline/config/hash；`GuardDecision` 携带 raw/lower/upper/branch/businessNow/attempt timepoints 且一次性消费。业务 SQL 100ms 内开始，锁后重建 subject 并逐字段/hash 等值，否则丢弃重取，不得持锁取 fence。
-- materialization、INITIAL/continuation、logical tool、旧付费、AiEgressGate、content、seal、正常 freeze/fallback、manual 认证和 eligibility 都消费方向固定的新鲜 decision。唯一例外是 health=false 的无内容 TIME_AUTHORITY_UNAVAILABLE fallback：`trustedFallbackAt=max(commit-visible durableGuardHighWater,batch.materializedAt,manifest 中全部 roundCreatedAt)`；坏 raw/CURRENT_TIMESTAMP 只可写 basis 外 auditObservedAt/createdAt。读不到高水位/manifest 就 503，零 freeze/marker。
+- 启动/恢复读取持久双高水位后，必须取得两次间隔>=100ms 的有效推进样本；watchdog 至少每 250ms 使用专用 `TimeAuthorityProbe` 推进。每次 Probe 先取得专用连接并锁 authority 行，再紧邻 raw SQL 前记录 requestStartNano，raw 返回后立即记录 responseEndNano。当前 JVM/epoch 没有前样本时固定 `candidateNow=rawNow`，该首样本只播种、不能令 health=true；否则固定 `candidateNow=ceilMicros(previous.sampledDbNow+(requestStartNano-previous.requestStartNano))`，并要求 raw 严格推进且 `abs((rawNow-previous.sampledDbNow)-(requestStartNano-previous.requestStartNano))<=250ms`。随后以 `max(oldGuard,rawNow+350ms,candidateNow+350ms)` 更新 guard 高水位，但不写 guard-use ticket；连续 probe 不得在 oldGuard 上递归加余量。
+- Probe 的 sampledDbNow 固定为本次 rawNow并保守锚定 requestStartNano，RTT=`responseEndNano-requestStartNano` 且必须<=250ms。raw 回退/不推进、上述差值超界、RTT>250ms 或最后有效样本 age>750ms 均 health=false；750ms age 从最后有效 responseEndNano 到 GuardUse 的 guardUseStartNano/evaluateStartNano 计算。NOWAIT/timeout 竞争后的只读高水位只能安排重试，不能产生授权。恢复必须 raw 追平旧 raw highwater 后重新播种并取得第二个有效样本；epoch 维护只能把 raw/guard floor 各自提高，不能向过去重置。nano 只算当前 JVM 差值，不持久化/跨重启比较；watchdog 只锁 authority 行，不读取业务表，不扫描市场或创建业务事实。
+- 所有硬门禁都由 `GuardUse` 深模块实现，但 `GuardUse.execute/evaluate` 与其 command/result 类型只在 gate implementation package 可见；业务包跨越的外部 seam 是各领域的单一封闭 interface，例如 `SourceMaterializationModule.resolve(admissionId)`、`ManualCertificationModule.certify(manualResultId)`、`OutcomeFreezeModule.freeze(batchId)`、`ExecutionEligibilityModule.read(manualResultId)` 与 `AiEgressGate.execute(TransportOperationRefV1)`。这些 interface 只收稳定业务键以及确实属于 owner 身份的 opaque ClaimRef，不暴露 predicate、deadline、workloadClass、adapter、lock plan、mutation kind、time proof 或 SQL；删掉 GuardUse 后上述复杂度会重新散落到全部调用点，故该模块 seam 有真实深度。读 interface 只能返回最终只读 DTO（例如 `ExecutionEligibilityV1`），不能返回时间、handle 或可供 mutation/transport 消费的中间授权。
+- 包私有 `GuardUseCommandV1` 只能由 operation-specific facade 的注册 policy 构造。`operationKind -> GuardPredicateV1 -> decision branch -> LockPlanV1 -> MutationAdapterV1/ReadProjectionAdapterV1` 是 Stage 0 封闭矩阵；operationKind 由具体 facade 固定，subject/version/status/deadline/config/hash/requestHash 从锁后业务行重建，claim token/epoch 只从 opaque ClaimRef 解封，调用方不能选择或覆盖任何一项。guardUseId 由 GuardUse 生成，HealthProof 由 `TimeAuthorityHealthMonitor` 提供且构造器包私有、绑定当前 instance/epoch；业务代码不能创建或替换。涉及预算时，MATERIALIZE/旧 PAID_HTTP PREPARE adapter 从本次 lowerNow 内部派生 bucket date，后续 operation 只锁后核验已持久冻结的 budgetBucketDate。业务锁后快照与 authority branch 输入注册 adapter，唯一派生 resultMutationKind 与 mutationId；mutationId 是 `operationKind+businessKey+resultMutationKind+expectedVersion/hash` 的 canonical hash：同一状态迁移重试相同，不同的 DEFER/MATERIALIZE/FAIL/SEAL 转换必然不同。ticket 在 authority commit 前已经保存该唯一结果，业务阶段不得改选。包私有、sealed 的 `GuardUseResultV1` 只允许 COMMITTED、REJECTED_WINDOW、ALREADY_DECIDED、SUBJECT_CHANGED、BUSY_RETRYABLE、TIME_AUTHORITY_UNAVAILABLE、COMMIT_UNKNOWN，并只携带稳定业务 identity/mutationId 与 commitObservation，不暴露 raw/lower/upper/businessNow/branch/ticket/hash；adapter 需要写入的 businessNow、guardUseId、authority identity 均由模块绑定 SQL 参数。业务包只得到各 operation 的最终 domain DTO，任何 DTO 都不能被另一个 mutation 或 transport interface 当作许可。COMMIT_UNKNOWN 先按业务唯一键恢复，绝不重放本次 mutation 或外发。predicate 实现逐字固定：`STRICT_BEFORE(t): upperNow<t`；`ON_OR_BEFORE(t): upperNow<=t`；`ON_OR_AFTER(t)`/`DEADLINE_REACHED(t): lowerNow>=t`；`NOT_IN_LOCAL_WINDOW(start,end): upperNow<start OR lowerNow>=end`。NOT_IN 命中左/右分别为 BEFORE_WINDOW/AFTER_WINDOW，其余 CLOSED_WINDOW；禁止用 upperNow>=end 提前开窗。
+- 每次执行先同时取得业务连接和专用 authority 连接；未取得齐全前不得持锁。业务连接按 operationKind 的固定隔离级别/锁序开启事务，先锁定所有可能阻塞的业务行、预算行、唯一键 guard 行，重建 subject 并校验 version/claim/hash；已有唯一赢家直接 ALREADY_DECIDED，subject 改变直接回滚。真正时间尚未采样，所以业务锁等待跨过截止不会沿用旧授权。没有天然行的未来唯一事实必须在实体创建时预建 guard 行：batch 的 outcome guard、round 的 parent-marker guard；授时后禁止再取得任何未预锁业务行、预算行或唯一键。
+- GuardUse 的连接租约顺序固定为 business pool 后 authority pool；取得 business connection 后若 authority connection 不能在本次连接获取预算内取得，必须释放前者且零事务/锁，禁止反向租约。所有 UUID、canonical hash、序列化 payload、候选纯函数排序和固定 SQL 参数，必须在零锁阶段完成，或在业务锁齐全后、guardUseStartNano 之前基于锁后 snapshot 有界重算；ticket commit 后只允许 policy 预注册的有界 SQL，不得解析模型正文、规范化无界内容、申请连接、生成新业务身份或执行网络调用。
+- 业务锁齐全后重新校验 proof age，记录 `guardUseStartNano` 并推导 `candidateNow=ceilMicros(proof.sampledDbNow+(guardUseStartNano-proof.requestStartNano))`。authority 独立短事务在两库都固定为同一有序算法：① `SELECT app_time_authority_state ... FOR UPDATE` 并核验唯一行/epoch/version；② 锁成功后恰调用一次 PostgreSQL `SELECT clock_timestamp()` 或 H2 `SELECT APP_WALL_CLOCK_NOW()`；③ 在内存按封闭 policy 计算 lower/upper/branch/resultMutation/ticketHash，再用 authority_key+epoch+旧 version+raw 回退谓词执行恰一条 UPDATE，影响行必须为 1；④ 仅当该 branch 对应注册 business mutation 时插入一条 immutable `guard_use_ticket`；⑤ authority commit acknowledgement 后才继续已持锁 business transaction。禁止在 authority 锁前求 raw，也禁止 UPDATE 后补采样。常量固定 `CLOCK_FORWARD_UNCERTAINTY=250ms`、`GUARD_USE_COMMIT_BUDGET=100ms`、`GUARD_MARGIN=350ms`；固定 `rawNow=postLockDbNow`、`lowerNow=rawNow`、`upperNow=max(oldGuard,rawNow+350ms,candidateNow+350ms)`，epoch 相同且 rawNow>=oldRaw 才更新双高水位/version。`evaluate` 执行同样 ①–③/⑤ 但永不插 ticket。旧 guard 不递归加余量；raw 只写 post-lock 真实时间。350ms 同时覆盖健康模型仍允许的最大前跳与 GuardUse 提交预算。predicate true/false 均持久推进时间；只有 mutation 决定保存唯一 ticket。epoch/raw 回退、零/多行、锁/statement timeout、proof 过期或 authority commit unknown 均回滚业务事务、零业务 mutation/读结论。
+- `guard_use_ticket` 只记录 `execute` 的只增 mutation 决定，含 canonical ticket_hash 且不向业务表建 FK；`app_guard_use` 是业务事务中的只增消费事实，复制 ticket_hash，同样无 FK，guardUseId PRIMARY KEY 且 UNIQUE(operationKind,mutationId)。业务 REPEATABLE_READ 快照即使建立在 ticket 提交前，也可用模块内部的不可复制决定插入 app_guard_use；二者事后按 guardUseId/ticketHash 审计。orphan permitted ticket 永不由恢复器消费，ABANDONED 只是“ticketResult=PERMITTED、无匹配 app_guard_use、且该 operationKind 的 guard-use TTL 已过”的派生审计投影；REJECTED ticket 和仍可能提交/commit-unknown 的新 ticket不标 ABANDONED，表本身禁止更新。重试必须新 guardUseId/proof/candidate/两连接。这样 authority 高水位在业务回滚时仍不会降低，而 app_guard_use 与业务 marker/CAS 全有或全无。
+- authority commit 后，GuardUse 只能在已经持锁的业务事务中插 `app_guard_use` 并执行 policy 注册 mutation；不得嵌套 GuardUse。PERMITTED ticket 只能被对应正向 mutation 消费；REJECTED/CLOSED ticket 只有矩阵明确登记的 DEFER/FAIL/拒绝审计 mutation 才可消费，绝不能授权正文、materialization 或 transport。`guardUseStartNano` 到业务 commit acknowledgement 的总预算严格 `<100ms`，等于 100ms 拒绝；lock/statement/transaction timeout 均使用剩余预算。commit 调用前预算耗尽必须回滚；commit acknowledgement 到达时若 monotonic duration 已>=100ms，无论数据库实际提交/回滚都统一返回 COMMIT_UNKNOWN，对外部 transport 零授权；即使数据库稍后出现 marker，也只由恢复器按唯一事实保守收口。非外发 COMMIT_UNKNOWN 只读唯一业务事实，不复用 ticket。业务准入的线性化点是“业务锁后、authority 锁后取得的 raw 与已提交 ticket”，不承诺任意 JVM/OS/DB 暂停下事务在某毫秒前对其他连接可见。`execute/evaluate` 的公开 facade、日志、异常和 metric label 都不得泄露可重放的决定对象、内部 COMMITTED 状态或精确授时值。
+- `GuardUse.evaluate` 以只读业务事务锁定并复核 subject，执行同一 post-lock authority 取时/双高水位推进，但不建 ticket/app_guard_use；模块在仍持 subject 锁时直接调用封闭 `ReadProjectionAdapterV1` 生成最终 DTO，随后释放锁。最终 DTO 可展示但不得被任何 mutation/transport adapter 接受，也不得缓存为未来 eligibility；因此高频 GET 不会制造无上限 ticket 行。精确100ms前仍未返回则丢弃本次读结论并新取。
+- 截止型 businessNow=upperNow；开窗/截止投影型=lowerNow；NOT_IN 命中 BEFORE/AFTER 时分别取 upper/lower，CLOSED rejection 为 null。`upperNow` 的 350ms 包含 250ms forward uncertainty 与 100ms GuardUse 完成余量；调用方不能选择时间方向。若 raw 在业务锁等待或 authority 锁等待期间前跳，post-lock sample 必须看到；若系统在 sample 后发生超出健康模型的异常时钟阶跃，后续 probe 会 health=false，所有新 GuardUse fail closed，不能伪称对任意外部时钟破坏具有硬实时保证。
+- 全局锁序固定为 `BUDGET_GLOBAL -> BUDGET_ACTOR -> BUDGET_BATCH -> USAGE_RESERVATION -> MANUAL_RESULT/ADMISSION -> LINKAGE -> THREAD_GUARD/OUTCOME_GUARD -> ROLE_RUN -> INVOCATION/TOOL_EXECUTION/PAID_OPERATION -> TOOL_CALL -> CONTENT_LEDGER -> PARENT_MARKER_GUARD -> TIME_AUTHORITY`，同层按稳定业务键升序。materializer 在 authority 前插入/锁定按 symbol 排序的 thread/outcome/parent guard；这些未提交准备行在窗口拒绝时随业务事务回滚。authority 永远最后取得、最先释放；任何持 authority 锁的路径不得等待业务行。所有连接在第一把锁前取得。AI 业务池与 AI authority 小池彼此独立，WATCHDOG 另有 authority 保留连接；AI authority lock timeout<=1ms。DETERMINISTIC 使用 AI 不可占的业务/authority 保留连接、timeout<=50ms；READ_MODEL 独立。BudgetSettlement 仍用 GLOBAL->ACTOR->BATCH->reservation，UNKNOWN finalization 第二阶段不反向锁预算。
+- materialization、INITIAL/continuation、logical tool、旧付费、AiEgressGate、content、seal、正常 freeze/fallback、manual 认证和 eligibility 都通过方向固定的 GuardUse。唯一例外是 health=false 的无内容 TIME_AUTHORITY_UNAVAILABLE fallback：该 adapter 也必须先取得全部连接、按全局顺序锁齐 batch/freeze/outcome/parent guard，最后只读 commit-visible authority 高水位，不建立 ticket；`trustedFallbackAt=max(commit-visible durableGuardHighWater,batch.materializedAt,manifest 中全部 roundCreatedAt)`，坏 raw/CURRENT_TIMESTAMP 只可写 basis 外 auditObservedAt/createdAt。authority/高水位/manifest 读不到、锁超时或 identity 不符就回滚并返回 503，零 freeze/marker；它不能作为其他 operation 的通用降级路径。
 - capability closer 要求 immutable manifest 的 N>=1（N=0 是损坏，503 且零写），在一个短事务写无内容 SYSTEM_FALLBACK/TIME_AUTHORITY_UNAVAILABLE、canonical basis、effective fallback，并为恰好 N 个 round ensure parent marker；缺行插 OUTCOME，已有 RAW/OUTCOME 按第 15.7.1 节分支核验且首个 marker 保持不变。任一 identity/highwater/commit 问题全回滚；不得出现 final 无 marker或部分 marker。health 恢复不复活原 source/batch。
 - H2 单实例、PostgreSQL 多实例。AI 使用独立最大 2 连接的小池和有界 executor，不锁 deterministic/scheduled 表；AI schema 不向 deterministic 表建 FK。无法证明隔离则 AI capability fail closed。
 - SAME_DAY 常量固定为 14:47/14:47:20/14:47:55/14:48:30/14:48:44/14:48:45。全天 materialization 用 `NOT_IN_LOCAL_WINDOW(14:47,14:50)`，即 upperNow<14:47 或 lowerNow>=14:50；SAME_DAY 还要求 BEFORE_WINDOW、lowerNow 本地日期=manual.tradeDate/交易日、certifiedAt<14:47。raw=14:49:59.999 即使 upper 越过 14:50 也不开放，raw/lower 达到 14:50 才允许 RESEARCH_ONLY。
-- materializedAt 写 decision.businessNow；14:47 前的 RESEARCH_ONLY 使用尾盘封顶 +15/+75/+105/+119/+120，14:50 后使用相对窗口。所有后续发送/content 使用 STRICT_BEFORE 的 upperNow；收口/effectiveOutcome 使用 DEADLINE_REACHED 的 lowerNow。
-- AiEgressGate 是模型/Tavily/direct/旧付费唯一 transport 入口。marker-null 单赢家在锁后复核 subject 与 `upperNow<latestEgressPermitAt`，写 transportHandoffAt=businessNow 并提交后同步调用 closure；输家 ALREADY_HANDED_OFF。截止拒绝事务把 operation=FAILED_BEFORE_SEND、reservation=SETTLEMENT_PENDING 原子提交，后续固定锁序零结算。旧付费入口的 [14:47:55,14:50) 也用方向化窗口；14:50 只有 lowerNow 到线才可建新 operation。
+- materializedAt 由 MATERIALIZE adapter 在模块内部写 GuardUse.businessNow；14:47 前的 RESEARCH_ONLY 使用尾盘封顶 +15/+75/+105/+119/+120，14:50 后使用相对窗口。所有后续发送/content 的 adapter 使用 STRICT_BEFORE upperNow，收口/effectiveOutcome adapter 使用 DEADLINE_REACHED lowerNow；这些内部时值不返回业务调用方。
+- `AiEgressGate.execute(TransportOperationRefV1)` 是 MODEL/TAVILY/DIRECT/PAID_HTTP 唯一 transport interface；业务包不能直接依赖 Provider/Tavily/direct/paid HttpClient。TransportOperationRef 只含封闭 operationType、稳定 operationId 和需要时的 opaque ClaimRef；requestHash、adapterCode、response sink code、配置 revision 和完整 request snapshot 均从锁后 operation 行唯一取得，调用方不能传或选择。Gate 按注册 policy 验证 operationType/row kind/provider/config/sink 的唯一组合并加载已批准 endpoint、密钥引用、冻结请求快照和内部 adapter；任何组合缺失/漂移均零 handoff、零 transport。内部 TransportCommand 不接收任意 URL、header、request body、lambda、closure 或可执行对象。Gate 先按固定顺序锁 reservation、operation/role 和 marker guard，再 post-lock 授时；唯一业务事务原子写 app_guard_use、marker-null->transportHandoffAt=businessNow 与 handoffGuardUseId。只有 commit acknowledged、总预算内出现包私有 COMMITTED 时，Gate 同一个不可恢复的方法调用才在释放全部数据库锁/连接后直接调用注册 transport adapter 一次；COMMITTED 不返回业务包，业务调用方也没有“稍后发送”入口。adapter 将已建立的响应流交给注册 sink，gate 最终只返回不可作为新请求凭据的 `TransportAttemptOutcomeV1`；commit unknown、回滚或 marker 输家均零 transport。marker 提交后 Gate 内线程暂停属于已合法 handoff 但物理发送延迟；该原调用帧恢复后最多发送一次并记录 TRANSPORT_HANDOFF_DELAYED，任何恢复 owner/reconciler 都只能收口 OUTCOME_UNKNOWN、永不调用 transport adapter。系统承诺锁后授权、提交前/提交不明零外发、marker 单赢家和恢复零重发；不承诺任意 JVM/OS/网络暂停下物理数据包必在同一毫秒前发出。截止拒绝由新的 DEADLINE_REACHED GuardUse 把 operation=FAILED_BEFORE_SEND、reservation=SETTLEMENT_PENDING 原子提交。旧付费入口的 [14:47:55,14:50) 也用方向化窗口；14:50 只有 lowerNow 到线才可建新 operation。
 - effectiveOutcomeAt 后 API 用 DEADLINE_REACHED 的 lowerNow 竞争唯一 freeze；CONTENT_SNAPSHOT/正常 fallback 与每个 round 的已存在或新插 parent marker 在同一事务核验/提交。basis 只承认封存 terminal fact；live raw status 仅作 basis 外审计。唯一赢家未决或数据库不可用返回 503，不显示 PENDING。
 
 ### 8.4 付费调用 at-most-once
 
 每次物理模型请求在发送前创建不可变 invocation：
 
-1. 事务写入 PREPARED，包含稳定 invocationId、roleRunId、invocationNo、callKind、requestHash 和 provider 设置快照。
+1. 事务写入 PREPARED，包含稳定 invocationId、roleRunId、invocationNo、callKind、无密钥 `transportRequestSnapshotJson`、requestHash 和 provider 设置快照；requestHash 必须对该 snapshot 的 canonical UTF-8 字节计算，二者在 PREPARED 后均不可更新。快照保存实际将发送的 system/user/tool messages、工具 schema 与采样参数，但不含 endpoint、Authorization、API key；Gate 只可从该持久事实装配注册 adapter 请求，不能再次运行提示拼装逻辑。
 2. 一个短事务按 GLOBAL -> ACTOR -> BATCH 固定顺序预占预算、插入以 MODEL_INVOCATION + invocationId 唯一的 usage reservation，并以 CAS 把 PREPARED 改为 DISPATCHED；三者必须同事务提交，任何一步失败全部回滚。存在 reservation 的 PREPARED 恢复只读取原 reservation，绝不二次预占。DISPATCHED 表示“已保守计费并获准尝试”，不等于物理请求已经发送。
-3. 进入唯一 transport 前执行第 8.3 节 AiEgressGate；只有 marker-null 单赢家提交 transportHandoffAt 后可调用 HttpClient。因截止/取消且 marker 仍空的唯一拒绝者才在同一事务把 DISPATCHED -> FAILED_BEFORE_SEND、reservation RESERVED -> SETTLEMENT_PENDING；BudgetSettlementReconciler 再以固定预算锁序结算为零。ALREADY_HANDED_OFF 输家既不发送也不释放。收到响应后写 RESPONSE_RECEIVED，并流式/分块保存内容，最终转为 PERSISTED。
+3. 业务执行器只能调用第 8.3 节 `AiEgressGate.execute`，不能调用 HttpClient。Gate 在 marker-null 单赢家收到 commit acknowledgement 且 GuardUse 总预算内出现内部 COMMITTED 后，立即由注册 adapter 进行唯一一次物理请求；公开结果不包含 COMMITTED/permit。COMMIT_UNKNOWN 当前调用零外发，由恢复读取 marker 保守收口。因截止/取消且 marker 仍空的唯一拒绝者才在新的 DEADLINE_REACHED GuardUse 中把 DISPATCHED -> FAILED_BEFORE_SEND、reservation RESERVED -> SETTLEMENT_PENDING；BudgetSettlementReconciler 再以固定预算锁序结算为零。ALREADY_HANDED_OFF 输家既不发送也不释放。Gate 的注册 response sink 收到响应后写 RESPONSE_RECEIVED，并流式/分块保存内容，最终转为 PERSISTED。
 4. 本版本不实现自动 provider-status 查询，也不以相同幂等键重新 POST/生成。transportHandoffAt 已存在而本地结果无法确认时，无论供应商是否宣称接受幂等键，都由 UNKNOWN_FINALIZATION_ONLY 收口；未来若加入只读状态查询，必须另建无生成副作用的 operation/gate 合同。
 5. 供应商不支持幂等键时，PREPARED 或 DISPATCHED 但 transportHandoffAt 为空且 egress gate 未放行的操作可安全收口为 FAILED_BEFORE_SEND；transportHandoffAt 已存在而结果无法确认才标 OUTCOME_UNKNOWN，绝不自动重发。
 6. 本版不在原 role session 上提供重试。用户只能通过“继续讨论”创建新的 batch 和四个新 role session，原 OUTCOME_UNKNOWN 记录保持不可变并明确提示会产生新费用。
@@ -415,7 +420,7 @@ advisoryState：
 1. search_trusted_stock_evidence
 2. search_discussion_history
 
-两个工具共用唯一 `LogicalToolAdmissionGate`。每个原生 tool_call 在校验参数、预占逻辑配额或创建 execution 前先取 STRICT_BEFORE decision，冻结 observedCutoffAt=decision.upperNow，并要求 upperNow 严格早于 session/egress 两个 deadline；越界只写零额拒绝，逻辑/物理计数零增量。后续 AiEgressGate 对每个物理请求独立复核。
+两个工具共用唯一 `LogicalToolAdmissionGate` GuardUse adapter。每个原生 tool_call 在预占逻辑配额或创建 execution 前，先锁 toolCall/role/预算业务行，再用 STRICT_BEFORE post-lock 时间冻结 observedCutoffAt=upperNow，并要求 upperNow 严格早于 session/egress 两个 deadline；越界用注册的拒绝 mutation 写唯一零额拒绝，逻辑/物理计数零增量。后续 AiEgressGate 对每个物理请求独立复核。
 
 ### 11.2 search_trusted_stock_evidence 合同
 
@@ -511,7 +516,7 @@ COMPANY_IR 在没有 symbol-specific registry 记录时返回 SOURCE_UNAVAILABLE
 - 初次讨论 parentRoundId 为空。
 - 用户点击“继续讨论”时必须指定当前查看轮次为父轮次。
 - 全链路只有一个父轮终结定义：`short_term_ai_parent_eligibility` 中该 round 的唯一不可变 marker 已提交才算“已结束”，`roundEndAt=marker.eligibleAt`、basis=RAW_ACCEPTED_TERMINAL|OUTCOME_FREEZE。正常 raw 终态只有 terminalContentCommitNo 已被 content ledger 接纳时，才可在最终 round 聚合事务插入 RAW_ACCEPTED_TERMINAL marker，eligibleAt 固定为同事务写入的 round.completedAt；恢复器只可从这个已提交 completedAt 幂等补插，不能取恢复时刻。未封存 deadline/UNKNOWN/非终态必须等待不可逆 freeze 事务用 frozenAt 插入 OUTCOME_FREEZE marker。`UNIQUE(round_id)` 第一个已提交赢家永久冻结 eligibleAt/basis；后来的 freeze/closer 只重读，不得更新 marker。父链解析、继续讨论校验、HistoryPage 的“已结束”和服务插入校验只读这个 marker，不再从 mutable raw/effective 状态推导 roundEndAt。
-- MANUAL_SCAN 的确定性事务 A/B 与 HTTP 返回路径禁止读取任何 AI 表，也不保存父链结果。after-commit linkage worker 用 AI 专用连接执行一次 REPEATABLE_READ 短事务：第一条只读 SQL 同时取得 parentResolutionAt 并建立 snapshot，随后按 symbol ASC 查询其中 commit-visible marker，再按 eligibleAt DESC、round.createdAt DESC、roundId DESC 唯一选择并 CAS linkage。业务边界是“snapshot 建立前已提交”，不是 manual 时间。父查询/锁局部失败但 linkage store 可写时，先回滚读事务，再独立写 UNAVAILABLE/PARENT_QUERY_FAILED；datasource/linkage 表或 commit 本身不可用时只能 503，恢复后按冻结 linkageDeadlineAt 决议。任何情况都不改 manual。materializer 只消费 committed RESOLVED/UNAVAILABLE，复制冻结值，不重查最新父轮。
+- MANUAL_SCAN 的确定性事务 A/B 与 HTTP 返回路径禁止读取任何 AI 表，也不保存父链结果。after-commit linkage worker 使用 AI 专用双连接执行一次 REPEATABLE_READ GuardUse：业务事务第一条 SQL 按 admission->linkage 锁序建立 snapshot，并取得只作审计的 parentResolutionAt；随后按 symbol ASC 查询该 snapshot 内 commit-visible marker，再按 eligibleAt DESC、round.createdAt DESC、roundId DESC 唯一选择。authority post-lock 时间只用于延期/最终 deadline/CAS 门禁，不改变已经建立的 snapshot 边界。业务边界是“第一条业务 SQL 建立 snapshot 前已提交”，不是 manual 时间或较晚的 authority sample。父查询/锁局部失败但 linkage store 可写时，先回滚，再用新 GuardUse 写 UNAVAILABLE/PARENT_QUERY_FAILED；datasource/linkage 表或 commit 本身不可用时只能 503，恢复后按 admission 的唯一 materializationDeadlineAt 决议。任何情况都不改 manual。materializer 只消费 committed RESOLVED/UNAVAILABLE，复制冻结值，不重查最新父轮。
 - CONTINUATION 必须在创建 source 的独立 AI 事务中读取指定 parentRoundId 的已提交 marker，并把 parentRoundId、resolvedParentRoundEndAt、resolutionBasis 一起冻结到 sourcePayload；materializer 禁止替换成“最新轮”，只验证 marker 主键/同股 thread 关系与冻结值一致，不满足则 MATERIALIZATION_FAILED。
 - CONTINUATION 的候选确定性快照、ruleAction/rank/hash 与 dataCutoffAt 复制指定父轮，不在后台偷偷重跑行情或改用最新手动结果；新联网证据有独立 evidenceCutoffAt。若用户需要新行情基础，必须重新手动扫描形成 MANUAL_SCAN round。
 - 父轮次不能被后续讨论覆盖。
@@ -580,18 +585,18 @@ COMPANY_IR 在没有 symbol-specific registry 记录时返回 SOURCE_UNAVAILABLE
 | [14:47:00, 14:47:20) | 不准入任何新 materialization；14:47 前已准入的 SAME_DAY/RESEARCH_ONLY batch 即使稍后才可见，仍仅可在各自 initialDispatchDeadline 前完成 INITIAL | 晚到或积压 source 冻结为 14:50 后 RESEARCH_ONLY |
 | [14:47:20, 14:47:55) | 未派发 INITIAL 以 INITIAL_DISPATCH_CUTOFF 收口；已运行 role 可在预算内为工具/续写申请 egress permit | 手动扫描不等待 AI |
 | [14:47:55, 14:48:30) | AiEgressGate 不再授予新 permit；已完成 transport handoff 的响应仍可以反压流式入库，只接受 receivedAt < roleContentDeadline 的内容；旧付费入口不创建新 operation | 手动扫描不等待 AI |
-| [14:48:30, 14:48:44) | 取消流式 transport，封闭四个 content ledger；全部封闭后生成 canonical OutcomeBasisV1，并在严格早于 14:48:44 时取得 GuardDecision 后执行 freeze+markers 原子短事务 | 手动扫描继续独立认证 |
+| [14:48:30, 14:48:44) | 取消流式 transport，封闭四个 content ledger；全部封闭后生成 canonical OutcomeBasisV1，并在严格早于 14:48:44 时由 OUTCOME_FREEZE GuardUse 执行 freeze+markers 原子短事务 | 手动扫描继续独立认证 |
 | [14:48:44, 14:48:45) | 不再接纳新的 CONTENT_SNAPSHOT SQL；此前已准入语句以 500ms 为无暂停环境的排空目标，随后只等待已提交赢家 | 手动扫描继续独立认证 |
 | [14:48:45, 14:50:00) | API 读取或尝试创建独立 outcome freeze，并返回不可逆完整/部分/超时状态；若唯一赢家事务未决则 503，closer 可幂等复制同一 hash；旧付费路由保持 503 | 手动结果继续按 14:49:40 门禁认证，不受 AI 锁/连接影响 |
 | [14:50:00, 次日) | 只有 lowerNow>=14:50 且 upperNow<冻结 deadline 的延后 source 才以唯一 CAS materialize 一次 RESEARCH_ONLY；新用户 source 可立即 RESEARCH_ONLY | 仅点击时扫描；AI 不得创建当日买点 |
 
-14:48:45 是“用户不再看到 PENDING”的 SLA，不是虚假的 JDBC commit 屏障：持久层可决议时返回已固定结论，唯一赢家事务未决或数据库不可用时返回 503/PERSISTENCE_UNAVAILABLE。freeze 只纳入四个已封闭 content ledger 中 contentCommitNo<=acceptedThroughCommitNo 的内容，MODEL_CHUNK 还必须 receivedAt<14:48:30；未通过 content gate 或未进入封存范围的写不在 basis 内。14:48:44 是 CONTENT_SNAPSHOT SQL 准入线，不是 commit 可见线：500ms 是无进程/DB 暂停时由 timeout 保证的排空目标，不是任意暂停下绝对最晚可见时刻。14:48:45 尝试 fallback；若数据库在 fallback 的 500ms timeout 内仍无法决议唯一赢家，API 返回 503 而非 PENDING/假 fallback；恢复后只读最终已提交唯一行。读路径与最终 closer 使用同一纯函数和同一 basis hash。
+14:48:45 是“用户不再看到 PENDING”的 SLA，不是虚假的 JDBC commit 屏障：持久层可决议时返回已固定结论，唯一赢家事务未决或数据库不可用时返回 503/PERSISTENCE_UNAVAILABLE。freeze 只纳入四个已封闭 content ledger 中 contentCommitNo<=acceptedThroughCommitNo 的内容，MODEL_CHUNK 还必须 receivedAt<14:48:30；未通过 content gate 或未进入封存范围的写不在 basis 内。14:48:44 是 CONTENT_SNAPSHOT post-lock GuardUse 授权线，不是 commit 可见线：500ms 是无进程/DB 暂停时由 timeout 保证的排空目标，不是任意暂停下绝对最晚可见时刻。14:48:45 尝试 fallback；若数据库在 fallback 的 500ms timeout 内仍无法决议唯一赢家，API 返回 503 而非 PENDING/假 fallback；恢复后只读最终已提交唯一行。读路径与最终 closer 使用同一纯函数和同一 basis hash。
 
 没有用户手动操作时，系统不会自动生成、认证或发布短线结果。故障注入证明 AI 网络、AI 表锁、连接池、队列或恢复器不能阻塞同时发生的 manual result，而不是证明一个已取消的 cron 会运行。
 
 ### 14.2 手动讨论
 
-手动扫描在确定性接口允许的时间均可触发；sourceDecisionAt 对 MANUAL_SCAN 指 manual.deterministicFinalizedAt，对 CONTINUATION 指 admission.createdAt。FINAL_READY 使用认证 decision.businessNow；CACHE_PREVIEW/RESEARCH_PREVIEW 使用其终态 decision.businessNow，不伪造 certifiedAt。是否启动 AI 使用以下有序矩阵：
+手动扫描在确定性接口允许的时间均可触发；sourceDecisionAt 对 MANUAL_SCAN 指 manual.deterministicFinalizedAt，对 CONTINUATION 指 admission.createdAt。FINAL_READY 的认证 adapter 在模块内部写 GuardUse.businessNow；CACHE_PREVIEW/RESEARCH_PREVIEW 的终态 adapter 同样在模块内部写 businessNow，不伪造 certifiedAt。是否启动 AI 使用以下有序矩阵：
 
 | source 提交时状态 | AI 行为 |
 | --- | --- |
@@ -631,7 +636,7 @@ COMPANY_IR 在没有 symbol-specific registry 记录时返回 SOURCE_UNAVAILABLE
 - OpenAPI 3 合同与 React 生成/契约类型；
 - 状态枚举、CHECK、索引、FK 和错误码表。
 
-TimeAuthority 的 canonical DDL 也在 Stage 0 冻结：`app_time_authority_state` 包含 authority_key PRIMARY KEY、authority_epoch BIGINT、durable_raw_high_water TIMESTAMP(6) WITH TIME ZONE、durable_guard_high_water TIMESTAMP(6) WITH TIME ZONE、updated_at TIMESTAMP(6) WITH TIME ZONE、version BIGINT，CHECK authority_key='WALL_CLOCK' AND durable_guard_high_water>=durable_raw_high_water。单行初始化只捕获且核验目标唯一约束，禁止 exists-then-insert。epoch audit 保存旧/新双 floor 且只允许提高。Stage 0 同时提交 PostgreSQL/H2 逐字 fence SQL、FenceAttemptV1/HealthProofV1/GuardDecisionV1/GuardPredicateV1/GuardSubjectSnapshotV1 Schema、direction/businessNow 映射与接口向量；B/C/D 不得自行发明时间语义。
+TimeAuthority/GuardUse 的 canonical DDL 也在 Stage 0 冻结：`app_time_authority_state` 包含 authority_key PRIMARY KEY、authority_epoch BIGINT、durable_raw_high_water TIMESTAMP(6) WITH TIME ZONE、durable_guard_high_water TIMESTAMP(6) WITH TIME ZONE、updated_at TIMESTAMP(6) WITH TIME ZONE、version BIGINT，CHECK authority_key='WALL_CLOCK' AND durable_guard_high_water>=durable_raw_high_water。单行初始化只捕获且核验目标唯一约束，禁止 exists-then-insert。epoch audit 保存旧/新双 floor 且只允许提高。`guard_use_ticket` 只保存 mutation `execute` 的 guard_use_id PK、operation/adapter/resultMutation/mutation/subject/predicate identity、authority epoch/version、candidate/raw/lower/upper/businessNow/branch、PERMITTED|REJECTED、ticket_hash；表本身完全 immutable，生产逻辑禁止把 orphan ticket 恢复消费或写 ABANDONED 状态。`app_guard_use` 保存 guard_use_id PK、operationKind+mutationId 唯一、ticket_hash、相同 identity/时间、business_identity_hash 与 mutation result，和业务 mutation 同事务全有或全无。`evaluate` 只更新同一 authority 高水位并返回封闭 typed read projection，不写两张只增表。Stage 0 同时提交 PostgreSQL/H2 的 `FOR UPDATE -> post-lock clock read -> highwater(+execute ticket) commit` 两套逐字事务模板，以及包私有 HealthProofV1/GuardUseCommandV1/GuardedReadCommandV1/GuardUseResultV1/GuardPredicateV1/LockPlanV1/TransportCommandV1，公开的最小 operation-specific interface/领域 DTO、TransportOperationRefV1/TransportAttemptOutcomeV1 合同和架构测试；内部类型禁止 Jackson/JPA/Java serialization，HealthProof 构造器仅 monitor 可见，TransportCommand 不能承载 URL/header/body/lambda/closure，GuardUseResult/COMMITTED 不能导出 gate implementation package。Stage 0 还冻结 mutation/read/transport policy 矩阵、direction/businessNow 映射、两张只增表及 outcome/parent guard DDL；B/C/D/E 不得自行发明时间、锁序或 transport 语义。
 
 batch/round/role 的 `effective_status` CHECK 只允许 COMPLETED、PARTIAL、INCOMPLETE、TIMED_OUT、FAILED、CANCELLED 或 null；OutcomeBasisV1 effectiveRoleStates 另固定 rawFactKind/rawStatus/terminalContentCommitNo/effectiveReasonCode，封存 UNKNOWN 映射 INCOMPLETE，UNSEALED 固定 rawStatus=null。
 
@@ -666,17 +671,17 @@ batch/round/role 的 `effective_status` CHECK 只允许 COMPLETED、PARTIAL、IN
 - UNIQUE(actor_id, idempotency_key)；
 - CHECK：FINAL_PENDING 必须有 report_json/hash/payload_committed_by_at、deterministic_finalized_at/certified_at 均为空，且 result_status=RUNNING；FINAL_READY 必须另有 certified_at 与 deterministic_finalized_at，两者相等且 result_status=SUCCEEDED；DATA_BLOCKED/NO_TRADE/CACHE_PREVIEW/RESEARCH_PREVIEW 为 SUCCEEDED 的确定性终态，deterministic_finalized_at 必填但 certified_at 必须为空；FAILED/TIMED_OUT/NOT_EVALUATED 不得伪造确定性终态或认证时间。
 
-POST 先提交 PENDING；worker 用有效 decision.businessNow、claim token/epoch/lease CAS 认领 RUNNING，心跳/report 受 fence。恢复器可认领 PENDING/过期 RUNNING；health 无效时可持久化非执行报告但不得 FINAL_READY。超时原子 TIMED_OUT，旧 worker 迟到写零行。
+POST 先提交 PENDING；worker 用 CLAIM_MANUAL GuardUse 的 businessNow、claim token/epoch/lease CAS 认领 RUNNING，心跳/report 均通过注册 GuardUse adapter。恢复器可认领 PENDING/过期 RUNNING；health 无效时可持久化非执行报告但不得 FINAL_READY。超时原子 TIMED_OUT，旧 worker 迟到写零行。
 
 manual result 不复用即将删除的 scheduled store，而是迁移其两阶段语义：
 
-1. ShortTermFinalResultGate manual 分支使用真实窗口，不再 enforceDeadline=false。health 正常时以该 gate 固定的 decision.businessNow 写非执行终态 deterministicFinalizedAt/completedAt；不读 AI 表/父链，certifiedAt=null。health 无效只可 DATA_BLOCKED/TIME_AUTHORITY_UNAVAILABLE，不伪造点时状态。
-2. 对候选可执行报告，事务 A 写 canonical report_json、SHA-256、blocked reasons、dataCutoffAt、payloadCommittedByAt，并以 fence 将 NOT_EVALUATED -> FINAL_PENDING；result_status 仍为 RUNNING。
-3. 独立 REQUIRES_NEW 事务 B 重读同一 hash/epoch，消费 ON_OR_BEFORE(14:49:30) decision；以 decision.upperNow 同时写 certificationAttemptedAt/certifiedAt/deterministicFinalizedAt、FINAL_READY/SUCCEEDED。事务 A/B/HTTP 禁止查询 AI 表。health/截止失败收口 DATA_BLOCKED/TIME_AUTHORITY_UNAVAILABLE。14:49:30 为内部线，事务 timeout<=500ms；是否仍可执行另看 executionEligibility。
+1. ShortTermFinalResultGate manual 分支使用真实窗口，不再 enforceDeadline=false。health 正常时以注册 GuardUse 的 businessNow 写非执行终态 deterministicFinalizedAt/completedAt；不读 AI 表/父链，certifiedAt=null。health 无效只可 DATA_BLOCKED/TIME_AUTHORITY_UNAVAILABLE，不伪造点时状态。
+2. 对候选可执行报告，事务 A 用 MANUAL_STAGE GuardUse 写 canonical report_json、SHA-256、blocked reasons、dataCutoffAt、payloadCommittedByAt，并将 NOT_EVALUATED -> FINAL_PENDING；result_status 仍为 RUNNING。
+3. 独立 MANUAL_CERTIFY GuardUse 重读同一 hash/epoch，使用 ON_OR_BEFORE(14:49:30)；以 upperNow 同时写 certificationAttemptedAt/certifiedAt/deterministicFinalizedAt、FINAL_READY/SUCCEEDED。事务 A/B/HTTP 禁止查询 AI 表。health/截止失败收口 DATA_BLOCKED/TIME_AUTHORITY_UNAVAILABLE。14:49:30 为内部线，业务锁等待发生在 post-lock 取时前；GuardUse 总预算<100ms，物理 commit 未决为 503/恢复读唯一事实。是否仍可执行另看 executionEligibility。
 4. 进程在 A/B 之间崩溃时，恢复器在 14:49:30 前可按同 hash/epoch 完成 B；到线后必须原子 FINAL_PENDING -> DATA_BLOCKED，reason=FINAL_CERTIFICATION_INTERRUPTED，不能把仅 stage 的 payload 恢复成 READY。
 5. 事务 B 后线程暂停或响应丢失不会重复认证：同 epoch/hash 返回已持久结果；GET 在公开截止后发现 proof 缺失或不一致时 fail closed 为 DATA_BLOCKED。Stage E 用真实推进时间、A 后崩溃和 B 提交/响应丢失验证该负向语义。
 
-`FINAL_READY` 是持久认证事实。读 API 以 ON_OR_BEFORE(deterministicDeadlineAt) 的 upperNow 计算 executionEligibility；只有 proof 完整且 decision permitted 才 ELIGIBLE，health 无效优先 TIME_AUTHORITY_UNAVAILABLE。迟可见 FINAL_READY 只作历史，不会在截止后重开。
+`FINAL_READY` 是持久认证事实。读 API 以一次性 GuardUse.evaluate 的 ON_OR_BEFORE(deterministicDeadlineAt) upperNow 直接生成 `ExecutionEligibilityV1`；只有 proof/subject 完整且 permitted 才 ELIGIBLE，最终 DTO 只能展示且不能授权 mutation/transport，health 无效优先 TIME_AUTHORITY_UNAVAILABLE。迟可见 FINAL_READY 只作历史，不会在截止后重开。
 
 reconciler 只为 ai_requested=true、result_status=SUCCEEDED、deterministic_status 属于 FINAL_READY/RESEARCH_PREVIEW/CACHE_PREVIEW 且候选非空的结果处理 admission；NO_TRADE、DATA_BLOCKED、扫描 FAILED/TIMED_OUT 和空候选永不收费。之后补 token/开启 feature 不能追溯改变 ai_requested。
 
@@ -686,18 +691,21 @@ requestSemanticHash 必须复用第 7.3 节的当前策略规范化器：先移�
 
 连接确定性持久源与 AI materializer：
 
+本节状态机文字中的 `PENDING` 是 `MATERIALIZATION_PENDING` 的简称，`DEFERRED` 是 `DEFERRED_CUTOFF` 的简称；canonical enum、DDL、JSON 和 API 只使用完整名称，不得另建 PENDING/DEFERRED 枚举值。
+
 - admission_id；
 - source_type：MANUAL_SCAN、CONTINUATION；
 - source_key；
 - actor_id；
 - normalized_request_hash；
-- source_payload_json，字段白名单；CONTINUATION 保存 parentRoundId、resolvedParentRoundEndAt、resolutionBasis、question 和 questionFingerprint；MANUAL_SCAN 在 linkage 终态后按 symbol 镜像已冻结的 resolvedParentRoundId/null、resolvedParentRoundEndAt、resolutionBasis、resolutionCode，不允许 materializer 动态改写；
+- source_payload_json，字段白名单；CONTINUATION 在 source 创建事务保存 parentRoundId、resolvedParentRoundEndAt、resolutionBasis、question 和 questionFingerprint；MANUAL_SCAN 创建时只保存候选/请求快照，不写父链，materializer 只从 committed linkage 复制 resolvedParentRoundId/null、resolvedParentRoundEndAt、resolutionBasis、resolutionCode 到新 round，禁止回写 sourcePayload 或动态重查父轮；
 - admission_status；
-- advisory_use；
+- certification_kind：FINAL_READY_CERTIFIED、NON_EXECUTION_SOURCE，创建后不可更新；
+- materialized_advisory_use，可空；只在成功 materialization 的唯一事务由 null 写 SAME_DAY_RESEARCH 或 RESEARCH_ONLY，之后不可更新；
 - reason_code、reason_message；
 - source_effective_at，NOT NULL；MANUAL_SCAN 取 manual.deterministic_finalized_at，CONTINUATION 取 admission.created_at；
-- source_certified_at，可空，仅 SAME_DAY_RESEARCH 必填且必须等于 source_effective_at；
-- source_certification_cutoff、initial_dispatch_deadline，SAME_DAY_RESEARCH 必填；
+- source_certified_at，可空；FINAL_READY_CERTIFIED 必填且等于 source_effective_at，NON_EXECUTION_SOURCE 必须为空，创建后不可更新；
+- source_certification_cutoff；FINAL_READY_CERTIFIED 必填并创建时冻结，NON_EXECUTION_SOURCE 必须为空；
 - materialized_batch_id，可空；
 - materialization_attempts、next_retry_at、deferred_window_date、materialization_deadline_at；
 - source_outcome_at；令 D 为 source_effective_at 的 Asia/Shanghai 日期：本地时刻<14:47 固定 `min(source_effective_at+120s,D 14:48:45)`；位于 [14:47,14:50) 固定等于 source_effective_at（该段只允许 MANUAL_SCAN）；>=14:50 固定 +120s。CONTINUATION 黑窗内不建 source；初始 materialization_deadline_at=source_outcome_at，next_retry_at/deferred_window_date=null；
@@ -705,32 +713,30 @@ requestSemanticHash 必须复用第 7.3 节的当前策略规范化器：先移�
 - UNIQUE(source_type, source_key)；
 - INDEX(admission_status, updated_at)。
 
-DDL CHECK 仅固定本表可证明的关系：advisory_use=SAME_DAY_RESEARCH 时 source_type=MANUAL_SCAN、source_certified_at/source_certification_cutoff/initial_dispatch_deadline 均非空且 source_certified_at=source_effective_at；RESEARCH_ONLY 时 source_certified_at/source_certification_cutoff 均为空。materializer 在同一事务重读 source_key 对应 manual 并校验 deterministicStatus=FINAL_READY/hash/proof，不得为缓存/非交易日预览伪造认证时间。
+DDL CHECK 仅固定本表可证明的关系：FINAL_READY_CERTIFIED 时 source_type=MANUAL_SCAN、source_certified_at/source_certification_cutoff 均非空且 source_certified_at=source_effective_at；NON_EXECUTION_SOURCE 时二者均为空。materialized_advisory_use=SAME_DAY_RESEARCH 时必须是 FINAL_READY_CERTIFIED；RESEARCH_ONLY 允许保留真实认证事实。MATERIALIZATION_PENDING/DEFERRED_CUTOFF/所有失败终态的 materialized_advisory_use 必须为空，MATERIALIZED 必须非空。materializer 在同一事务重读 source_key 对应 manual 并校验 deterministicStatus/hash/proof，不得为缓存/非交易日预览伪造认证时间。FINAL_READY source 即使延期为 RESEARCH_ONLY，也永久保留 certificationKind/certifiedAt/cutoff；延期不得擦除真实认证事实。initialDispatchDeadline 只在 batch/role materialize 时按第8.3节公式派生，不在未物化 source 保存或冒充既成执行窗口。
 
 `deferredWindowDate` 只能从 null 写为 D 一次，之后不可更新、清空或改日。只有 PENDING、无 batch、deferredWindowDate=null、处理时 lowerNow 的本地日期=D 且 lowerNow<D14:52，并满足以下之一，才具一次延期资格：(A) sourceEffectiveAt 位于 D[14:47,14:50)；(B) sourceEffectiveAt<D14:47 且 sourceOutcomeAt>=D14:47，即原窗口确实与黑窗相交。首次延期 CAS 原子写 DEFERRED_CUTOFF/AI_DEFERRED_CUTOFF、deferredWindowDate=D、nextRetryAt=D14:50、materializationDeadlineAt=D14:52；三个字段以后均不可推进。10:00 或 14:44:59 等在 14:47 前已到期的 source 无延期资格。
 
-materializer、reconciler 和 `/batches/by-source` 必须调用同一 `SourceMaterializationStateMachine`，使用同一次方向化 GuardDecision，按下列顺序第一条命中即停止：
+materializer、reconciler、linkage worker 和 `/batches/by-source` 必须调用同一 `SourceMaterializationStateMachine`/GuardUse adapter，按下列顺序第一条命中即停止；定义 `parentInputReady`：CONTINUATION 因 source_payload 已冻结父三元组恒为 true；MANUAL_SCAN 仅在 linkage=RESOLVED/UNAVAILABLE 时为 true。MANUAL_SCAN mutation 使用 admission->linkage 固定锁序，CONTINUATION 只锁 admission 与 source payload 所指的 immutable marker guard，不访问不存在的 manual linkage：
 
-1. 已有已提交 batch 或 status=MATERIALIZED：只返回唯一 batch，禁止截止投影；
-2. health proof 无效：收口 TIME_AUTHORITY_UNAVAILABLE；数据库不可读写返回 503；
-3. status=DEFERRED_CUTOFF 且 `lowerNow>=materializationDeadlineAt`：优先于任何黑窗判断，CAS 为 MATERIALIZATION_FAILED/MATERIALIZATION_DEADLINE_MISSED，绝不延期；
-4. status=MATERIALIZATION_PENDING、满足一次延期资格，且当前 CLOSED_WINDOW 或 `lowerNow>=sourceOutcomeAt`：执行唯一 PENDING->DEFERRED CAS；
-5. status=MATERIALIZATION_PENDING 且 `lowerNow>=sourceOutcomeAt`、第 4 条不成立：CAS 为 MATERIALIZATION_FAILED/MATERIALIZATION_DEADLINE_MISSED；
-6. status=DEFERRED_CUTOFF 且 deadline 未到：CLOSED_WINDOW 或 lowerNow<nextRetryAt 时保持明确延期且零字段更新；AFTER_WINDOW、lowerNow>=nextRetryAt 且 `upperNow<materializationDeadlineAt` 时，linkage 已 RESOLVED/UNAVAILABLE 才 materialize 为 RESEARCH_ONLY，linkage=PENDING 则保持 DEFERRED；
-7. status=MATERIALIZATION_PENDING、`upperNow<sourceOutcomeAt` 且 BEFORE_WINDOW/AFTER_WINDOW：linkage 终态才可 materialize；BEFORE_WINDOW 且满足 certified/tradeDate 才可 SAME_DAY，其他只能 RESEARCH_ONLY；linkage=PENDING 保持 PENDING；
-8. 所有 materialization 必须满足 BEFORE_WINDOW 或 AFTER_WINDOW，且 `upperNow<materializationDeadlineAt`。精确到 deadline 失败，等号处不建 batch。
-9. 若 lowerNow 尚未 reached 但 upperNow 已不再 strictlyBefore 某 deadline，处于最多 50ms 的保守不确定带：零 materialization、零时间字段更新，保持当前 PENDING/DEFERRED；lowerNow 到线后必须由第 3/4/5 条决议。该带不能被当成 permit，也不能延长持久 deadline。
+1. 存在 committed batch：identity/admission 一致则只读返回；不一致 503 CORRUPTED_SOURCE_IDENTITY。status=MATERIALIZED 但无 committed batch 时 503 CORRUPTED_MATERIALIZATION，不投影/修复；
+2. status 属于 NOT_APPLICABLE、FEATURE_DISABLED、BUDGET_EXHAUSTED、STORAGE_PRESSURE、TIME_AUTHORITY_UNAVAILABLE、MATERIALIZATION_FAILED：原样返回且零更新。只有 PENDING/DEFERRED 才继续；
+3. health proof 无效：PENDING/DEFERRED 收口 TIME_AUTHORITY_UNAVAILABLE；数据库不可决议返回 503；
+4. status=DEFERRED_CUTOFF：lowerNow>=materializationDeadlineAt 优先失败；CLOSED_WINDOW 或 lowerNow<nextRetryAt 原样返回；AFTER_WINDOW、upperNow<deadline 时 parentInputReady 则 materialize RESEARCH_ONLY，MANUAL linkage=PENDING 原样返回；`lowerNow<deadline<=upperNow` 为保守不确定带，零更新；
+5. status=PENDING 且具一次延期资格：若 lowerNow>=D14:52 直接失败且不写延期字段；CLOSED_WINDOW 原子写延期三元组并返回 DEFERRED；AFTER_WINDOW 且 upperNow<D14:52 时，MANUAL linkage=PENDING 原子写延期三元组并返回 DEFERRED，parentInputReady 则在同一 `PENDING_EXTENDED_MATERIALIZE` 事务写延期三元组、materialized_advisory_use=RESEARCH_ONLY、唯一 batch/round/role/seal 并直接变 MATERIALIZED，不要求第二次调用；`lowerNow<D14:52<=upperNow` 零更新；
+6. 普通 PENDING：lowerNow>=sourceOutcomeAt 失败；upperNow<sourceOutcomeAt 且 BEFORE_WINDOW/AFTER_WINDOW 时，parentInputReady 才 materialize，MANUAL linkage=PENDING 原样返回。BEFORE_WINDOW 只有 certificationKind=FINAL_READY_CERTIFIED、tradeDate 与认证事实都匹配才写 SAME_DAY_RESEARCH，其他写 RESEARCH_ONLY；`lowerNow<sourceOutcomeAt<=upperNow` 零更新；
+7. 所有 materialization 必须由 GuardUse post-lock 时间证明 BEFORE_WINDOW/AFTER_WINDOW 且 upperNow<最终 materializationDeadlineAt。等号失败。source、batch、round 的 materialized advisory use 必须在同一事务写同值且以后不可更新。
 
-任一 CAS/唯一赢家事务 500ms 内未决返回 503，不返回 PENDING/臆造失败。四个冻结时间均由 source 日期 D 决定；D+1 黑窗没有第二次延期资格，D 日 deadline 已过的 PENDING/DEFERRED 在次日任何时刻只会失败。用户仍要研究必须显式新建 CONTINUATION。14:47:20 仅约束已存在 role 的 INITIAL；CACHE_PREVIEW/RESEARCH_PREVIEW 保持 sourceCertifiedAt=null。
+任一 CAS/唯一赢家事务 500ms 内未决返回 503，不返回 PENDING/臆造失败。14:50 第一次且唯一一次处理一个具延期资格、parentInputReady 的 PENDING source，必须在该调用中直接 MATERIALIZED/RESEARCH_ONLY；并发输家重读唯一 batch。四个冻结时间均由 source 日期 D 决定；D+1 黑窗没有第二次延期资格，D 日 deadline 已过的 PENDING/DEFERRED 在次日任何时刻只会失败。用户仍要研究必须显式新建 CONTINUATION。14:47:20 仅约束已存在 role 的 INITIAL；CACHE_PREVIEW/RESEARCH_PREVIEW 的 certificationKind=NON_EXECUTION_SOURCE、sourceCertifiedAt=null。
 
 ### 15.3.1 short_term_manual_ai_linkage
 
 manual 与 AI 父链之间使用独立 linkage 行，禁止把 AI 查询塞回确定性事务：
 
-- manual_result_id PRIMARY KEY（保存已校验的 deterministic business key，不建 FK）；source_decision_at（复制 manual.deterministicFinalizedAt，仅作审计）；linkage_deadline_at 固定等于对应 admission.materialization_deadline_at，创建后不可更新；
+- manual_result_id PRIMARY KEY（保存已校验的 deterministic business key，不建 manual FK）；admission_id UNIQUE NOT NULL，保存已校验的 source admission 业务键且创建后不可更新；source_decision_at（复制 manual.deterministicFinalizedAt，仅作审计）。linkage 不复制 deadline，唯一权威始终是 admission.materialization_deadline_at；
 - linkage_status：PENDING、RESOLVED、UNAVAILABLE；parent_resolution_at（linkage REPEATABLE_READ 快照中的数据库时间）；resolved_parent_rounds_json；error_code；resolved_at；version；
 - resolved_parent_rounds_json 按 symbol ASC，每项固定 symbol、resolvedParentRoundId UUID/null、resolvedParentRoundEndAt 时间/null、resolutionBasis RAW_ACCEPTED_TERMINAL|OUTCOME_FREEZE|null、resolutionCode；
-- manual after-commit 与 reconciler 都可幂等 ensure PENDING；admission/linkage 新建使用同一 `ManualAiIdentityFactory`。两者都缺时计算同一初始 deadline；只缺 linkage 时必须复制当前 committed admission.materializationDeadlineAt（包括已发生的一次延期），只缺 admission 时其初始 deadline 必须等于既有尚未延期 linkage 值。admission 执行 PENDING->DEFERRED 时，同一事务若 linkage 已存在则把 linkageDeadlineAt 从原值一次写 D14:52；若 linkage 缺失，未来 ensure 必须从已延期 admission 复制 D14:52。除此不可更新。worker 在 REPEATABLE_READ snapshot 解析 marker。parent 查询局部失败但 linkage 可写时，先回滚再以独立事务 CAS UNAVAILABLE/PARENT_QUERY_FAILED。datasource/linkage 表/独立写不可达或 commit unknown 时不能伪称 UNAVAILABLE，投影端 503；恢复后 lowerNow<linkageDeadlineAt 才重做 snapshot，到线则 LINKAGE_DEADLINE_EXPIRED，不关联晚到 parent。任何异常不得传播到 manual HTTP；
+- manual after-commit、GET 与 reconciler 收到任一唤醒都先幂等 ensure admission，再以 admissionId ensure PENDING linkage；禁止 linkage 在 admission 缺失时独立存在。linkage worker 的 GuardUse 先锁 admission 再锁 linkage，先执行 source deferral/expiry 决议，再以更新后的唯一 materializationDeadlineAt 决定是否解析。只有 `lowerNow>=admission.materializationDeadlineAt` 才可写 LINKAGE_DEADLINE_EXPIRED；满足延期资格必须先把 admission 三元组一次写到 D14:50/D14:52。若本次 GuardUse 已执行延期 mutation，因封闭 policy 一次 GuardUse 只能消费一个 mutation，worker 提交后立即以新 guardUseId 重进解析/过期决议；这不是 materializer 的 14:50 单调用要求，且两次都读取同一 source 权威 deadline。worker 再在同一 REPEATABLE_READ 事务建立 parent marker snapshot；局部 parent 查询失败时先回滚，再以新的 GuardUse 同样按 admission->linkage 锁序写 UNAVAILABLE/PARENT_QUERY_FAILED。datasource/linkage 表或 commit unknown 时不能伪称 UNAVAILABLE，投影端 503。任何异常不得传播到 manual HTTP；
 - source admission/materializer 只消费 committed RESOLVED/UNAVAILABLE linkage。linkage 尚 PENDING 时只等待该用户事件的 worker，不创建 batch；进入 14:47 黑窗则 source 截止投影仍优先变 DEFERRED_CUTOFF，linkage 后来完成也只能在固定 materializationDeadlineAt 前作为 RESEARCH_ONLY，过线即 MATERIALIZATION_FAILED，不跨日自动复活。
 
 ### 15.4 short_term_ai_candidate_admission
@@ -767,12 +773,13 @@ manual 与 AI 父链之间使用独立 linkage 行，禁止把 AI 查询塞回�
 - prompt_version；
 - llm_config_revision、provider、model、model_settings_json，字段白名单且不含 key；
 - execution_status；
-- advisory_use；
+- advisory_use，等于 source.materialized_advisory_use；
 - queue_admission；
 - candidate_batch_snapshot_json；
 - candidate_batch_hash；
 - data_cutoff_at；
-- materialized_at，由 materializer 准入 decision.businessNow 冻结，四个 role deadline 均由它派生；
+- materialized_at，由 MATERIALIZE adapter 在模块内部按 GuardUse.businessNow 冻结，四个 role deadline 均由它派生；
+- budget_bucket_date，由 MATERIALIZE adapter 在模块内部把同一 GuardUse.lowerNow 转 Asia/Shanghai 日期冻结；调用方不接触 lowerNow；
 - initial_dispatch_deadline、latest_egress_permit_at、role_content_deadline、freeze_publish_admission_deadline、effective_outcome_at，均由同一 materialized_at 与第 8.3 节公式派生并复制给四个 role；
 - effective_status、outcome_basis_hash、outcome_fixed_at；其中 execution_status 是 raw 聚合状态，effective_status 是可空截止投影；
 - round_identity_manifest_json、round_identity_manifest_hash：非空数组，条数必须等于 batch 被选 round 数且至少 1；按 roundId ASC 冻结每个 roundId/threadId/symbol/roundCreatedAt/roundIdentityHash，随 batch/round 创建同事务写入，之后不可修改；freeze/fallback 即使运行表被锁也只从该快照/GuardSubjectSnapshot 取 marker 身份；
@@ -796,7 +803,7 @@ manual 与 AI 父链之间使用独立 linkage 行，禁止把 AI 查询塞回�
 - phase：MANUAL、CONTINUATION；
 - execution_status；
 - advisory_state；
-- advisory_use；
+- advisory_use，等于 batch/source.materialized_advisory_use；
 - candidate_snapshot_json；
 - candidate_snapshot_hash；
 - candidate_material_hash；
@@ -820,10 +827,10 @@ manual 与 AI 父链之间使用独立 linkage 行，禁止把 AI 查询塞回�
 
 父资格是一次写入的 commit-visible marker：
 
-- marker 是与 outcome freeze 同类的独立只增事实表，故意不向 round/thread/role 建 FK；字段包含 round_id PRIMARY KEY、batch_id、thread_id、symbol、round_created_at、round_identity_hash、eligible_at、basis、basis_ref_id、outcome_basis_hash 可空、freeze_revision 可空、created_at；RAW marker 的 outcome_basis_hash/freeze_revision 必须为空，OUTCOME_FREEZE 必须非空；
+- marker 是与 outcome freeze 同类的独立只增事实表，故意不向 round/thread/role 建 FK；字段包含 round_id PRIMARY KEY、batch_id、thread_id、symbol、round_created_at、round_identity_hash、eligible_at、basis、basis_ref_id、outcome_basis_hash 可空、freeze_revision 可空、created_at；RAW marker 的 outcome_basis_hash/freeze_revision 必须为空，OUTCOME_FREEZE 必须非空且 `freeze_revision=1`；
 - basis 只允许 RAW_ACCEPTED_TERMINAL、OUTCOME_FREEZE；RAW basis_ref_id=role/content terminal aggregate identity，FREEZE basis_ref_id=outcome freeze ID；
-- eligible_at/thread_id/symbol/round_created_at NOT NULL，CHECK eligible_at>=round_created_at；生产 Repository 无 update/delete。写入前由服务从受 fence 的 immutable manifest 验证 batch/round/thread/symbol/identity hash 并冻结，materializer/continuation 再以 marker 自身值校验父子，不回锁原 round；
-- raw round 聚合终态只有其每个受承认 role terminalContentCommitNo 均在已接纳范围，才在同一事务写 completedAt 并插 RAW marker；否则 freeze 插 OUTCOME marker。两个路径以 round_id 唯一键竞争，第一个 committed marker 永久获胜：遇既有 RAW 只核验共同 round identity/RAW basisRef/eligibleAt 并保留它，不要求其等于后来 freeze hash/revision；遇既有 OUTCOME 才核验完整 freeze hash/revision/eligibleAt。任一身份不符整笔回滚 503；
+- eligible_at/thread_id/symbol/round_created_at NOT NULL，CHECK eligible_at>=round_created_at；生产 Repository 无 update/delete。写入前由 RAW_TERMINAL/OUTCOME_FREEZE GuardUse 从 immutable manifest 验证 batch/round/thread/symbol/identity hash 并冻结，materializer/continuation 再以 marker 自身值校验父子，不回锁原 round；
+- raw round 聚合终态只有其每个受承认 role terminalContentCommitNo 均在已接纳范围，才在同一事务写 completedAt 并插 RAW marker；否则 freeze 插 OUTCOME marker。两个路径先锁同一预建 parent-marker guard，再以 round_id 唯一键竞争，第一个 committed marker 永久获胜：遇既有 RAW 只核验共同 round identity/RAW basisRef/eligibleAt 并保留它，不要求其等于后来 freeze hash/revision；遇既有 OUTCOME 必须核验 basisRefId、freezeRevision=1、outcomeBasisHash、eligibleAt 和完整 round identity。任一身份不符整笔回滚 503；
 - linkage 在一次只读 REPEATABLE_READ 事务中由第一条 SELECT 建立 MVCC snapshot；H2 单实例同隔离测试。不得先取时间、commit 后再开新 snapshot。timeout<=50ms；失败按第 15.3.1 节区分局部查询失败与 store 不可达；
 - 后续 raw closer、freeze、恢复和历史投影不得更新 eligible_at/basis。这样父轮结束时间不会因后写 freeze 反向改变。
 
@@ -868,12 +875,13 @@ role_run 的可执行 DDL CHECK 只引用本行：`initial_invocation_id/initial
 - tool_round_no，NOT NULL DEFAULT 0；
 - output_segment_no，NOT NULL DEFAULT 0；
 - delivery_status：PREPARED、DISPATCHED、RESPONSE_RECEIVED、PERSISTED、FAILED_BEFORE_SEND、OUTCOME_UNKNOWN；
-- request_hash；
+- transport_request_snapshot_json TEXT，保存无密钥、已规范化且实际发送的完整请求；
+- request_hash，等于 transport_request_snapshot_json canonical UTF-8 的 SHA-256；
 - provider_idempotency_key，可空；
 - provider_request_id，可空；
 - finish_reason；
 - input_tokens、output_tokens、reasoning_tokens、response_bytes；
-- dispatched_at、transport_handoff_at、response_received_at、completed_at；
+- dispatched_at、transport_handoff_at、handoff_guard_use_id、response_received_at、completed_at；
 - completed_after_content_deadline，仅作供应商/取消审计，不使任何返回正文绕过 content ledger；
 - error_code、error_message；
 - next_event_sequence、next_chunk_sequence；
@@ -881,7 +889,7 @@ role_run 的可执行 DDL CHECK 只引用本行：`initial_invocation_id/initial
 - UNIQUE(role_run_id, invocation_no)；
 - UNIQUE(role_run_id, call_kind, tool_round_no, output_segment_no)；
 - UNIQUE(role_run_id, invocation_id)；
-- request_hash 在 PREPARED 后不可修改；invocation_id 主键本身提供全局唯一性。
+- transport_request_snapshot_json/request_hash 在 PREPARED 后不可修改；invocation_id 主键本身提供全局唯一性。Gate 锁后必须重算 hash 并与 TransportCommand 引用值一致，任何漂移零 handoff/零 transport。
 
 ### 15.10 short_term_ai_tool_call
 
@@ -908,16 +916,16 @@ logical tool call 的有序穷尽真值表：REJECTED 为验证/预算终态；�
 每个物理外部工具请求一行：
 
 - tool_execution_id、tool_call_row_id、role_run_id、invocation_id、tool_call_id、execution_no；同一原生 tool_call 可能依次产生 Tavily discovery 和多个受限 direct fetch，每个物理请求各占一行；
-- tool_name、provider、request_hash；
+- tool_name、provider、transport_request_snapshot_json TEXT、request_hash；snapshot 保存 registry 已规范化的查询或 direct target descriptor，不保存密钥、任意 endpoint 或未验证 URL；request_hash 等于 snapshot canonical UTF-8 的 SHA-256；
 - delivery_status：PREPARED、DISPATCHED、RESULT_RECEIVED、PERSISTED、FAILED_BEFORE_SEND、TOOL_OUTCOME_UNKNOWN；
 - provider_request_id、tavily_request_id、credits；
-- dispatched_at、transport_handoff_at、result_received_at、completed_at；
+- dispatched_at、transport_handoff_at、handoff_guard_use_id、result_received_at、completed_at；
 - error_code、error_message、version；
 - UNIQUE(role_run_id, tool_call_id, execution_no)、UNIQUE(tool_execution_id, request_hash)；
 - 复合 FK(role_run_id, invocation_id) -> invocation(role_run_id, invocation_id)；
 - 复合 FK(role_run_id, tool_call_row_id, tool_call_id) -> tool_call(role_run_id, tool_call_row_id, tool_call_id)。
 
-toolCallId 来自模型时先做长度/格式校验并与 roleRunId 组合；模型缺失或重复 ID 时服务器生成稳定 ID 并记录原值。DISPATCHED 后结果未知不得自动重发。
+toolCallId 来自模型时先做长度/格式校验并与 roleRunId 组合；模型缺失或重复 ID 时服务器生成稳定 ID 并记录原值。transportRequestSnapshotJson/requestHash 在 PREPARED 后不可更新，Gate 锁后重算并校验；DISPATCHED 后结果未知不得自动重发。
 
 ### 15.12 short_term_ai_model_output_chunk
 
@@ -931,7 +939,7 @@ toolCallId 来自模型时先做长度/格式校验并与 roleRunId 组合；模
 - byte_count、content_hash；
 - UNIQUE(invocation_id, sequence_no)。
 
-received_at 是 STRICT_BEFORE decision.upperNow，在持有 role/content-ledger 行锁后复核消费，不是回调自报时间。详情按 invocation/sequence 重建所有已接受输出，不复制截断 rawResponseText；截止后正文无读取旁路。
+received_at 由 CONTENT_APPEND adapter 在持有 role/content-ledger 行锁且 authority 锁后，以模块内部 GuardUse.upperNow 写入，不是回调自报时间，业务调用方拿不到 upperNow。详情按 invocation/sequence 重建所有已接受输出，不复制截断 rawResponseText；截止后正文无读取旁路。
 
 ### 15.13 short_term_ai_role_opinion
 
@@ -989,7 +997,7 @@ thesis、supportingEvidence、negativeEvidence、nextDayDrivers、invalidationCo
 
 streamKey 分别使用 batch:{id}、role:{id} 或 invocation:{id}，避免 NULL 唯一键语义。event payload 只保存白名单元数据、参数摘要和 contentRef，编码后上限 1 MiB；模型原文、长 opinion 和超限工具数据必须进各自 chunk 表，不能复制到 event 造成单行巨物。
 
-event/chunk 的 sequenceNo 不能用 SELECT MAX + 1。写入者先在对应 batch/role/invocation 行上以 fence + 原子 UPDATE 预留 nextEventSequence/nextChunkSequence，再插入不可变记录；预留后崩溃允许留下 gap，但序号不得复用。cursor 以 sequenceNo 大于最后值继续，不能假设连续。
+event/chunk 的 sequenceNo 不能用 SELECT MAX + 1。写入者以注册 GuardUse 锁对应 batch/role/invocation，原子 UPDATE 预留 nextEventSequence/nextChunkSequence，再插入不可变记录；预留后崩溃允许留下 gap，但序号不得复用。cursor 以 sequenceNo 大于最后值继续，不能假设连续。
 
 ### 15.16 short_term_ai_source_evidence
 
@@ -1017,7 +1025,7 @@ event/chunk 的 sequenceNo 不能用 SELECT MAX + 1。写入者先在对应 batc
 ### 15.17 short_term_ai_usage_budget
 
 - budget_id；
-- budget_date，Asia/Shanghai；
+- budget_date，Asia/Shanghai；它由对应 GuardUse adapter 在模块内部从 lowerNow 派生：batch 创建时冻结为 budget_bucket_date，旧 PAID_HTTP operation 在首次 PREPARE mutation 中冻结；调用方不接触 lowerNow，绝不取 JVM 当前日期、upperNow 或恢复日期；
 - actor_id；
 - scope_type：GLOBAL、ACTOR、BATCH；
 - scope_key；
@@ -1031,12 +1039,14 @@ event/chunk 的 sequenceNo 不能用 SELECT MAX + 1。写入者先在对应 batc
 - version；
 - UNIQUE(budget_date, scope_type, scope_key)。
 
+batch 的 model invocation、logical tool、Tavily、direct fetch 全部继承不可变 budgetBucketDate；reservation、拒绝结算、UNKNOWN_CONSUMED 和重启只重读该字段。upper 已跨午夜但 lower 未跨时仍使用前一日；lower 到达午夜后新准入才使用次日。午夜前合法准入、午夜后才物理发送仍计入原桶，这是明确的审计语义。
+
 ### 15.18 short_term_ai_usage_reservation
 
 - reservation_id；
 - operation_type：MODEL_INVOCATION、TOOL_CALL、TAVILY_REQUEST、DIRECT_FETCH、PAID_HTTP_MODEL；
 - operation_id；
-- budget_date、actor_id、batch_id，可空；PAID_HTTP_MODEL 不属于讨论 batch 时为空；
+- budget_date、actor_id、batch_id，可空；PAID_HTTP_MODEL 不属于讨论 batch 时 batch_id 为空，但 budget_date 必须来自首次 PREPARED GuardUse 冻结值；
 - reserved_model_invocations、reserved_evidence_calls、reserved_history_calls、reserved_tavily_requests、reserved_tavily_credits、reserved_direct_fetches；
 - status：RESERVED、SETTLEMENT_PENDING、SETTLED、UNKNOWN_CONSUMED、DENIED；
 - denial_reason，可空；CHECK 要求 DENIED 时必填且所有 reserved_* 为零，其他状态时必须为空；
@@ -1061,16 +1071,16 @@ PAID_HTTP_MODEL 没有 batch scope，只按 GLOBAL -> ACTOR 锁定；其他 oper
 - version；
 - UNIQUE(batch_id, role_run_id)。
 
-每个可影响 outcome 的 chunk/evidence/opinion/opinion-content/角色终态，先无业务锁取 STRICT_BEFORE content decision，再按 role_run -> content ledger 锁序复核 subject。只有 permitted、acceptedAt=decision.upperNow<roleContentDeadline 且未 sealed 时才分配 contentCommitNo 并提交；角色终态同时写 terminalContentCommitNo。快照不一致、等于截止、health 失效均拒绝且不得持锁重取。sealer 只锁 ledger；两库同锁序。流式 adapter 对每个完整有界 chunk 反压至短事务提交。
+每个可影响 outcome 的 chunk/evidence/opinion/opinion-content/角色终态都调用 CONTENT_APPEND GuardUse，先按全序锁 role_run/content ledger，再在 authority 锁后取时。只有 permitted、acceptedAt=upperNow<roleContentDeadline 且未 sealed 时才在同一业务事务写 app_guard_use、分配 contentCommitNo 并提交；角色终态同时写 terminalContentCommitNo。快照不一致、等于截止、health 失效均拒绝。sealer 使用同一锁序；流式 adapter 对每个完整有界 chunk 反压至短事务提交。
 
-lowerNow>=roleContentDeadline 的 DEADLINE_REACHED decision 后，sealer 逐条锁 ledger，写 sealedAt=lowerNow、acceptedThroughCommitNo=nextContentCommitNo-1。截止前已取锁的内容事务先决议；后来者看到 sealed 或 STRICT_BEFORE 拒绝。按 roleCode 逐条短事务封存，四条全封且 upperNow<freezePublishAdmissionDeadline 才能 CONTENT_SNAPSHOT；错过则 effectiveOutcomeAt 尝试 fallback。
+lowerNow>=roleContentDeadline 的 DEADLINE_REACHED GuardUse 逐条锁 ledger 后写 sealedAt=lowerNow、acceptedThroughCommitNo=nextContentCommitNo-1。由于正文与 seal 都是 ledger->authority，先取得 ledger 的事务才有资格随后按 post-lock 时间决议；若已到线则正文拒绝，绝不因“截止前排队”被接纳。按 roleCode 逐条短事务封存，四条全封且 OUTCOME_FREEZE GuardUse 的 upperNow<freezePublishAdmissionDeadline 才能 CONTENT_SNAPSHOT；错过则 effectiveOutcomeAt 尝试 fallback。
 
 ### 15.20 short_term_ai_outcome_freeze
 
 为避免迟提交事务改变 14:49 前已经展示的 AI 结论，freeze 使用独立表且故意不建立指向可能被锁 AI 行的 FK：
 
 - freeze_id、batch_id，UNIQUE；batch_id 作为已校验业务键保存但无 FK；
-- schema_version、freeze_kind：CONTENT_SNAPSHOT、SYSTEM_FALLBACK；
+- schema_version、freeze_revision BIGINT NOT NULL CHECK(freeze_revision=1)、freeze_kind：CONTENT_SNAPSHOT、SYSTEM_FALLBACK；
 - effective_outcome_at、frozen_at、failure_code；
 - basis_json TEXT、basis_hash；包含读取快照中实际纳入的 opinion/evidence/chunk ID+hash、各 role 派生状态和排除原因，不复制长正文；
 - batch_effective_status；
@@ -1078,9 +1088,9 @@ lowerNow>=roleContentDeadline 的 DEADLINE_REACHED decision 后，sealer 逐条�
 - created_at；
 - UNIQUE(batch_id)、UNIQUE(batch_id, basis_hash)。
 
-Stage 0 必须冻结 `OutcomeBasisV1` JSON Schema，不能让数据库返回顺序或 seal 后 live role 状态决定 hash。最低字段为 schemaVersion=1、batchId、advisoryUse、roleContentDeadline、effectiveOutcomeAt、四条 roleSeal、acceptedContent、effectiveRoleStates、roundStates、advisoryStates、exclusionReasons。effectiveRoleStates 每项固定 roleCode、rawFactKind、rawStatus、terminalContentCommitNo、effectiveStatus、effectiveReasonCode：SEALED_TERMINAL 才携带 immutable rawStatus/commitNo；sealed OUTCOME_UNKNOWN 映射 INCOMPLETE/OUTCOME_UNKNOWN；没有封存 terminal fact 时无论 live role 此刻是 RUNNING/TIMED_OUT/OUTCOME_UNKNOWN，都固定 rawFactKind=UNSEALED、rawStatus=null、terminalContentCommitNo=null、effectiveStatus=TIMED_OUT、effectiveReasonCode=UNSEALED_TERMINAL_EXCLUDED。roleSeal 按 roleCode ASC，包含 roleCode/roleRunId/acceptedThroughCommitNo，不含 sealedAt；CONTENT_SNAPSHOT 的 acceptedThrough 为整数，SYSTEM_FALLBACK 显式 null。acceptedContent 按 `(roleCode, contentCommitNo, entityType 固定枚举序, entityId)` 排序；role state 按 roleCode，round/advisory 按 symbol ASC、roundId ASC；reason 去重后按代码点。字段不能以缺失代 null，时间 UTC RFC3339 微秒，basis_json 用 RFC 8785 JCS UTF-8，basis_hash 为小写 SHA-256。SYSTEM_FALLBACK 使用同一 Schema 的空内容和稳定 failureCode；auditObservedAt/createdAt 与 live raw status 在 basis 外，不参与 hash。
+Stage 0 必须冻结 `OutcomeBasisV1` JSON Schema，不能让数据库返回顺序或 seal 后 live role 状态决定 hash。最低字段为 schemaVersion=1、freezeRevision=1、batchId、advisoryUse、roleContentDeadline、effectiveOutcomeAt、四条 roleSeal、acceptedContent、effectiveRoleStates、roundStates、advisoryStates、exclusionReasons。freezeRevision 是当前不可变 one-winner freeze 协议的独立常量，不是 schemaVersion、batch/version、marker 次数、sequence 或恢复次数；未来改变必须新迁移。effectiveRoleStates 每项固定 roleCode、rawFactKind、rawStatus、terminalContentCommitNo、effectiveStatus、effectiveReasonCode：SEALED_TERMINAL 才携带 immutable rawStatus/commitNo；sealed OUTCOME_UNKNOWN 映射 INCOMPLETE/OUTCOME_UNKNOWN；没有封存 terminal fact时无论 live role 此刻是 RUNNING/TIMED_OUT/OUTCOME_UNKNOWN，都固定 rawFactKind=UNSEALED、rawStatus=null、terminalContentCommitNo=null、effectiveStatus=TIMED_OUT、effectiveReasonCode=UNSEALED_TERMINAL_EXCLUDED。roleSeal 按 roleCode ASC，包含 roleCode/roleRunId/acceptedThroughCommitNo，不含 sealedAt；CONTENT_SNAPSHOT 的 acceptedThrough 为整数，SYSTEM_FALLBACK 显式 null。acceptedContent 按 `(roleCode, contentCommitNo, entityType 固定枚举序, entityId)` 排序；role state 按 roleCode，round/advisory 按 symbol ASC、roundId ASC；reason 去重后按代码点。字段不能以缺失代 null，时间 UTC RFC3339 微秒，basis_json 用 RFC 8785 JCS UTF-8，basis_hash 为小写 SHA-256。SYSTEM_FALLBACK 使用同一 Schema 的空内容和稳定 failureCode；auditObservedAt/createdAt 与 live raw status 在 basis 外，不参与 hash。
 
-四条 ledger 封闭后，accepted 集合不可变；builder 只纳入 acceptedThrough 范围内容，且只以范围内 immutable terminal fact 生成 rawFactKind/rawStatus。seal 后 live status 不改变 basis。CONTENT_SNAPSHOT 用独立短事务写 freeze/basis/effective，并对 manifest 每个 round ensure 一条 parent marker；事务成功后 marker_count=N。缺 marker 时插 OUTCOME；已存在 RAW marker 则按第 15.7.1 节核验共同身份并保留 RAW 首胜语义，已存在 OUTCOME 才核验同一 freeze hash/revision。任一不符整笔回滚 503/报警。14:48:44 是 SQL admission 截止，未决唯一赢家按 503。
+四条 ledger 封闭后，accepted 集合不可变；builder 只纳入 acceptedThrough 范围内容，且只以范围内 immutable terminal fact 生成 rawFactKind/rawStatus。seal 后 live status 不改变 basis。CONTENT_SNAPSHOT 用 GuardUse 固定锁 outcome guard、各 parent-marker guard，再授时并在一个业务事务写 freeze/basis/effective 与 manifest 全部 markers；事务成功后 marker_count=N。OUTCOME marker 的 basisRefId=freezeId、freezeRevision=freeze.freezeRevision=basis.freezeRevision=1、outcomeBasisHash=freeze.basisHash，必须从同一 freeze/basis 复制，禁止独立生成。缺 marker 时插 OUTCOME；已存在 RAW marker按第 15.7.1 节核验共同身份并保留 RAW 首胜；已存在 OUTCOME 要逐字段核验。任一不符整笔回滚 503/报警。14:48:44 是 post-lock GuardUse 授权线，不是物理 commit 可见线；未决唯一赢家按 503。
 
 到 effectiveOutcomeAt 仍无已提交行时，协调器或首个读请求用独立短事务尝试插入无内容 SYSTEM_FALLBACK/CUTOFF_FREEZE_MISSED，并为每个 round ensure OUTCOME_FREEZE parent marker；freeze+markers 原子提交。正常情况下 500ms 排空窗已结束，CONTENT_SNAPSHOT 与 fallback 仍由 batch 唯一约束决定一个赢家；若未决合法事务使 fallback 等待至 lock/statement timeout，当前 HTTP 返回 503/PERSISTENCE_UNAVAILABLE，不能返回 PENDING、不能先显示 fallback，也不能绕过唯一键。数据库事务最终提交或回滚后，后续读只返回或创建最终唯一赢家；任何已提交 SYSTEM_FALLBACK 都不可被 CONTENT_SNAPSHOT 反转。
 
@@ -1093,17 +1103,18 @@ Stage 0 必须冻结 `OutcomeBasisV1` JSON Schema，不能让数据库返回顺�
 - operation_id；
 - actor_id、route_code：TREND_ANALYSIS、AGENT_CONSENSUS；
 - idempotency_key、request_semantic_hash；
-- normalized_request_json，只含该路由实际生效的白名单字段；
+- normalized_request_json，只含该路由实际生效的白名单字段，其 canonical SHA-256 等于 request_semantic_hash；
+- transport_request_snapshot_json TEXT、transport_request_hash；由 normalized request、冻结 prompt/config revision 确定性生成实际无密钥 provider 请求，PREPARED 前保存，之后不可更新；Gate 锁后重算 snapshot hash 并校验，不得重新读取会漂移的 HTTP body/config，也不得把密钥、Authorization 或任意 endpoint 写入快照；
 - delivery_status：PREPARED、DISPATCHED、RESPONSE_RECEIVED、PERSISTED、FAILED_BEFORE_SEND、OUTCOME_UNKNOWN；
 - llm_config_revision、provider、model、provider_request_id；
 - response_json TEXT、response_hash；
 - error_code、error_message；
-- admitted_at、paid_dispatch_window_seconds、latest_egress_permit_at、created_at、dispatched_at、transport_handoff_at、completed_at、version；
+- admitted_at、paid_dispatch_window_seconds、latest_egress_permit_at、budget_bucket_date、created_at、dispatched_at、transport_handoff_at、handoff_guard_use_id、completed_at、version；
 - UNIQUE(actor_id, route_code, idempotency_key)。
 
-相同 key/hash 返回已持久响应或当前状态，相同 key 不同 hash 返回 409。PaidAiGuard 用一个事务插入 PAID_HTTP_MODEL reservation 并 CAS PREPARED -> DISPATCHED，之后才允许唯一一次物理模型发送；DISPATCHED 后响应未知必须 OUTCOME_UNKNOWN，不由 HTTP 客户端自动重发。该表、预算、内部身份与 Idempotency-Key 未完成前，这两个旧付费 POST 在发布配置中保持关闭，不能仅靠前端隐藏。
+相同 key/hash 返回已持久响应或当前状态，相同 key 不同 hash 返回 409。PaidAiGuard 的 PREPARE GuardUse adapter 在模块内部以 lowerNow 冻结 budgetBucketDate，并在一个业务事务插入 PAID_HTTP_MODEL reservation、CAS PREPARED -> DISPATCHED；后续 AiEgressGate GuardUse 提交唯一 handoff 后才允许物理模型发送。DISPATCHED 后响应未知必须 OUTCOME_UNKNOWN，不由 HTTP 客户端自动重发。该表、预算、内部身份与 Idempotency-Key 未完成前，这两个旧付费 POST 在发布配置中保持关闭，不能仅靠前端隐藏。
 
-paidDispatchWindow 固定 30 秒。入口 decision 的方向矩阵为：upperNow<14:47:55 时 admittedAt=upperNow、permit=min(+30s,14:47:55)；否则仅当 lowerNow>=14:50 时 admittedAt=lowerNow、permit=+30s；中间 CLOSED_WINDOW 返回 503 且不插行。egress 始终要求 upperNow<latestEgressPermitAt；旧 operation 不跨 14:50 续期。
+paidDispatchWindow 固定 30 秒。入口 GuardUse 的方向矩阵为：upperNow<14:47:55 时 admittedAt=upperNow、permit=min(+30s,14:47:55)；否则仅当 lowerNow>=14:50 时 admittedAt=lowerNow、permit=+30s；中间 CLOSED_WINDOW 返回 503 且不插行。egress 始终要求 upperNow<latestEgressPermitAt；旧 operation 不跨 14:50 续期。
 
 旧付费 POST 的 durable operation 是响应恢复事实源：PREPARED/DISPATCHED/RESPONSE_RECEIVED 查询返回 202 和 Retry-After，PERSISTED 返回 200 及原响应，FAILED_BEFORE_SEND/OUTCOME_UNKNOWN 返回带稳定 errorCode 的终态响应，不允许同 key 重新发送。其中 gate 超界使用 errorCode=FAILED_BEFORE_SEND_CUTOFF；只有用户明确新建一次操作才产生新 key。入口门禁在创建 operation 前返回的 AI_EGRESS_CUTOFF 不是 operation 终态，同 key 查询为 404，14:50 后才能以原 key/body 完成首次提交。
 
@@ -1114,27 +1125,28 @@ paidDispatchWindow 固定 30 秒。入口 decision 的方向矩阵为：upperNow
 确定性源结果永远先提交：
 
 1. durable manual job/report 按第 15.2 节独立 stage+certify；只有 result_status=SUCCEEDED 的确定性终态才发布 after-commit source 事件。旧 scheduled 表不再产生新 source。
-2. aiRequested=true 且候选非空的合格 manual result 提交后并行发布 source/linkage 唤醒事件；handler 可分别 ensure admission/linkage，但丢失由 reconciler/GET 补建。两者都不能进入 manual 事务或延迟 HTTP。aiRequested=false 或不合格终态冻结原因，不会日后追溯收费。
+2. aiRequested=true 且候选非空的合格 manual result 提交后可发布两个同义唤醒信号；任一 handler 都必须先 ensure admission、再 ensure linkage，丢失由 reconciler/GET 补建。两者都不能进入 manual 事务或延迟 HTTP。aiRequested=false 或不合格终态冻结原因，不会日后追溯收费。
 3. CONTINUATION 在允许时段由 HTTP 事务提交带白名单 sourcePayload 的 MATERIALIZATION_PENDING admission，问题文本在返回 202 前已持久化；14:47 至 14:50 按第 14.2 节返回 503 且不创建半成品 admission。
-4. materializer 仅在 linkage=RESOLVED/UNAVAILABLE 时处理 PENDING/到期 DEFERRED，消费方向化 materialization decision 并以 businessNow 作为 materializedAt；health/黑窗按第 15.3 节收口。允许时复制 linkage、生成 UUID、写 batch/thread/round/candidate/四 role/seal，并 CAS admission=MATERIALIZED。14:47 前 admission 后可见不重算时间，也不能越过 INITIAL gate。
+4. materializer 通过 MATERIALIZE GuardUse 处理 MATERIALIZATION_PENDING/DEFERRED_CUTOFF：MANUAL 按 admission->linkage->其余 guard->authority，CONTINUATION 按 admission->parent marker guard->其余 guard->authority；以 post-lock businessNow 作为 materializedAt。health/黑窗按第15.3节收口。所有 UUID/hash/候选排序在授时前准备；允许时复制 parentInput、写batch/thread/round/candidate/四role/seal、budgetBucketDate/materializedAdvisoryUse，并CAS admission=MATERIALIZED。14:47前已合法准入但稍晚commit-visible不重算materializedAt，也不能越过INITIAL gate。
 5. materializer 唯一冲突按 constraint 重读赢家；可恢复异常可增加 attempts，但 nextRetryAt 只能在不晚于现有 materializationDeadlineAt 的范围内提前安排重试，绝不覆盖第 15.3 节 DEFERRED 的固定 D14:50、提高任何 deadline 或跨日续命。达到固定 deadline 优先 MATERIALIZATION_FAILED；配置重试耗尽也可提前失败，且不传播回 manual。
-6. reconciler 只从提交时 aiRequested=true 的 eligible manual result 和 pending continuation admission 重建 identity；对 manual 分别 ensure admission 与 linkage，缺一补一，linkage=PENDING 重新唤醒 worker；之后统一执行第 15.3 节“已有 batch -> health -> 已过 deadline -> 唯一延期 -> 失败/materialize”的有序状态机，不读取旧 scheduled snapshot。
+6. reconciler 只从提交时 aiRequested=true 的 eligible manual result 和 pending continuation admission 重建 identity；对 manual 固定先 ensure admission，再补 linkage，linkage=PENDING 重新唤醒 worker；之后统一执行第 15.3 节有序状态机，不读取旧 scheduled snapshot。
 
 任何 AI 初始化失败、唯一冲突、执行器拒绝、Tavily 或 LLM 配置错误都不能改变手动确定性 payload 的规范化 hash、status、attestation proof 或 API 响应。
 
 ### 16.2 创建和父链
 
-materializer 在一个短事务中：
+materializer 在一个 MATERIALIZE GuardUse 中：
 
-- 锁定或重新读取 MATERIALIZATION_PENDING/到期 DEFERRED_CUTOFF admission；
-- 取得并验证一次方向化 TimeAuthority decision；黑窗或坏时钟按第 15.3 节收口，不执行以下插入；
-- 规范化全部候选，按 ruleRank ASC、symbol ASC 冻结前八选择，并生成 batch/round/candidateAdmission/roleRun UUID；
-- 为被选 symbol 插入或重复键重读 thread；MANUAL_SCAN 只复制 committed linkage/sourcePayload 已冻结的 resolvedParentRoundId/null、resolvedParentRoundEndAt/resolutionBasis，CONTINUATION 只复制请求指定并已在 source 事务冻结的三元组；只校验 marker ID/thread/symbol/冻结值一致，禁止按时间二次解析“最新父轮”或用后来状态推翻；
+- 同时取得业务/authority连接后，锁定MATERIALIZATION_PENDING/DEFERRED_CUTOFF admission；MANUAL再锁对应linkage，CONTINUATION校验source payload并锁其parent marker guard；两者随后锁全部待用thread/outcome/parent guard并重建subject；
+- authority 锁后取时并验证方向化 predicate；黑窗或坏时钟按第 15.3 节收口，不执行以下插入；
+- 在guardUseStartNano前，基于锁后snapshot规范化全部候选，按ruleRank ASC、symbol ASC冻结前八选择，并生成batch/round/candidateAdmission/roleRun UUID与全部canonical payload；
+- 为被选 symbol 插入或重复键重读 thread；MANUAL_SCAN 只复制 committed linkage 已冻结的 resolvedParentRoundId/null、resolvedParentRoundEndAt/resolutionBasis，CONTINUATION 只复制 source 创建事务冻结的三元组；只校验 marker ID/thread/symbol/冻结值一致，禁止按时间二次解析“最新父轮”或用后来状态推翻；
 - 插入一个 batch、被选候选 round，并在同一事务写完 contentCommitNo=0 的 DETERMINISTIC_SNAPSHOT evidence；这些预载行在 admission=MATERIALIZED 后不可增删改；
 - 为所有候选插入 candidate admission：前八绑定已生成 roundId，其余为 NOT_SELECTED_LIMIT 且 roundId=NULL；
 - 以同一 materializedAt 和第 8.3 节公式插入四个 batch-level role run 与四条 content seal；
 - 绑定 admission.materializedBatchId；
-- 将 admission 原子改为 MATERIALIZED；
+- 写 source/batch/round 同一个 materializedAdvisoryUse、冻结 budgetBucketDate，将 admission 原子改为 MATERIALIZED；
+- 同事务消费 ticket、写 app_guard_use；
 - 提交后唤醒 dispatcher。
 
 父轮真值表只有两行：MANUAL_SCAN 使用 after-commit linkage REPEATABLE_READ snapshot 中可见的 marker 集合冻结逐 symbol parent 三元组；CONTINUATION 使用 source 创建事务冻结的 parent 三元组。只有 snapshot 中 commit-visible marker 表示可作父轮；manual sourceDecisionAt 只作展示/审计，不参与回溯边界。任何实现不得把 CONTINUATION 换成最新轮，不得对 MANUAL_SCAN 的 null 事后补父轮，也不得因后来的 freeze/closer 改变 marker。
@@ -1162,11 +1174,11 @@ UNKNOWN_FINALIZATION_ONLY owner 不用一个跨预算层级的大事务收口，
 
 | 持久状态 | 自动行为 |
 | --- | --- |
-| eligible manual 已提交，admission/linkage 均缺 | 分别唯一 ensure admission=PENDING、linkage=PENDING；唤醒 linkage worker |
+| eligible manual 已提交，admission/linkage 均缺 | 先唯一 ensure admission=MATERIALIZATION_PENDING，再以 admissionId ensure linkage=PENDING；唤醒 linkage worker |
 | admission 已存在、linkage 缺失 | ensure linkage=PENDING；不得因 admission 已有而跳过 |
-| linkage 已存在、admission 缺失 | ensure admission=PENDING；不得重做 linkage |
-| linkage=PENDING | 新 REPEATABLE_READ snapshot 竞争一次 RESOLVED/UNAVAILABLE；整体 linkage store 不可达则 GET 503，恢复后按冻结 deadline 收口 |
-| admission=PENDING/DEFERRED、无 batch | 执行第 15.3 节唯一状态机；D 日 deadline 到达必失败，D+1 不改冻结字段、不复活 |
+| linkage 存在、admission 缺失 | 非法 identity：503/报警；禁止创建孤立 linkage 的生产路径 |
+| linkage=PENDING | GuardUse 先锁 admission/linkage，先决议延期/最终 deadline，再建立 REPEATABLE_READ marker snapshot 竞争 RESOLVED/UNAVAILABLE；整体 store 不可达则 GET 503 |
+| admission=MATERIALIZATION_PENDING/DEFERRED_CUTOFF、无 batch | 执行第 15.3 节唯一状态机；D 日 deadline 到达必失败，D+1 不改冻结字段、不复活 |
 | admission=MATERIALIZED 或已有 committed batch | 只读唯一 batch；未决唯一事务 500ms 后仍不明则 503，不做 source 投影 |
 | Role QUEUED | 可认领 |
 | Role CLAIMED/RUNNING，租约过期且无 marker-nonnull 未知 operation | 新 epoch/recoveryMode=EXECUTION 从 workflow cursor 继续 |
@@ -1226,8 +1238,8 @@ apps/api/src/main/resources/schema.sql 是唯一 canonical additive schema，Spr
 
 ### 17.1 读取
 
-- `GET /batches/by-source` 先校验 sourceType/sourceKey 对应已提交、eligible、用户明确请求的 source；MANUAL_SCAN 分别以唯一键 ensure admission 与 linkage，任一已存在都不能阻止补另一个。缺 linkage 只建 PENDING 并唤醒独立 worker，不在 GET 内查父轮。已有 committed batch 返回 BatchSummaryV1；否则调用第 15.3 节唯一状态机。SourceOutcomeV1 的 PENDING 仅在 sourceOutcomeAt 未到时合法，DEFERRED 必须返回固定 nextRetryAt/deadline/date，deadline 到达后只能 FAILED/TIME_AUTHORITY_UNAVAILABLE/其他终态；数据库、linkage store 或唯一赢家未决返回稳定 503，不重跑扫描或增加候选。
-- BatchSummaryV1 返回 source、raw 状态、candidate admission、round/role 进度；缓存/研究预览 sourceCertifiedAt=null，SAME_DAY 两时间相等。NOT_SELECTED_LIMIT 为终态。lowerNow>=effectiveOutcomeAt 时必须从唯一 freeze 返回 effectiveStatus/source/hash/fixedAt/failureCode，不得 RUNNING；live raw role 仅 basis 外审计。数据库/唯一赢家未决为 503 PERSISTENCE_UNAVAILABLE。
+- `GET /batches/by-source` 先校验 sourceType/sourceKey 对应已提交、eligible、用户明确请求的 source；MANUAL_SCAN 固定先 ensure admission，再以 admissionId ensure linkage。缺 linkage 只建 PENDING 并唤醒独立 worker，不在 GET 内查父轮。已有 committed batch 返回 BatchSummaryV1；否则调用第 15.3 节唯一状态机。SourceOutcomeV1 的 MATERIALIZATION_PENDING 仅在 sourceOutcomeAt 未到时合法，DEFERRED_CUTOFF 必须返回固定 nextRetryAt/deadline/date，deadline 到达后只能 MATERIALIZATION_FAILED/TIME_AUTHORITY_UNAVAILABLE/其他终态；既有不可逆终态原样返回，数据库、linkage store 或唯一赢家未决返回稳定 503，不重跑扫描或增加候选。
+- BatchSummaryV1 返回 source、raw 状态、certificationKind/sourceCertifiedAt、materializedAdvisoryUse、candidate admission、round/role 进度；缓存/研究预览 sourceCertifiedAt=null。已认证 FINAL_READY 延期为 RESEARCH_ONLY 时仍返回原认证事实，但 source/batch/round 的 materializedAdvisoryUse 都是 RESEARCH_ONLY。NOT_SELECTED_LIMIT 为终态。读路径用 GuardUse.evaluate 在模块内部判断 lowerNow>=effectiveOutcomeAt；到线必须从唯一 freeze 返回 effectiveStatus/source/hash/fixedAt/failureCode，不得 RUNNING，也不向 DTO 暴露 lowerNow；live raw role 仅 basis 外审计。数据库/唯一赢家未决为 503 PERSISTENCE_UNAVAILABLE。
 - RoundDetailV1 返回 candidate snapshot、四个 opinion manifest/detail URL、invocation 元数据、证据 page URL、父轮次和变化摘要；结构化长内容、原始 chunk、事件和证据通过各自 cursor 接口字节保真读取，避免把最多 256 MiB 内容装进单个 JSON 响应。
 - HistoryPageV1 的 item 只含时间、状态、角色计数、父轮次和 detail URL 等列表摘要，不触发额外模型调用，也不假装是完整原文；点击详情一定能读取未截断内容。
 - raw chunk/opinion content 页面每页最多 100 chunk 且编码后最多 4 MiB，event/evidence 页面每页最多 200 项且编码后最多 2 MiB；它们使用签名不透明 cursor、稳定 sequenceNo/itemNo/createdAt 顺序和完整 item/chunk 边界。达到项数或字节页上限时返回 nextCursor，不能 substring 某一 item、追加省略号或把 nextCursor 缺失伪装成结尾。
@@ -1370,7 +1382,7 @@ React 继续使用 HashRouter，浏览器外部 URL 为 /#/short-term/discussion
 ## 19. 模型配置与密钥安全
 
 - materializer 为整个 batch 一次性读取当前 runtime_config_section 的 LLM revision 和 LlmSettings，四个 role 共享同一份不可变非密钥快照，避免角色启动先后导致 Provider/Model 混用。
-- manual source 冻结的 featureRevision 只证明“提交当时允许”，不能绕过之后的紧急关闭。materializer 和每次付费 DISPATCH 都要求当前 feature 仍开启且 revision 与 batch 快照一致；关闭或 revision 改变后不再发送新的 INITIAL/continuation/tool 请求，未发送角色以 FEATURE_REVISION_CHANGED/FEATURE_DISABLED 收口，已经发出的响应只按原 fence 保存。该终态以后重新开启 feature 也不自动复活，用户需重新手动扫描或明确继续讨论。
+- manual source 冻结的 featureRevision 只证明“提交当时允许”，不能绕过之后的紧急关闭。materializer 和每次付费 DISPATCH GuardUse 都把当前 feature revision 纳入锁后 subject hash；关闭或 revision 改变后不再发送新的 INITIAL/continuation/tool 请求，未发送角色以 FEATURE_REVISION_CHANGED/FEATURE_DISABLED 收口，已经发出的响应只按其 CONTENT_APPEND GuardUse 保存。该终态以后重新开启 feature 也不自动复活，用户需重新手动扫描或明确继续讨论。
 - batch/role 保存 llmConfigRevision、provider、model、baseUrl、能力版本和非密钥设置，不保存 API Key；页面据此可证明实际使用的模型。
 - 真正 DISPATCHED 前重新解析凭据并要求 LLM revision 仍等于 batch 快照。若配置已变化，尚未发送的 role 以 CONFIG_REVISION_CHANGED 失败，不能悄悄改用新模型；已发送调用继续使用进程内不可变凭据。用户可基于父轮发起新讨论使用新配置。
 - 配置变化只影响之后创建的新 batch。
@@ -1400,11 +1412,11 @@ React 继续使用 HashRouter，浏览器外部 URL 为 /#/short-term/discussion
 | 搜索结果越权域名或时间 | 保存 rejectionReason，不回传为可用证据 |
 | 结构化解析失败 | 通过 chunk 接口保留并可完整读取 raw response，角色 INCOMPLETE |
 | finishReason=length | 保存片段；有时间则一次续写，否则 INCOMPLETE |
-| source/linkage after-commit 事件丢失 | reconciler 或 by-source GET 分别幂等补 admission/linkage；不影响 manual |
+| source/linkage after-commit 任一事件丢失 | reconciler 或 by-source GET 固定先补 admission、再以 admissionId 补 linkage；不影响 manual |
 | linkage parent 查询局部失败 | 回滚查询事务，独立事务持久 UNAVAILABLE/PARENT_QUERY_FAILED；可复制 null 父链继续 |
-| linkage store 整体不可达 | 当前投影 503 AI_LINKAGE_STORE_UNAVAILABLE；恢复后只在冻结 deadline 前解析，过线 LINKAGE_DEADLINE_EXPIRED |
+| linkage store 整体不可达 | 当前投影 503 AI_LINKAGE_STORE_UNAVAILABLE；恢复后只在 admission 唯一 materializationDeadlineAt 前解析，过线 LINKAGE_DEADLINE_EXPIRED |
 | materializer 暂时失败 | 仅在冻结 materializationDeadlineAt 前有界重试，不重置 sourceOutcomeAt/deadline |
-| materializer 进入尾盘黑窗 | 仅符合一次延期资格时 PENDING->DEFERRED，固定 D14:50/D14:52 |
+| materializer 进入尾盘黑窗 | 仅符合一次延期资格时 MATERIALIZATION_PENDING->DEFERRED_CUTOFF，固定 D14:50/D14:52 |
 | materialization deadline 到达仍无 batch | MATERIALIZATION_FAILED/MATERIALIZATION_DEADLINE_MISSED，不跨日复活 |
 | admission/batch 唯一赢家未决或数据库不可用 | 当前读 503/PERSISTENCE_UNAVAILABLE；恢复后按原冻结期限决议 |
 | 模型发送前数据库短暂失败 | PREPARED 可有界重试 |
@@ -1429,7 +1441,7 @@ React 继续使用 HashRouter，浏览器外部 URL 为 /#/short-term/discussion
 - 14:48:45 前同日讨论完整/部分/超时收口率；
 - 手动扫描提交/完成时间、FINAL_PENDING/FINAL_READY 认证时间和 14:49:40 门禁结果；
 - TimeAuthority watchdog 最后健康样本 age、冻结/回退/过期次数、health=false 时长与恢复 probe 次数；
-- TimeAuthority durableRawHighWater/durableGuardHighWater/authorityEpoch、按 workloadClass 的 fence 成功/截止拒绝/锁竞争拒绝/坏 proof 计数和 p50/p95/p99 延迟，以及 DETERMINISTIC 保留连接重试/耗尽次数；
+- TimeAuthority durableRawHighWater/durableGuardHighWater/authorityEpoch、按 workloadClass 的 GuardUse 成功/窗口拒绝/业务锁拒绝/authority 竞争/坏 proof/commit unknown 计数和 p50/p95/p99 延迟、orphan ticket/ABANDONED 数量，以及 DETERMINISTIC 保留连接重试/耗尽次数；
 - ShortTermScanScheduler 注册任务数必须为零、旧 scheduled snapshot 新增行数必须为零；
 - 重启恢复和租约抢占数量。
 - PREPARED/DISPATCHED/OUTCOME_UNKNOWN invocation 数量；
@@ -1467,16 +1479,18 @@ React 继续使用 HashRouter，浏览器外部 URL 为 /#/short-term/discussion
 - 四角色全失败时确定性结果不受影响。
 - 队列满仍保留 durable QUEUED；dispatcher 可恢复。
 - 无 AI 身份的确定性降级、双击、响应丢失重试、相同 key 不同生效 payload 和双实例并发；只改变 deprecated PE/PB 仍读取同一持久结果且不生成重复讨论。
-- 手动矩阵覆盖交易/非交易日、缓存预览、研究预览、数据阻断、空候选，以及 14:29:59.999、14:30:00、14:46:59.999、14:47:00、14:47:19.999、14:47:20、14:47:54.999、14:47:55、14:48:29.999、14:48:30、14:48:43.999、14:48:44、14:48:45、14:49:30、14:49:40、14:50:00、15:00:00 与次日重启；逐项断言 deterministicFinalizedAt/sourceEffectiveAt/sourceCertifiedAt、SAME_DAY 仅 FINAL_READY+certifiedAt、initial dispatch、egress permit、content acceptance/publication/freeze、admission、advisoryUse 和同 key 恢复。
+- 手动矩阵覆盖交易/非交易日、缓存预览、研究预览、数据阻断、空候选，以及 14:29:59.999、14:30:00、14:46:59.999、14:47:00、14:47:19.999、14:47:20、14:47:54.999、14:47:55、14:48:29.999、14:48:30、14:48:43.999、14:48:44、14:48:45、14:49:30、14:49:40、14:50:00、15:00:00 与次日重启；逐项断言 deterministicFinalizedAt/sourceEffectiveAt/certificationKind/sourceCertifiedAt、SAME_DAY 仅 FINAL_READY_CERTIFIED、initial dispatch、egress permit、content acceptance/publication/freeze、materializedAdvisoryUse 和同 key 恢复。
 - materializer 的真实 H2/PostgreSQL 准入 SQL 谓词分别在当日 14:50:00、15:00:00 和次交易日 13:00:00、15:00:00 放行 RESEARCH_ONLY；同一旧 FINAL_READY 在次日只能 RESEARCH_ONLY，而 [14:47:00,14:50:00) 精确全部拒绝。断言 `materializationAdmissionCutoff` 只参与 SAME_DAY 额外谓词，不会永久拦截 14:50 后/次日研究轮。
 - source 公式固定向量：10:00->10:02 且不延期，14:44:59->14:46:59 且不延期，14:45->14:47 可延期，14:46:59.900->14:48:45 可延期，14:47/14:49:59 立即 DEFERRED(D14:50/D14:52)，14:50->14:52、15:00->15:02 可立即 RESEARCH_ONLY。精确 source/deadline 等号失败，不在等号建 batch。
-- 方向边界逐项断言：lower=14:46:59.960、upper=14:47:00.010 时 CLOSED_WINDOW；lower=14:49:59.999 即使 upper>=14:50 仍 CLOSED_WINDOW；lower=14:50:00 才 AFTER_WINDOW。D 日 PENDING/DEFERRED 在 D+1 10:00/14:47/14:49:59/14:50/15:00 恢复全部冻结时间不变、MATERIALIZATION_FAILED、零 batch/调用。
-- 丢事件恢复覆盖：两个 handler 都未运行、只提交 admission、只提交 linkage、linkage=PENDING worker 崩溃、GET 两次 ensure 间崩溃、双实例并发补建；最终 manual/admission/linkage 各一、batch<=1，成功时恰四 INITIAL，否则零，manual payload/hash/status/certifiedAt 不变。
+- 方向边界逐项断言：lower=14:46:59.700、upper=14:47:00.050 时 CLOSED_WINDOW；lower=14:49:59.999999 即使 upper>=14:50 仍 CLOSED_WINDOW；lower=14:50:00 才 AFTER_WINDOW。D 日 MATERIALIZATION_PENDING/DEFERRED_CUTOFF 在 D+1 10:00/14:47/14:49:59/14:50/15:00 恢复全部冻结时间不变、MATERIALIZATION_FAILED、零 batch/调用。
+- 丢事件恢复覆盖：两个 handler 都未运行、只提交 admission 后事件丢失、linkage=PENDING worker 崩溃、GET 在 ensure admission 后崩溃、双实例并发补建；生产路径不得只提交孤立 linkage，故障注入直接造孤立 linkage 必须 503/报警而非自动猜 deadline。最终 manual/admission/linkage 各一、batch<=1，成功时恰四 INITIAL，否则零，manual payload/hash/status/certifiedAt 不变。
+- admission/linkage 并发使用真实 latch：一个 worker 在锁 admission 前暂停，另一个先把 source 延期到 D14:52；以及只收到 linkage 唤醒但 admission handler 丢失。两种情况都必须先 ensure/锁同一 admission，以 source materializationDeadlineAt 为唯一权威，不得提前 LINKAGE_DEADLINE_EXPIRED；DDL 中不存在 linkage_deadline_at。
 - 在 14:46:59.900 提交有候选且 aiRequested=true 的 manual 后分别暂停 before-admission after-commit handler、linkage worker 和 materializer 到 14:48:45/14:49：首个 GET 必须先幂等补 admission，再以 source version CAS 得到 DEFERRED_CUTOFF/AI_DEFERRED_CUTOFF、nextRetryAt=14:50，不返回 PENDING；若 materializer 未决事务持锁超过 500ms则该次 GET 为 503/PERSISTENCE_UNAVAILABLE。恢复后由 admission 唯一赢家证明只能是已提交 batch 或 DEFERRED_CUTOFF，14:50 后后者仅 materialize 一个 RESEARCH_ONLY batch。另在 15:00 新建 source 后暂停全部 worker到 sourceOutcomeAt=+120s，读 API 必须收口 MATERIALIZATION_FAILED/MATERIALIZATION_DEADLINE_MISSED 或 503，不能重置窗口或永久 PENDING。
 - 明确使用 CACHE_PREVIEW/RESEARCH_PREVIEW fixture：source=14:46:59 时让 materializer 分别在 14:46:59、14:47:00、14:49:00、14:50:00 运行，首例使用受尾盘上限约束的 RESEARCH_ONLY deadline，中间两例提交 DEFERRED_CUTOFF/nextRetryAt=14:50 且零 INITIAL，末例只 materialize 一个相对窗口 batch。若 D 日到固定 `materializationDeadlineAt=D 14:52` 仍无 batch，source 必须 MATERIALIZATION_FAILED，D+1 重启也绝不自动复活；若数据库在 D 14:50–14:52 不可用，读为 503，恢复后仍按已过 deadline 收口失败。source 正好 14:50 或 15:00 在其 +120s 固定 deadline 前可立即运行，不能写过去的 retry 时间；任何次日由用户明确继续旧讨论都只能新建 CONTINUATION/RESEARCH_ONLY，不能让旧 source 重新获得 SAME_DAY_RESEARCH。
+- FINAL_READY_CERTIFIED@14:46:59.900 -> DEFERRED -> 首次且只调用一次状态机于14:50 的两库向量，必须在同一 PENDING_EXTENDED_MATERIALIZE 事务直接得到 MATERIALIZED、materializedAdvisoryUse=RESEARCH_ONLY、D14:50/D14:52 三元组、一个 batch/四 role；sourceCertifiedAt/cutoff/certificationKind 不变，source/batch/round use 一致。双实例只有一个赢家。六个不可逆 source 终态在 health 正常/异常与 GET 重放时均原样短路。
 - RESEARCH_ONLY 用注入 TimeAuthority 覆盖 materializedAt+15/+75/+105/+119/+120 秒：四角色完整、1–3 角色完整、全部超时、content seal/发布超时四种结果在 +120 秒均不返回 PENDING，分别得到 COMPLETED/PARTIAL/TIMED_OUT 或 SYSTEM_FALLBACK/INCOMPLETE。
 - 父子手动 round 的 discussionMaterialHash 与精确白名单匹配；只改变 dataCutoffAt 时 material hash 保持一致、完整 snapshotHash 不同且变化摘要明确为“仅审计快照更新”，不触发额外付费批次。
-- 父链竞态使用真实 H2/PostgreSQL 冻结：正常 RAW/FREEZE marker 的不可变父资格与 snapshot 可见性；局部 parent 表查询错误但 linkage 表可写时独立事务落 PARENT_QUERY_FAILED；linkage 表缺失/整个 datasource 不可达时投影 503，manual 不变，恢复后在冻结 linkage deadline 前解析、过线 LINKAGE_DEADLINE_EXPIRED 且不关联晚到 parent。
+- 父链竞态使用真实 H2/PostgreSQL 冻结：正常 RAW/FREEZE marker 的不可变父资格与 snapshot 可见性；局部 parent 表查询错误但 linkage 表可写时用新 GuardUse 落 PARENT_QUERY_FAILED；linkage 表缺失/整个 datasource 不可达时投影 503，manual 不变，恢复后只在 admission.materializationDeadlineAt 前解析、过线 LINKAGE_DEADLINE_EXPIRED 且不关联晚到 parent。
 - 生产代码中不存在 ShortTermScanScheduler、ShortTermScheduledScanService、ShortTermScheduledExecutorConfig 或 shortTermScheduledExecutor bean，ShortTermExecutionSettings 不再暴露 cron/自动 scanRequest，历史 store 只暴露查询；架构测试禁止 scheduled repository 继承 JpaRepository/CrudRepository，禁止 save/delete/flush/@Modifying 及任何 scheduled snapshot mutator 依赖。模拟跨过 14:30、14:47、14:49:50 与应用重启均不会调用扫描服务或向 short_term_scheduled_snapshot 插入新行。
 - 旧 scheduled `/latest` 在无当日旧行时返回 204，不出现“等待自动预选”；有旧行和 history 分页均只读、historical=true、executable=false，调用前后表内容/hash/行数完全一致。
 - ShortTermValidationOutcomeScheduler、TradeOutcomeScheduler 仍按原配置注册并通过各自定向回归，不能通过关闭全局 scheduling 取巧。
@@ -1486,11 +1500,11 @@ React 继续使用 HashRouter，浏览器外部 URL 为 /#/short-term/discussion
 - H2 文件副本升级/重启测试与真实 Testcontainers PostgreSQL schema 启动。
 - 两库实际执行 role_run 本行 CHECK：四个 INITIAL 字段全空/全非空、deadline 严格时序与 UNKNOWN_FINALIZATION_ONLY 禁止发送步骤；跨表 INITIAL invocation/role 同事务故障点不得留下半套字段。
 - thread/batch/round 唯一约束并发测试。
-- PostgreSQL 两实例并发 materialize/认领只产生一个 batch、四 role/seal；materializedAt 相同。14:46:59.900 取得 admission 后暂停至 14:47:00.400 可见仍保留原 businessNow，但 INITIAL 继续以 STRICT_BEFORE(14:47:20) 的 upperNow gate；14:47 后开始的事务零新 SAME_DAY admission。
+- PostgreSQL 两实例并发 materialize/认领只产生一个 batch、四 role/seal；materializedAt 相同。在业务锁后、post-lock raw=14:46:59.500 合法准入并提交 ticket，但业务 commit acknowledgement 被暂停至 14:47:00.400 时，当前调用必须返回 COMMIT_UNKNOWN 且零直接 dispatcher/transport handoff：实际提交分支只由恢复器读到一个 businessNow 不变的 SAME_DAY batch，再让 INITIAL 以新的 STRICT_BEFORE(14:47:20) GuardUse 决定是否派发；实际回滚分支无 batch并重新取 GuardUse。业务锁或 authority 锁直到 14:47 后才释放的首次尝试必须看到 post-lock raw 到线，零 SAME_DAY admission。
 - PostgreSQL 两个应用实例同时初始化空 runtime_config_section，均能启动且每个 section 只有一行。
-- claim token/epoch、数据库时间、心跳、过期抢占；旧 owner 的 event/chunk/evidence/opinion/终态全部被 fence。无幂等 marker-nonnull operation 在 lease 过期后必须被 UNKNOWN_FINALIZATION_ONLY 新 owner 两阶段收口：先按预算锁序把 reservation 变为 UNKNOWN_CONSUMED，再按 role 锁序把 operation/toolCall/role 变为 UNKNOWN。分别在两阶段之间崩溃并恢复，调用计数保持原值、无死锁且状态最终不再 RUNNING。
+- claim token/epoch、数据库时间、心跳、过期抢占；旧 owner 的 event/chunk/evidence/opinion/终态全部被 GuardUse subject fencing。无幂等 marker-nonnull operation 在 lease 过期后必须被 UNKNOWN_FINALIZATION_ONLY 新 owner 两阶段收口：先按预算锁序把 reservation 变为 UNKNOWN_CONSUMED，再按 role 锁序把 operation/toolCall/role 变为 UNKNOWN。分别在两阶段之间崩溃并恢复，调用计数保持原值、无死锁且状态最终不再 RUNNING。
 - source commit 后、materializer 前崩溃由 reconciler 恢复。
-- durable manual scan 的 PENDING/租约过期 RUNNING 恢复、总超时和旧 worker 最终 report fence。
+- durable manual scan 的 PENDING/租约过期 RUNNING 恢复、总超时和旧 worker 最终 report GuardUse fencing。
 - manual 事务 A 写 FINAL_PENDING 后崩溃，14:49:30 前按同 epoch/hash 恢复认证；超过内部线则只能落 DATA_BLOCKED/FINAL_CERTIFICATION_INTERRUPTED。事务 B 响应丢失重试不得产生第二次认证；report hash/epoch/proof 任一不一致均 fail closed。在 B 最后 SQL 后用 latch 暂停到 14:49:40 之后再 commit，该行即使为 FINAL_READY，读模型也必须返回 executionEligibility=EXPIRED。
 - PREPARED 可恢复；DISPATCHED 后供应商已接收、本地提交前崩溃在无幂等支持时变 OUTCOME_UNKNOWN，断言不发生第二次供应商请求。
 - 预算 reservation 插入后、PREPARED -> DISPATCHED 前故障必须整事务回滚；DISPATCHED 提交后但 transportHandoffAt 仍为空时，恢复只读原 reservation 并重过 egress gate，超界则在同一事务写 FAILED_BEFORE_SEND+SETTLEMENT_PENDING。分别在该拒绝提交后、预算结算前崩溃，以及以历史异常 FAILED_BEFORE_SEND+RESERVED 启动，BudgetSettlementReconciler 都必须零外发、按固定锁序仅结算一次并恢复全部额度。transportHandoffAt 已持久后崩溃才在无供应商幂等能力时保守进入 OUTCOME_UNKNOWN；所有恢复都不二次预占。
@@ -1502,18 +1516,21 @@ React 继续使用 HashRouter，浏览器外部 URL 为 /#/short-term/discussion
 - 复合父 FK 阻止跨股票/thread，父字段不可更新。
 - 超过普通页面长度的 raw chunk、每个 opinion 长字段与 evidence 分页往返、逐页重建和详情“展开全部”字节一致；单个模型结构化响应不在内存聚合成无界字符串。
 - persistent usage budget 在并发下不能超扣。
-- H2 真实 APP_WALL_CLOCK_NOW() 与 PostgreSQL 的启动/持续样本必须推进；分别在启动 probe 失败、probe 后冻结、回退、watchdog/health proof 超过 750ms 四个故障点验证：SAME_DAY、RESEARCH_ONLY、continuation、Tavily/direct 和旧付费路由全部零新调用，新 source 不建 batch，既有 batch返回 TIME_AUTHORITY_UNAVAILABLE/INCOMPLETE 而非永久 PENDING。manual 行情报告仍可持久化，但事务 B 在已知坏时钟下即使真实时间越过 14:49:40 也只能 DATA_BLOCKED/TIME_AUTHORITY_UNAVAILABLE；旧 FINAL_READY 的 executionEligibility 同样为 TIME_AUTHORITY_UNAVAILABLE，绝不能 ELIGIBLE。恢复必须 raw 追平持久全局高水位后重新取得两次推进样本。
-- 在已健康观察 14:50:10 后把 raw DB 回退到 14:46:50：即使回退时钟继续严格推进、即使应用在回退后重启，raw 未追平旧 durableRawHighWater 前 health 始终 false，durableGuardHighWater 也不降低，14:47 materialization/14:47:55 egress/14:48:30 content/14:48:44 freeze/14:49:30 certify/14:49:40 eligibility 与 budgetDate 都不能重开或倒退；运维 epoch 迁移仅接受 raw/guard 两个 new floor 分别不低于旧值。
-- 使用 249ms health sample 验证 requestStartNano 锚定；proof 后 DB raw 向前跳<=250ms、fence 行锁在截止前20–40ms释放时，`rawNow+50ms` 必须使截止型 permit=false。逐 gate 用 latch 在 candidate 计算前、生成后、参数绑定后/execute 前、SQL 返回/commit 前、commit ack 前分别停顿，总 attempt>50ms 一律零 decision；retry 使用新 attemptId/candidate，commit unknown 不恢复旧 decision。
-- 在真实 H2 2.2.224 与 PostgreSQL 执行 Stage 0 逐字 fence SQL：raw 恰求值一次，true/false 推进双高水位，连续调用不递归+50ms，epoch/raw rollback 零行。JVM 为 UTC/Shanghai/New_York、H2 session 时区交叉组合时同一 Instant 得到相同 lower/upper/predicate，candidate/返回列元数据均 TIMESTAMP WITH TIME ZONE。raw=14:49:59.950..999999 即使 upper 越界也零 materialization/paid operation，raw=14:50:00 才开放。
+- H2 真实 APP_WALL_CLOCK_NOW() 与 PostgreSQL 的启动/持续样本必须推进；第一 probe 固定 candidate=raw 且 health=false，间隔>=100ms 的第二 probe 只有 raw 严格推进、RTT<=250ms、raw/nano delta 偏差<=250ms 才令 health=true。分别在首样本后、启动 probe 失败、第二样本 delta 超界、probe 后冻结、回退、最后有效 proof 超过 750ms 六个故障点验证：SAME_DAY、RESEARCH_ONLY、continuation、Tavily/direct 和旧付费路由全部零新调用，新 source 不建 batch，既有 batch返回 TIME_AUTHORITY_UNAVAILABLE/INCOMPLETE 而非永久 PENDING。manual 行情报告仍可持久化，但事务 B 在已知坏时钟下即使真实时间越过 14:49:40 也只能 DATA_BLOCKED/TIME_AUTHORITY_UNAVAILABLE；旧 FINAL_READY 的 executionEligibility 同样为 TIME_AUTHORITY_UNAVAILABLE，绝不能 ELIGIBLE。恢复必须 raw 追平持久全局高水位后重新播种并取得第二个推进样本。
+- 在已健康观察 14:50:10 后把 raw DB 回退到 14:46:50：即使回退时钟继续严格推进、即使应用在回退后重启，raw 未追平旧 durableRawHighWater 前 health 始终 false，durableGuardHighWater 也不降低，14:47 materialization/14:47:55 egress/14:48:30 content/14:48:44 freeze/14:49:30 certify/14:49:40 eligibility 与 budgetBucketDate 都不能重开或倒退；运维 epoch 迁移仅接受 raw/guard 两个 new floor 分别不低于旧值。
+- GuardUse interface/架构测试禁止业务包引用或构造 GuardUseCommand/GuardedReadCommand/GuardDecision/ticket/GuardUseResult/COMMITTED，禁止序列化、缓存、任意 SQL callback，也禁止业务包选择 predicate/deadline/adapter/lockPlan/mutation；operation-specific facade 仅稳定业务引用/opaque ClaimRef，policy 必须从锁后行唯一派生内部矩阵。operationKind/predicate/branch/lockPlan/mutation 不匹配必须在 authority/业务 adapter 的相应安全点零越权 mutation。编译/ArchUnit 还必须证明只有 gate implementation package 可引用 Provider/Tavily/direct/paid HttpClient 和注册 transport adapter；业务包不能传 URL/header/body/lambda/closure，不能依据任何 domain DTO 触发网络。四类 operation 的持久 transportRequestSnapshot/requestHash 篡改测试必须全部零 handoff/零网络并报警；snapshot 不含 secret/Authorization/任意 endpoint。相同 mutationId 双线程/双实例只提交一个 app_guard_use；失败、回滚、COMMIT_UNKNOWN 后旧 ticket 永不复用。
+- 使用 249ms health sample 验证 requestStartNano 锚定。分别先锁业务 operation 与 authority 行：worker 在业务锁前/authority锁前等待并跨过截止，释放后 post-lock raw 必须到线并拒绝。另在旧模板本会取 raw 的位置后注入 DB +100ms/+249ms 前跳，再释放 authority 锁；新实现必须只用锁后新 sample。逐 gate 在业务锁后、authority锁后、ticket commit后、business mutation前和commit前暂停；GuardUse 总预算精确99.999ms可 commit ack，100.000ms不得授权，COMMIT_UNKNOWN 对四类 transport 调用均为零。
+- 在真实 H2 2.2.224 与 PostgreSQL 执行 Stage 0 逐字 execute/evaluate 模板：两者都在 FOR UPDATE 返回后让 raw 恰求值一次，true/false 推进双高水位且连续调用不递归+350ms；只有 execute 写 ticket，任意次数 evaluate 后 ticket/app_guard_use 行数不变；epoch/raw rollback 零业务 mutation/读结论。JVM 为 UTC/Shanghai/New_York、H2 session 时区交叉组合时同一 Instant 得到相同 lower/upper/predicate，candidate/返回列元数据均 TIMESTAMP WITH TIME ZONE。lower=14:49:59.999999 即使 upper 越界也零 materialization/paid operation，lower=14:50:00 才开放。
+- authority ticket 提交后业务回滚保留高水位/ticket但无 app_guard_use/marker，orphan 只投影 ABANDONED；业务 commit unknown 的“实际提交/实际回滚”各一例，当前调用均零 transport，恢复分别按 marker收口 OUTCOME_UNKNOWN或以新 GuardUse 重试。H2 必须用两个真实连接验证业务锁+独立 authority ticket 事务与 PostgreSQL 同义。
+- 午夜预算向量：upper 已跨零点而 lower 未跨仍冻结前一日 budgetBucketDate；lower 到零点后的新 batch/PAID_HTTP 使用次日。重启、时钟回退、SETTLEMENT_PENDING/UNKNOWN_CONSUMED 全部重读 reservation/batch 桶，不换日期。
 - H2 与 PostgreSQL 对相同的内容写/锁时序分别让 coordinator 在 roleContentDeadline 后立即运行和临近 freezePublishAdmissionDeadline 但仍可准入时运行，四条 acceptedThroughCommitNo、basisHash、batch/round/advisory 必须完全相同；精确在 roleContentDeadline 申请 contentCommitNo 必须被拒绝。
-- PostgreSQL 用 latch 让一个已在截止前取得 ledger 锁的内容短事务停留：sealer 必须等待其提交/回滚后封存；若锁持续到 freezePublishAdmissionDeadline，effectiveOutcomeAt 的唯一赢家为 SYSTEM_FALLBACK，后续不能生成 CONTENT_SNAPSHOT。AI 表长锁/小连接池耗尽不得阻断 manual 独立池的 report 持久化；时钟健康时也不得阻断 stage/certify。
+- PostgreSQL 用 latch 让内容事务在取得 ledger 锁后停留并跨过 roleContentDeadline：它随后 post-lock 取时必须拒绝正文；sealer 再封存。若 ledger 锁持续到 freezePublishAdmissionDeadline，effectiveOutcomeAt 的唯一赢家为 SYSTEM_FALLBACK，后续不能生成 CONTENT_SNAPSHOT。AI 表长锁/小连接池耗尽不得阻断 manual 独立业务池/authority 保留连接的 report stage/certify。
 - freeze golden vector 覆盖 SEALED OUTCOME_UNKNOWN，以及 UNSEALED 时 seal 后 live RUNNING->TIMED_OUT/OUTCOME_UNKNOWN 两种先后顺序；后者必须固定 rawFactKind=UNSEALED、rawStatus=null 且 basis 字节/hash完全相同。SYSTEM_FALLBACK 三层均 INCOMPLETE。
-- TIME_AUTHORITY_UNAVAILABLE 在 raw 回退/冻结时以 durable trustedFallbackAt 提交；eligibleAt>=roundCreatedAt/highwater。manifest=0 必须 503/零写；manifest=1/N 且预置无/RAW/OUTCOME marker 时，freeze+basis+effective 与全部 N 个已核验 marker 事实全有或全无；第k marker/冲突/commit unknown 故障全回滚，合法 RAW 首胜不被覆盖，身份不符503/报警。高水位/manifest不可读时零新增、HTTP 503。
-- 在 reservation+DISPATCHED 已提交后用 latch 暂停 worker、跨过 latestEgressPermitAt 再进入 AiEgressGate：gate 必须拒绝 transportClosure，transportHandoffAt 不得写入，fake Provider/Tavily/direct/paid-route 调用计数均为零。
-- 另在 AiEgressGate 已写 transportHandoffAt、但尚未调用 transportClosure 时暂停并跨过 permit deadline：允许原同步调用栈继续一次，记录 TRANSPORT_HANDOFF_DELAYED；断言不会取得第二次 permit或自动重试，精确在/晚于 roleContentDeadline 的返回正文被 content gate 拒绝，freeze hash 保持不变。该用例不虚假断言供应商调用计数为零。
+- TIME_AUTHORITY_UNAVAILABLE 在 raw 回退/冻结时以 durable trustedFallbackAt 提交；eligibleAt>=roundCreatedAt/highwater。manifest=0 必须 503/零写；manifest=1/N 且预置无/RAW/OUTCOME marker 时，freeze+basis+effective 与全部 N 个已核验 marker 事实全有或全无；freeze/basis/OUTCOME markers 的 freezeRevision 全为1，正确 hash 但错误 revision 必须整事务回滚；第k marker/冲突/commit unknown 故障全回滚，合法 RAW 首胜不被覆盖，身份不符503/报警。高水位/manifest不可读时零新增、HTTP 503。
+- 在 reservation+DISPATCHED 已提交后用 latch 暂停 worker、跨过 latestEgressPermitAt 再进入 AiEgressGate：gate 必须拒绝注册 transport adapter，transportHandoffAt 不得写入，fake Provider/Tavily/direct/paid-route 调用计数均为零。
+- 另在 AiEgressGate 已写 transportHandoffAt、但尚未由 gate internal 调用注册 adapter 时暂停并跨过 permit deadline：允许同一个 gate 调用帧继续一次，记录 TRANSPORT_HANDOFF_DELAYED；断言业务包从未收到 COMMITTED/permit、不会取得第二次 handoff 或自动重试，精确在/晚于 roleContentDeadline 的返回正文被 content gate 拒绝，freeze hash 保持不变。该用例不虚假断言供应商调用计数为零。
 - 两个真实 PostgreSQL 应用实例同时对同一 marker-null operation 进入 gate，并在赢家提交 marker 后暂停：MODEL、TAVILY、DIRECT、PAID_HTTP 四类各自必须恰有一个赢家和一次 fake transport 调用；输家返回 ALREADY_HANDED_OFF，不释放 reservation、不改 marker。H2 单实例用双线程执行同一合同。
-- OutcomeBasisV1 固定向量在两库字节/hash一致；插入/查询顺序不影响，修改 accepted raw chunk/opinion/sealed terminal reason 才改变 hash，basis 外 live status 不改变。CONTENT_SNAPSHOT 14:48:43.900 准入后受控 300–400ms 业务锁等待仍按既有可见性目标；14:48:44 后零新准入，14:48:45 fallback 与未决唯一键 500ms 未决为 503，决议后只读赢家。
+- OutcomeBasisV1 固定向量在两库字节/hash一致且包含 freezeRevision=1；插入/查询顺序不影响，修改 accepted raw chunk/opinion/sealed terminal reason 才改变 hash，basis 外 live status 不改变。CONTENT_SNAPSHOT 若业务锁在 14:48:44 前已齐且 post-lock upperNow仍严格早于线可合法授权，commit visibility 可稍晚；若任何所需业务锁到 14:48:44 后才释放，post-lock GuardUse 零新准入。14:48:45 fallback 与未决唯一键 500ms 未决为503，决议后只读赢家。
 - 旧 scheduled snapshot 即使存在且 feature 后来开启，也不能被 reconciler 追溯 materialize、扣费或生成 source/batch。
 
 ### 22.4 模型与搜索
@@ -1564,7 +1581,7 @@ React 继续使用 HashRouter，浏览器外部 URL 为 /#/short-term/discussion
 - 供应商接收后本地崩溃、工具请求结果未知、原子预算预占故障、聚合写失败、队列饱和、AI 存储/预算熔断；
 - AI 故障注入前后确定性 payload hash、FINAL_PENDING/FINAL_READY 与认证时间完全一致。
 
-注入 TimeAuthority health proof 自动证明 14:47:00 source/materialization admission 线、14:47:20 INITIAL 派发线、14:47:55 egress permit 线、14:48:30 严格内容接受线、14:48:44 CONTENT_SNAPSHOT SQL 准入线、14:48:45 不可逆 fallback/read 线和 14:49:40 手动认证门禁；另证明启动后冻结/回退 fail closed。真实交易日观察单独记录，不能用当天是否恰有候选替代自动证明。现场验收包括：
+注入 TimeAuthority health proof 自动证明 14:47:00 source/materialization admission 线、14:47:20 INITIAL 派发线、14:47:55 egress permit 线、14:48:30 严格内容接受线、14:48:44 CONTENT_SNAPSHOT GuardUse 授权线、14:48:45 不可逆 fallback/read 线和 14:49:40 手动认证门禁；另证明启动后冻结/回退 fail closed。真实交易日观察单独记录，不能用当天是否恰有候选替代自动证明。现场验收包括：
 
 - 真实手动扫描只生成一个持久结果、一个 batch、四个初始角色；
 - 后台讨论完成并从右上角消息进入完整详情；
@@ -1593,9 +1610,11 @@ React 继续使用 HashRouter，浏览器外部 URL 为 /#/short-term/discussion
 15. 每个阶段的规格与对抗审查均未留下 Critical 或 Important，最终全分支红队也通过。
 16. ShortTermScanScheduler、ShortTermScheduledScanService、ShortTermScheduledExecutorConfig 与 shortTermScheduledExecutor 均不再是生产 bean，ShortTermExecutionSettings 无 cron/自动 scanRequest，历史 scheduled repository/store/API 从 Spring Data 到 controller 全链只读且一律 non-executable；PRESELECT、FINAL、READINESS_GUARD 注册和 catch-up 全部为零，跨过旧触发时间或重启都不产生自动扫描、新 scheduled snapshot、AI source 或费用；ShortTermValidationOutcomeScheduler 与 TradeOutcomeScheduler 不受影响。
 17. 阶段 F 完成后，短线新用户和一次性迁移的旧用户默认看到“今日资金去向”，结果视图中没有“扫描快照”开关或卡片，ShortTermPage 不再轮询 scheduled-snapshots/latest；用户之后可主动隐藏资金去向，长期价投和历史 scheduled snapshot 只读兼容 API 不受影响。
-18. TimeAuthority 启动或运行期健康证明失败时所有 AI 类型都零新外发且无永久 PENDING，manual 认证/executionEligibility 也 fail closed；单行持久高水位在回退后继续推进、JVM 重启或业务事务回滚时均不降低，AI fence 竞争不能耗尽 manual 保留连接或持长锁；OutcomeBasisV1 在 H2/PostgreSQL 字节/hash 一致，14:48:44 后无新 CONTENT_SNAPSHOT SQL 准入，14:48:45 fallback 对未决唯一键返回 503 而非 PENDING，数据库决议后只有不可逆唯一赢家。
-19. 对 sourceEffectiveAt<14:50 的尾盘相关用户 source，14:48:45 起无 batch时只能显示 DEFERRED_CUTOFF/明确失败或 503；14:50 后仅具一次延期资格且未过 D14:52 的 source 可生成一个 RESEARCH_ONLY batch。14:50 后新建 source 仍按自己的 +120s deadline 有界 PENDING。
+18. TimeAuthority 启动或运行期健康证明失败时所有 AI 类型都零新外发且无永久 PENDING，manual 认证/executionEligibility 也 fail closed；单行持久高水位在回退后继续推进、JVM 重启或业务事务回滚时均不降低，AI GuardUse 竞争不能耗尽 manual 保留连接或持长 authority 锁；OutcomeBasisV1 在 H2/PostgreSQL 字节/hash 一致，14:48:44 后无新 CONTENT_SNAPSHOT post-lock 授权，14:48:45 fallback 对未决唯一键返回503而非PENDING，数据库决议后只有不可逆唯一赢家。
+19. 对 sourceEffectiveAt<14:50 的尾盘相关用户 source，14:48:45 起无 batch时只能显示 DEFERRED_CUTOFF/明确失败或 503；14:50 后仅具一次延期资格且未过 D14:52 的 source 可生成一个 RESEARCH_ONLY batch。14:50 后新建 source 仍按自己的 +120s deadline 有界 MATERIALIZATION_PENDING。
 20. manual A/B/HTTP 从不读取 AI 表；父链由 after-commit REPEATABLE_READ linkage snapshot 与一次写入 marker 解析，AI 锁/缺表/超时不改变手动认证，后写 freeze/closer不改变既有父 ID 或 roundEndAt。
+21. 所有时间敏感 mutation 都只能通过 GuardUse 封闭 adapter：先锁全部业务行、再锁 authority、再取 DB raw；350ms guard margin 与100ms提交预算在H2/PostgreSQL一致。裸decision/ticket不能被业务代码消费，COMMIT_UNKNOWN零外发，恢复不复用ticket，四类transport的marker至多一个。
+22. source.materializationDeadlineAt 是 linkage 唯一截止权威，不存在孤立 linkage 或复制 deadline；已认证 FINAL_READY 延期为 RESEARCH_ONLY 时认证事实永久保留，source/batch/round 的 materializedAdvisoryUse 一致。14:50 首次单调用、并发双实例也只生成一个batch。
 
 ## 24. 多 Agent 实施与对抗复核协议
 
@@ -1609,11 +1628,11 @@ React 继续使用 HashRouter，浏览器外部 URL 为 /#/short-term/discussion
 | --- | --- | --- |
 | S | 删除 ShortTermScanScheduler/ShortTermScheduledScanService/ShortTermScheduledExecutorConfig，删除专用 executor，收窄并重命名 settings/store，把底层 repository 也改为 SELECT-only，保留 non-executable 历史只读 API，保护其他调度器 | 旧 cron/property/runNow 仍触发、隐藏 JpaRepository mutator、GET 偷写/合成等待、重启补跑、追溯写 scheduled/AI、误关全局 scheduling 或其他业务任务 |
 | A | PE/PB 决策移除与 React 完全隐藏 | 寻找任何隐藏估值影响、兼容破坏和长期模块误伤 |
-| 0 | 冻结 canonical DDL、OpenAPI、OutcomeBasisV1/其他 JSON Schema、状态枚举、错误码与生成类型 | 合同矛盾、不可执行 CHECK、跨库 hash 漂移、字段遗漏、长内容和兼容 |
+| 0 | 冻结 canonical DDL、OpenAPI、OutcomeBasisV1/其他 JSON Schema、GuardUse/两库 post-lock 授时模板、锁计划/adapter 矩阵、状态枚举、错误码与生成类型 | 合同矛盾、不可执行 CHECK、跨库 hash 漂移、可绕过 GuardUse、锁序环、字段遗漏、长内容和兼容 |
 | B | 讨论领域模型、schema、Repository、原子认领与恢复 | 并发初始化、重复收费、租约竞态、重启数据完整性、H2/PostgreSQL 差异 |
 | C | 四角色编排、LLM 长输出、工具调用、Tavily 与安全网关 | SSRF、DNS/重定向、Prompt Injection、点时越界、密钥外泄、工具死循环 |
 | D | API、React 状态、完整讨论页、历史与继续讨论；同时负责旧 Vue `apps/web` 两个付费入口的 sessionStorage/by-key 恢复与两种 cutoff 路径 | 内容截断、父链错误、轮询泄漏、规则动作与 AI 混淆、旧 Vue 漏实现、权限和幂等 |
-| E | 手动时间窗集成、数据库级 AI 隔离、故障注入、容器与真实链路 | 14:47:00 admission/14:47:20/14:47:55/14:48:30/14:48:44 SQL admission/14:48:45/14:49:30/14:49:40 竞态、持续时钟健康、content seal/freeze、egress handoff 暂停、AI 阻塞手动扫描、重启、多实例与现场可用性 |
+| E | 手动时间窗集成、数据库级 AI 隔离、GuardUse 故障注入、容器与真实链路 | 业务锁/authority锁后取时、350ms方向界、100ms消费、14:47:00/14:47:20/14:47:55/14:48:30/14:48:44/14:48:45/14:49:30/14:49:40 竞态、content seal/freeze、egress commit unknown、AI 阻塞手动扫描、重启、多实例与现场可用性 |
 | F | 短线结果视图偏好迁移、资金去向默认展示、扫描快照卡移除 | 旧偏好迁移循环、误删后台 snapshot、资金流无数据误导、长期页面误伤 |
 
 依赖 DAG 固定为 S -> A -> 0 -> B -> C -> D -> E -> F。S 和 A 都可作为独立可发布变更，但本分支在完整功能交付前不默认开启 AI。B 至 E 共享领域合同，严格串行，不因“多 Agent”而并行修改共享文件；F 只在 E 全链路验收后开始，满足“做完这份之后”再调整结果视图。每阶段使用新的开发 Agent；规格审查与对抗审查可并行只读运行。
@@ -1684,7 +1703,7 @@ Minor 建议可以记录到清单，但若它影响验收、数据安全、投�
 - 容器重建和健康检查；
 - 浏览器真实手动扫描、AI 讨论、联网证据、历史、继续讨论和重启恢复；
 - 浏览器验证今日资金去向默认展示、v1/v2 偏好迁移、扫描快照卡消失、scheduled-snapshots/latest 请求为零且历史只读 API 仍可查询；
-- 注入 TimeAuthority health proof 证明旧 cron 时间点零自动扫描，并在 fake Provider、PostgreSQL 双实例和故障注入下验证 14:47:55 后零新 egress permit、marker 单赢家、14:48:30 后零正文接受、14:48:44 后零 CONTENT_SNAPSHOT SQL 准入、14:48:45 唯一不可逆结果/未决时 503、运行期坏时钟全 AI 与 manual 认证 fail-closed、回退+重启不重开窗口、高并发 AI fence 不阻断 manual 保留连接，以及 14:49:40 手动认证门禁。
+- 注入 TimeAuthority health proof 证明旧 cron 时间点零自动扫描，并在 fake Provider、H2 双连接、PostgreSQL 双实例和故障注入下验证：业务锁与 authority 锁后才取时、350ms方向界/100ms消费、14:47:55 后零新 egress permit、marker 单赢家、commit unknown零外发、14:48:30 后零正文接受、14:48:44 后零 CONTENT_SNAPSHOT 授权、14:48:45 唯一不可逆结果/未决时503、运行期坏时钟全AI与manual认证fail-closed、回退+重启不重开窗口、高并发AI GuardUse不阻断manual保留连接，以及14:49:40手动认证门禁。
 
 只有全部通过且无 Critical/Important 发现，才可合并和推送。任何阶段反复失败都继续驳回修复，除非出现必须由用户决定的真实产品歧义或外部凭据阻塞。
 
