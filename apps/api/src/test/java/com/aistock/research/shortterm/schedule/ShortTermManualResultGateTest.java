@@ -164,6 +164,59 @@ class ShortTermManualResultGateTest {
 
         assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
         assertThat(result.blockedReasons()).containsExactly("COVERAGE_BELOW_95");
+        assertThat(result.message()).isEqualTo("全市场有效行情覆盖率 94.99%（5450/5500）低于95%");
+    }
+
+    @Test
+    void blocksIncompleteRawUniverseWithItsOwnReasonWhenEffectiveRatioPasses() {
+        ShortTermReport report = report(
+                Instant.parse("2026-07-23T06:51:00Z"), true,
+                new BigDecimal("0.9900"), false, List.of());
+        when(report.coverage()).thenReturn(new ShortTermCoverageSnapshot(
+                100,
+                99,
+                1,
+                new BigDecimal("0.9900"),
+                false,
+                "东方财富行情",
+                Instant.parse("2026-07-23T06:51:00Z"),
+                105,
+                104,
+                5,
+                false
+        ));
+
+        ShortTermFinalResultGate.Result result = gate.evaluateManual(report, DECISION_AT);
+
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
+        assertThat(result.blockedReasons()).containsExactly("QUOTE_UNIVERSE_INCOMPLETE");
+        assertThat(result.message()).isEqualTo("全市场原始行情抓取不完整（104/105）");
+    }
+
+    @Test
+    void blocksOtherReliabilityFailureWithoutMislabelingItBelowNinetyFive() {
+        ShortTermReport report = report(
+                Instant.parse("2026-07-23T06:51:00Z"), true,
+                new BigDecimal("0.9900"), false, List.of());
+        when(report.coverage()).thenReturn(new ShortTermCoverageSnapshot(
+                100,
+                99,
+                1,
+                new BigDecimal("0.9900"),
+                false,
+                "东方财富行情",
+                Instant.parse("2026-07-23T06:51:00Z"),
+                105,
+                105,
+                5,
+                true
+        ));
+
+        ShortTermFinalResultGate.Result result = gate.evaluateManual(report, DECISION_AT);
+
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
+        assertThat(result.blockedReasons()).containsExactly("QUOTE_COVERAGE_UNRELIABLE");
+        assertThat(result.message()).isEqualTo("全市场行情覆盖未通过数据来源、新鲜度或点时一致性校验");
     }
 
     @Test

@@ -115,10 +115,22 @@ public class ShortTermFinalResultGate {
             return Optional.of(new Failure("FINAL_REPORT_MISSING", "尾盘终选报告缺失"));
         }
         ShortTermCoverageSnapshot coverage = report.coverage();
-        if (coverage == null || !coverage.executionReliable()
-                || coverage.coverageRatio() == null
+        if (coverage == null || coverage.coverageRatio() == null
                 || coverage.coverageRatio().compareTo(MINIMUM_COVERAGE) < 0) {
-            return Optional.of(new Failure("COVERAGE_BELOW_95", "全市场行情覆盖率低于95%"));
+            return Optional.of(new Failure("COVERAGE_BELOW_95", coverageBelowMessage(coverage)));
+        }
+        if (!coverage.rawComplete()) {
+            return Optional.of(new Failure(
+                    "QUOTE_UNIVERSE_INCOMPLETE",
+                    "全市场原始行情抓取不完整（" + coverage.rawFetchedCount()
+                            + "/" + coverage.rawExpectedCount() + "）"
+            ));
+        }
+        if (!coverage.executionReliable()) {
+            return Optional.of(new Failure(
+                    "QUOTE_COVERAGE_UNRELIABLE",
+                    "全市场行情覆盖未通过数据来源、新鲜度或点时一致性校验"
+            ));
         }
         Instant cutoff = report.dataCutoffAt();
         if (cutoff == null) {
@@ -145,6 +157,18 @@ public class ShortTermFinalResultGate {
             return Optional.of(new Failure("QUOTE_STALE", "尾盘行情已经过期"));
         }
         return Optional.empty();
+    }
+
+    private String coverageBelowMessage(ShortTermCoverageSnapshot coverage) {
+        if (coverage == null || coverage.coverageRatio() == null) {
+            return "全市场有效行情覆盖率缺失，无法通过95%门槛";
+        }
+        String percentage = coverage.coverageRatio()
+                .multiply(BigDecimal.valueOf(100))
+                .setScale(2, java.math.RoundingMode.HALF_UP)
+                .toPlainString();
+        return "全市场有效行情覆盖率 " + percentage + "%（"
+                + coverage.fetchedCount() + "/" + coverage.expectedCount() + "）低于95%";
     }
 
     private boolean isClosedMarketCachePreview(
