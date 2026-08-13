@@ -32,9 +32,15 @@ vi.mock('../components/ui/Toast', () => ({
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
-    warning: vi.fn()
+    warning: vi.fn(),
+    dismiss: vi.fn()
   }
 }))
+
+const manualSuccessToastOptions = {
+  key: 'short-term-manual-scan',
+  durationMs: 5000
+}
 
 const emptyReport = {
   scope: '短线右侧',
@@ -888,7 +894,10 @@ describe('ShortTermPage manual scan flow', () => {
         { signalFamily: 'GOLDEN_CROSS_BREAKOUT', marketRegime: 'RISK_ON', horizon: 'T2' }
       ]
     })
-    expect(toast.success).toHaveBeenCalledWith('手动分析已完成，已生成当前时点候选，已生成 1 个候选')
+    expect(toast.success).toHaveBeenCalledWith(
+      '手动分析已完成，已生成当前时点候选，已生成 1 个候选',
+      manualSuccessToastOptions
+    )
     expect(document.querySelector('section[aria-live="polite"]')).toBeNull()
     expect(document.body.textContent).not.toContain('手动最终结果已就绪')
     await clickButton('候选600795')
@@ -1027,7 +1036,10 @@ describe('ShortTermPage manual scan flow', () => {
     await renderWithManualReport(root, reportWithCandidates(['600795']), 'manual-status-hidden')
 
     expect(document.body.textContent).toContain('候选600795')
-    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('已生成 1 个候选'))
+    expect(toast.success).toHaveBeenCalledWith(
+      expect.stringContaining('已生成 1 个候选'),
+      manualSuccessToastOptions
+    )
     expect(document.body.textContent).not.toContain('手动最终结果已就绪')
     expect(document.body.textContent).not.toContain('手动重算')
   })
@@ -1089,7 +1101,10 @@ describe('ShortTermPage manual scan flow', () => {
     expect(fetchShortTermScanJob).toHaveBeenCalledTimes(2)
     await renderPagePlain(root)
     expect(document.body.textContent).toContain('候选600901')
-    expect(toast.success).toHaveBeenCalledWith('手动扫描完成，已生成 1 个候选')
+    expect(toast.success).toHaveBeenCalledWith(
+      '手动扫描完成，已生成 1 个候选',
+      manualSuccessToastOptions
+    )
     vi.useRealTimers()
   })
 })
