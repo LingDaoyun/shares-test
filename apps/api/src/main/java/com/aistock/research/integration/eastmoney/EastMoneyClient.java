@@ -168,14 +168,10 @@ public class EastMoneyClient {
                 }
                 fetchTarget = Math.min(requestedCount, reportedTotal);
             }
-            int beforeMergeCount = merged.size();
             page.quotes().stream()
                     .filter(quote -> quote.symbol() != null && !quote.symbol().isBlank())
                     .forEach(quote -> merged.putIfAbsent(quote.symbol(), quote));
             if (merged.size() >= fetchTarget) {
-                break;
-            }
-            if (merged.size() == beforeMergeCount) {
                 break;
             }
         }
@@ -233,16 +229,20 @@ public class EastMoneyClient {
         return fetchAshareQuotePage(pageNumber, pageSize).quotes();
     }
 
-    AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+    String ashareQuotePageUrl(int pageNumber, int pageSize) {
         int safePageNumber = Math.max(1, pageNumber);
         int safePageSize = Math.max(1, Math.min(MAX_QUOTE_PAGE_SIZE, pageSize));
-        String url = properties.eastmoneyQuoteUrl()
+        return properties.eastmoneyQuoteUrl()
                 + "?pn=" + safePageNumber
                 + "&pz=" + safePageSize
                 + "&po=1"
-                + "&fid=f6"
+                + "&fid=f12"
                 + "&fs=" + A_SHARE_FILTER
                 + "&fields=" + QUOTE_FIELDS;
+    }
+
+    AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+        String url = ashareQuotePageUrl(pageNumber, pageSize);
         try {
             JsonNode data = fetchQuoteRoot(url).path("data");
             JsonNode diff = data.path("diff");

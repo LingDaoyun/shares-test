@@ -369,6 +369,29 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void quotePageUrlUsesStableSecurityCodeSort() {
+        String url = client.ashareQuotePageUrl(2, 100);
+
+        assertThat(url)
+                .contains("pn=2", "pz=100", "po=1", "fid=f12")
+                .doesNotContain("fid=f6");
+    }
+
+    @Test
+    void snapshotContinuesPastADuplicatePageToCollectLaterUniqueRows() {
+        DuplicateMiddlePageStubClient snapshotClient = new DuplicateMiddlePageStubClient();
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(3);
+
+        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.expectedCount()).isEqualTo(3);
+        assertThat(snapshot.fetchedCount()).isEqualTo(3);
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol)
+                .containsExactly("600001", "600002", "600003");
+        assertThat(snapshotClient.requestedPages).isEqualTo(3);
+    }
+
+    @Test
     void snapshotUsesLivePaginationAsCanonicalUniverse() {
         SnapshotStubClient snapshotClient = new SnapshotStubClient();
 
@@ -638,6 +661,30 @@ class EastMoneyClientTest {
                     ? new AshareQuotePage(2, List.of(SnapshotStubClient.quote(
                             "600001", "工业", "东方财富实时全市场")))
                     : new AshareQuotePage(0, List.of());
+        }
+    }
+
+    private static final class DuplicateMiddlePageStubClient extends EastMoneyClient {
+
+        private int requestedPages;
+
+        private DuplicateMiddlePageStubClient() {
+            super(null, new ObjectMapper(), null);
+        }
+
+        @Override
+        AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+            requestedPages = Math.max(requestedPages, pageNumber);
+            return switch (pageNumber) {
+                case 1 -> new AshareQuotePage(3, List.of(
+                        SnapshotStubClient.quote("600001", "工业", "东方财富实时全市场")));
+                case 2 -> new AshareQuotePage(3, List.of(
+                        SnapshotStubClient.quote("600001", "工业", "东方财富实时全市场")));
+                case 3 -> new AshareQuotePage(3, List.of(
+                        SnapshotStubClient.quote("600002", "工业", "东方财富实时全市场"),
+                        SnapshotStubClient.quote("600003", "工业", "东方财富实时全市场")));
+                default -> new AshareQuotePage(3, List.of());
+            };
         }
     }
 }
