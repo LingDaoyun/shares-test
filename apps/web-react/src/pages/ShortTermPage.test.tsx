@@ -889,8 +889,8 @@ describe('ShortTermPage manual scan flow', () => {
       ]
     })
     expect(toast.success).toHaveBeenCalledWith('手动分析已完成，已生成当前时点候选，已生成 1 个候选')
-    expect(document.querySelector('section[aria-live="polite"]')?.textContent)
-      .toContain('手动最终结果已就绪')
+    expect(document.querySelector('section[aria-live="polite"]')).toBeNull()
+    expect(document.body.textContent).not.toContain('手动最终结果已就绪')
     await clickButton('候选600795')
     expect(document.body.textContent).toContain('信号解释与历史验证')
     expect(document.body.textContent).toContain('T1 · 样本积累中 2/30')
@@ -1021,6 +1021,15 @@ describe('ShortTermPage manual scan flow', () => {
     expect(document.body.textContent).toContain('候选600900')
     expect(document.body.textContent).not.toContain('自动扫描正在执行')
     expect(document.body.textContent).not.toContain('计划任务')
+  })
+
+  it('does not render the top status card after a manual scan result loads', async () => {
+    await renderWithManualReport(root, reportWithCandidates(['600795']), 'manual-status-hidden')
+
+    expect(document.body.textContent).toContain('候选600795')
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('已生成 1 个候选'))
+    expect(document.body.textContent).not.toContain('手动最终结果已就绪')
+    expect(document.body.textContent).not.toContain('手动重算')
   })
 
   it('keeps polling a manual scan after the short-term page unmounts and restores the result on return', async () => {

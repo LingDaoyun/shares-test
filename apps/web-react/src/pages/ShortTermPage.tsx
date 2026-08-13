@@ -152,10 +152,12 @@ export function ShortTermPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      {origin === 'SCHEDULED' && scheduledSnapshot && isScheduledScanRunning(scheduledSnapshot) ? (
-        <ScheduledScanPulse snapshot={scheduledSnapshot} />
-      ) : snapshot && !isWaitingScheduledSnapshot(snapshot) ? (
-        <ScheduledSnapshotStatus snapshot={snapshot} origin={origin} />
+      {origin === 'SCHEDULED' ? (
+        scheduledSnapshot && isScheduledScanRunning(scheduledSnapshot) ? (
+          <ScheduledScanPulse snapshot={scheduledSnapshot} />
+        ) : snapshot && !isWaitingScheduledSnapshot(snapshot) ? (
+          <ScheduledSnapshotStatus snapshot={snapshot} origin="SCHEDULED" />
+        ) : null
       ) : null}
 
       <Card
