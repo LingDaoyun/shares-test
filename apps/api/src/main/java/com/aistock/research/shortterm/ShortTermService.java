@@ -587,7 +587,11 @@ public class ShortTermService {
             ShortTermCoverageSnapshot coverage,
             ShortTermTechnicalReviewCoverage technicalCoverage
     ) {
-        String coverageText = coverage.fetchedCount() + "/" + coverage.expectedCount();
+        String effectiveCoverageText = coverage.fetchedCount() + "/" + coverage.expectedCount();
+        String rawCoverageText = coverage.rawFetchedCount() + "/" + coverage.rawExpectedCount();
+        String acquisitionText = " 行情源原始抓取 " + rawCoverageText
+                + (coverage.rawComplete() ? "，原始页完整" : "，原始页不完整")
+                + "；无有效现价排除 " + coverage.excludedNoPriceCount() + " 只。";
         ShortTermTechnicalReviewCoverage safeTechnicalCoverage = technicalCoverage == null
                 ? ShortTermTechnicalReviewCoverage.unavailable()
                 : technicalCoverage;
@@ -596,11 +600,13 @@ public class ShortTermService {
                 + "，实际请求 " + safeTechnicalCoverage.requestedCount()
                 + "；该比例只描述预选池的K线复核进度，绝不替代全市场行情覆盖率。";
         if (coverage.executionReliable()) {
-            return QUOTE_NOTE + " 本轮行情覆盖 " + coverageText + "，来源：" + coverage.source() + "。" + goldenCrossNote;
+            return QUOTE_NOTE + " 本轮有效行情覆盖 " + effectiveCoverageText + "，来源："
+                    + coverage.source() + "。" + acquisitionText + goldenCrossNote;
         }
-        return QUOTE_NOTE + " 本轮行情覆盖不足 " + coverageText + "，缺失 " + coverage.missingCount()
+        return QUOTE_NOTE + " 本轮有效行情覆盖不足 " + effectiveCoverageText + "，缺失 "
+                + coverage.missingCount()
                 + " 只；页面保留研究结果，但覆盖率或点时语义未通过时关闭短线执行动作。来源："
-                + coverage.source() + "。" + goldenCrossNote;
+                + coverage.source() + "。" + acquisitionText + goldenCrossNote;
     }
 
     private ShortTermMarketFundDirection marketFundDirection(List<EastMoneyQuote> quoteUniverse) {
@@ -1498,6 +1504,12 @@ public class ShortTermService {
             boolean requireCompleteUniverse,
             boolean allowClosedMarketCachePreview
     ) {
+        List<EastMoneyQuote> safeUniqueQuotes = uniqueMarketQuotes == null ? List.of() : uniqueMarketQuotes;
+        int rawFetchedCount = safeUniqueQuotes.size();
+        List<EastMoneyQuote> usableRawQuotes = safeUniqueQuotes.stream()
+                .filter(this::hasUsablePrice)
+                .toList();
+        int excludedNoPriceCount = rawFetchedCount - usableRawQuotes.size();
         if (snapshot == null || snapshot.expectedCount() <= 0) {
             return new ShortTermCoverageSnapshot(
                     0,
@@ -1508,40 +1520,54 @@ public class ShortTermService {
                     snapshot == null || snapshot.source() == null || snapshot.source().isBlank()
                             ? "未知"
                             : snapshot.source(),
-                    snapshot == null ? null : snapshot.fetchedAt()
+                    snapshot == null ? null : snapshot.fetchedAt(),
+                    0,
+                    rawFetchedCount,
+                    excludedNoPriceCount,
+                    false
             );
         }
-        int fetchedCount = eligibleQuotes == null ? 0 : eligibleQuotes.size();
-        int missingCount = Math.max(0, snapshot.expectedCount() - fetchedCount);
-        BigDecimal ratio = BigDecimal.valueOf(fetchedCount)
-                .divide(BigDecimal.valueOf(snapshot.expectedCount()), 4, RoundingMode.HALF_UP);
+        int rawExpectedCount = Math.max(0, snapshot.expectedCount());
+        int effectiveExpectedCount = Math.max(0, rawExpectedCount - excludedNoPriceCount);
+        int effectiveFetchedCount = eligibleQuotes == null ? 0 : eligibleQuotes.size();
+        int effectiveMissingCount = Math.max(0, effectiveExpectedCount - effectiveFetchedCount);
+        BigDecimal ratio = effectiveExpectedCount == 0
+                ? BigDecimal.ZERO
+                : BigDecimal.valueOf(effectiveFetchedCount)
+                .divide(BigDecimal.valueOf(effectiveExpectedCount), 4, RoundingMode.HALF_UP);
         Instant decisionInstant = decisionAt.atZone(SHANGHAI).toInstant();
         boolean validSource = snapshot.source() != null && !snapshot.source().isBlank();
         boolean freshSnapshot = snapshot.fetchedAt() != null
                 && !snapshot.fetchedAt().isBefore(decisionInstant.minus(automationSettings.freshness()))
                 && !snapshot.fetchedAt().isAfter(decisionInstant.plusSeconds(5));
-        List<EastMoneyQuote> safeUniqueQuotes = uniqueMarketQuotes == null ? List.of() : uniqueMarketQuotes;
-        boolean requestedFullReportedUniverse = snapshot.requestedCount() >= snapshot.expectedCount();
-        boolean countsConsistent = snapshot.fetchedCount() == safeUniqueQuotes.size()
-                && safeUniqueQuotes.size() <= snapshot.expectedCount()
-                && fetchedCount <= safeUniqueQuotes.size();
-        boolean allQuotesRespectDecisionAt = safeUniqueQuotes.stream()
+        boolean requestedFullReportedUniverse = rawExpectedCount > 0
+                && snapshot.requestedCount() >= rawExpectedCount;
+        boolean countsConsistent = snapshot.fetchedCount() == rawFetchedCount
+                && rawFetchedCount <= rawExpectedCount
+                && excludedNoPriceCount <= rawFetchedCount
+                && effectiveFetchedCount <= effectiveExpectedCount;
+        boolean allQuotesRespectDecisionAt = usableRawQuotes.stream()
                 .allMatch(quote -> quoteAvailableAtDecision(quote, decisionAt, allowClosedMarketCachePreview));
+        boolean rawCompletenessRequired = requireCompleteUniverse || requestedFullReportedUniverse;
         boolean reliable = ratio.compareTo(MIN_RELIABLE_MARKET_COVERAGE) >= 0
                 && validSource
                 && freshSnapshot
                 && requestedFullReportedUniverse
                 && countsConsistent
                 && allQuotesRespectDecisionAt
-                && (!requireCompleteUniverse || snapshot.complete());
+                && (!rawCompletenessRequired || snapshot.complete());
         return new ShortTermCoverageSnapshot(
-                snapshot.expectedCount(),
-                fetchedCount,
-                missingCount,
+                effectiveExpectedCount,
+                effectiveFetchedCount,
+                effectiveMissingCount,
                 ratio,
                 reliable,
                 validSource ? snapshot.source() : "未知",
-                snapshot.fetchedAt()
+                snapshot.fetchedAt(),
+                rawExpectedCount,
+                rawFetchedCount,
+                excludedNoPriceCount,
+                snapshot.complete()
         );
     }
 

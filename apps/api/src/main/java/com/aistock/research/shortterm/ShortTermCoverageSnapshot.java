@@ -10,8 +10,36 @@ public record ShortTermCoverageSnapshot(
         BigDecimal coverageRatio,
         boolean executionReliable,
         String source,
-        Instant fetchedAt
+        Instant fetchedAt,
+        int rawExpectedCount,
+        int rawFetchedCount,
+        int excludedNoPriceCount,
+        boolean rawComplete
 ) {
+    public ShortTermCoverageSnapshot(
+            int expectedCount,
+            int fetchedCount,
+            int missingCount,
+            BigDecimal coverageRatio,
+            boolean executionReliable,
+            String source,
+            Instant fetchedAt
+    ) {
+        this(
+                expectedCount,
+                fetchedCount,
+                missingCount,
+                coverageRatio,
+                executionReliable,
+                source,
+                fetchedAt,
+                expectedCount,
+                executionReliable ? expectedCount : fetchedCount,
+                0,
+                executionReliable
+        );
+    }
+
     public static ShortTermCoverageSnapshot unreliable() {
         return new ShortTermCoverageSnapshot(
                 0,
@@ -20,7 +48,11 @@ public record ShortTermCoverageSnapshot(
                 BigDecimal.ZERO,
                 false,
                 "未知",
-                null
+                null,
+                0,
+                0,
+                0,
+                false
         );
     }
 }

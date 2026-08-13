@@ -252,7 +252,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void invalidQuotesNeverCountTowardTheNinetyFivePercentCoverageGate() {
+    void completeNoPriceRowsAreAuditedButExcludedFromEffectiveCoverageDenominator() {
         List<EastMoneyQuote> valid = IntStream.range(0, 94)
                 .mapToObj(index -> quote(
                         String.format("600%03d", index), "有效样本" + index,
@@ -267,11 +267,51 @@ class ShortTermServiceTest {
         eastMoneyClient.snapshotExpectedCount = 100;
 
         ShortTermReport report = service.report(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null)
+                new ShortTermScanRequest(3, 6000, 10, null, null, null, null, null, null, null, null, null)
         );
 
+        assertThat(report.coverage().rawExpectedCount()).isEqualTo(100);
+        assertThat(report.coverage().rawFetchedCount()).isEqualTo(100);
+        assertThat(report.coverage().excludedNoPriceCount()).isEqualTo(6);
+        assertThat(report.coverage().rawComplete()).isTrue();
         assertThat(report.coverage().fetchedCount()).isEqualTo(94);
-        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9400");
+        assertThat(report.coverage().expectedCount()).isEqualTo(94);
+        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("1.0000");
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.quoteNote()).contains(
+                "有效行情覆盖 94/94",
+                "行情源原始抓取 100/100",
+                "无有效现价排除 6"
+        );
+    }
+
+    @Test
+    void missingRawRowsRemainInEffectiveDenominatorAndKeepCoverageUnreliable() {
+        List<EastMoneyQuote> valid = IntStream.range(0, 99)
+                .mapToObj(index -> quote(
+                        String.format("600%03d", index), "有效样本" + index,
+                        "10.62", "1.20", "18", "1.60", "600000000"))
+                .toList();
+        List<EastMoneyQuote> noPrice = IntStream.range(0, 5)
+                .mapToObj(index -> quote(
+                        String.format("601%03d", index), "无价格样本" + index,
+                        "0", "1.20", "18", "1.60", "600000000"))
+                .toList();
+        eastMoneyClient.quotes = java.util.stream.Stream.concat(valid.stream(), noPrice.stream()).toList();
+        eastMoneyClient.snapshotExpectedCount = 105;
+        eastMoneyClient.snapshotComplete = false;
+
+        ShortTermReport report = service.report(
+                new ShortTermScanRequest(3, 6000, 10, null, null, null, null, null, null, null, null, null)
+        );
+
+        assertThat(report.coverage().rawExpectedCount()).isEqualTo(105);
+        assertThat(report.coverage().rawFetchedCount()).isEqualTo(104);
+        assertThat(report.coverage().excludedNoPriceCount()).isEqualTo(5);
+        assertThat(report.coverage().rawComplete()).isFalse();
+        assertThat(report.coverage().expectedCount()).isEqualTo(100);
+        assertThat(report.coverage().fetchedCount()).isEqualTo(99);
+        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9900");
         assertThat(report.coverage().executionReliable()).isFalse();
     }
 
@@ -407,7 +447,7 @@ class ShortTermServiceTest {
         assertThat(report.coverage().expectedCount()).isEqualTo(20);
         assertThat(report.coverage().fetchedCount()).isEqualTo(19);
         assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9500");
-        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.coverage().executionReliable()).isFalse();
         assertThat(report.reviewedSymbols()).containsExactlyInAnyOrderElementsOf(eastMoneyClient.requestedKlineSymbols);
         assertThat(report.dataCutoffAt()).isEqualTo(Instant.parse("2026-07-07T06:58:00Z"));
 
