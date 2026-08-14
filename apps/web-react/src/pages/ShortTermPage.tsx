@@ -20,7 +20,7 @@ import { BuyEntryButton } from '../components/tradefeedback/BuyEntryButton'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
-import { changeClass, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent, formatValuationState } from '../lib/format'
+import { changeClass, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent } from '../lib/format'
 import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCounterEvidenceTone, goldenCrossDisplayLabel, goldenCrossSpreadLabel, goldenCrossSpreadTrendLabel, goldenCrossTone, goldenCrossV2Context } from '../lib/shortTermGoldenCross'
 import { loadShortTermViewPreferences, saveShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import type { ShortTermViewPreferences } from '../lib/shortTermViewPreferences'
@@ -32,8 +32,6 @@ interface DraftParams {
   scanLimit: number
   klineLimit: number
   minAmountYi: number
-  maxPe: number
-  maxPb: number
   minVolumeRatio: number
   maxEntryRise: number
   maxDistanceToMa20: number
@@ -47,8 +45,6 @@ const DEFAULT_DRAFT: DraftParams = {
   scanLimit: 6000,
   klineLimit: 120,
   minAmountYi: 0.8,
-  maxPe: 100,
-  maxPb: 15,
   minVolumeRatio: 1.2,
   maxEntryRise: 6.5,
   maxDistanceToMa20: 8,
@@ -193,13 +189,11 @@ export function ShortTermPage() {
           </div>
         }
       >
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <NumberField label="候选数量" value={draft.limit} min={3} max={12} onChange={(value) => setDraft({ ...draft, limit: value })} />
           <NumberField label="扫描数量" value={draft.scanLimit} min={50} max={6000} step={100} onChange={(value) => setDraft({ ...draft, scanLimit: value })} />
           <NumberField label="K线复核数" value={draft.klineLimit} min={10} max={160} step={10} onChange={(value) => setDraft({ ...draft, klineLimit: value })} />
           <NumberField label="成交额下限(亿)" value={draft.minAmountYi} min={0.8} max={30} step={0.05} onChange={(value) => setDraft({ ...draft, minAmountYi: value })} />
-          <NumberField label="PE 参考带" value={draft.maxPe} min={4} max={200} onChange={(value) => setDraft({ ...draft, maxPe: value })} />
-          <NumberField label="PB 参考带" value={draft.maxPb} min={0.2} max={40} step={0.1} onChange={(value) => setDraft({ ...draft, maxPb: value })} />
           <NumberField label="量比下限" value={draft.minVolumeRatio} min={1} max={3.2} step={0.05} onChange={(value) => setDraft({ ...draft, minVolumeRatio: value })} />
           <NumberField label="追涨上限%" value={draft.maxEntryRise} min={1} max={10} step={0.1} onChange={(value) => setDraft({ ...draft, maxEntryRise: value })} />
           <NumberField label="距20日线%" value={draft.maxDistanceToMa20} min={2} max={20} step={0.5} onChange={(value) => setDraft({ ...draft, maxDistanceToMa20: value })} />
@@ -237,7 +231,7 @@ export function ShortTermPage() {
         </label>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
           <p className="text-xs leading-relaxed text-ink-500">
-            参考带只影响估值语境分和风险提示，不决定股票是否入选；低流动性、长期横盘、急拉和离均线过远仍受约束。
+            低流动性、长期横盘、急拉和离均线过远仍受约束。
           </p>
         </div>
       </Card>
@@ -559,8 +553,6 @@ function toApiParams(params: DraftParams): ShortTermParams {
     scanLimit: params.scanLimit,
     klineLimit: params.klineLimit,
     minAmount: Math.round(params.minAmountYi * 100000000),
-    maxPe: params.maxPe,
-    maxPb: params.maxPb,
     minVolumeRatio: params.minVolumeRatio,
     maxEntryRise: params.maxEntryRise,
     maxDistanceToMa20: params.maxDistanceToMa20,
@@ -810,13 +802,6 @@ function CandidateDetail({
           <Metric label="涨跌幅" value={<span className={changeClass(candidate.changePercent)}>{formatSignedPercent(candidate.changePercent)}</span>} />
           <Metric label="PE TTM" value={formatNumber(candidate.peTtm)} />
           <Metric label="PB" value={formatNumber(candidate.pbRatio)} />
-          <Metric
-            label="估值语境"
-            value={candidate.valuationContext.applicableModel === 'CYCLICAL' && candidate.valuationContext.state === 'DISTORTED'
-              ? '周期盈利失真'
-              : formatValuationState(candidate.valuationContext.state)}
-          />
-          <Metric label="估值参考" value={`PE ${formatNumber(candidate.valuationContext.peReference)} / PB ${formatNumber(candidate.valuationContext.pbReference)}`} />
           <Metric label="买入观察区" value={`${formatPrice(candidate.buyZoneLow)} - ${formatPrice(candidate.buyZoneHigh)}`} />
           <Metric label="止损参考" value={formatPrice(candidate.stopPrice)} />
           <Metric label="尾盘状态" value={candidate.tailSignal.statusLabel} />
@@ -921,7 +906,6 @@ function CandidateDetail({
         <div className="grid grid-cols-2 gap-2">
           <ScoreMetric label="技术结构语境" value={candidate.score.technicalScore} />
           <ScoreMetric label="市场热度语境" value={candidate.score.marketHeatScore} />
-          <ScoreMetric label="估值语境" value={candidate.score.valuationScore} />
           <ScoreMetric label="财报语境" value={candidate.score.financialScore} />
           <ScoreMetric label="风险提示分（不计主分）" value={candidate.score.riskPenalty} />
         </div>
@@ -1111,7 +1095,8 @@ function shortTermFactorContext(
   const shrinkRiseScore = candidate.tailSignal.score ?? candidate.score.volumeScore
   return {
     industry: candidate.industry ?? '短线候选',
-    valuationDiscountScore: candidate.score.valuationScore,
+    // 短线策略已移除估值分，此处传 V2 信号服务自身的默认中性值 62
+    valuationDiscountScore: 62,
     qualityScore: candidate.score.financialScore,
     moatScore: candidate.score.financialScore,
     profitabilityScore: candidate.score.financialScore,

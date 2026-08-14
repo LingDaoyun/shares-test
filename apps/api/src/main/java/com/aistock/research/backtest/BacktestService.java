@@ -288,8 +288,6 @@ public class BacktestService {
                 1,
                 ruleSet.lookbackDays(),
                 BigDecimal.ZERO,
-                new BigDecimal("9999"),
-                new BigDecimal("9999"),
                 ruleSet.minVolumeRatio(),
                 new BigDecimal("4.00"),
                 ruleSet.maxDistanceToMa20Percent(),

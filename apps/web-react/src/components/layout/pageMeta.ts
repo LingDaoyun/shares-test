@@ -15,7 +15,7 @@ export const pageMeta: Record<PageKey, PageMeta> = {
   shortTerm: {
     eyebrow: 'SHORT TERM',
     title: '短线右侧',
-    description: '用 K 线右侧早期、量能、估值和财报质量共同筛选价值回归候选。'
+    description: '用 K 线右侧早期、量能和财报质量共同筛选价值回归候选。'
   },
   policy: {
     eyebrow: 'POLICY INDUSTRY',

@@ -3,7 +3,6 @@ package com.aistock.research.shortterm;
 import com.aistock.research.trading.TradingAdvice;
 import com.aistock.research.trading.QuoteFreshnessSnapshot;
 import com.aistock.research.quality.EvidenceCompleteness;
-import com.aistock.research.valuation.ValuationContext;
 import com.aistock.research.shortterm.chip.ShortTermChipSnapshot;
 
 import java.math.BigDecimal;
@@ -21,7 +20,6 @@ public record ShortTermCandidate(
         BigDecimal pbRatio,
         BigDecimal amount,
         QuoteFreshnessSnapshot quoteFreshness,
-        ValuationContext valuationContext,
         String phase,
         String phaseLabel,
         String action,
@@ -75,7 +73,6 @@ public record ShortTermCandidate(
             BigDecimal pbRatio,
             BigDecimal amount,
             QuoteFreshnessSnapshot quoteFreshness,
-            ValuationContext valuationContext,
             String phase,
             String phaseLabel,
             String action,
@@ -102,7 +99,7 @@ public record ShortTermCandidate(
     ) {
         this(
                 rank, symbol, name, market, industry, latestPrice, changePercent,
-                peTtm, pbRatio, amount, quoteFreshness, valuationContext,
+                peTtm, pbRatio, amount, quoteFreshness,
                 phase, phaseLabel, action, actionLabel, reason, todayAdvice, tailSignal,
                 score, technical, financial, buyZoneLow, buyZoneHigh, stopPrice,
                 strengths, risks, entryRules, exitRules, evidenceCompleteness, evidence,
@@ -124,7 +121,6 @@ public record ShortTermCandidate(
             BigDecimal pbRatio,
             BigDecimal amount,
             QuoteFreshnessSnapshot quoteFreshness,
-            ValuationContext valuationContext,
             String phase,
             String phaseLabel,
             String action,
@@ -148,7 +144,7 @@ public record ShortTermCandidate(
     ) {
         this(
                 rank, symbol, name, market, industry, latestPrice, changePercent,
-                peTtm, pbRatio, amount, quoteFreshness, valuationContext,
+                peTtm, pbRatio, amount, quoteFreshness,
                 phase, phaseLabel, action, actionLabel, reason, todayAdvice, tailSignal,
                 score, technical, financial, buyZoneLow, buyZoneHigh, stopPrice,
                 strengths, risks, entryRules, exitRules, evidenceCompleteness, evidence,

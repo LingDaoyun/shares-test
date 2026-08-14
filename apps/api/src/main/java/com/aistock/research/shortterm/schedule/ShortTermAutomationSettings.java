@@ -77,8 +77,6 @@ public class ShortTermAutomationSettings {
                 integer("research.short-term.schedule.kline-limit", 120, 20, 500),
                 decimal("research.short-term.schedule.min-amount", "80000000", ZERO,
                         new BigDecimal("100000000000000")),
-                decimal("research.short-term.schedule.max-pe", "100", ONE, new BigDecimal("1000")),
-                decimal("research.short-term.schedule.max-pb", "15", new BigDecimal("0.1"), HUNDRED),
                 decimal("research.short-term.schedule.min-volume-ratio", "1.20",
                         ONE, new BigDecimal("3.20")),
                 decimal("research.short-term.schedule.max-entry-rise", "6.5", ZERO, new BigDecimal("20")),

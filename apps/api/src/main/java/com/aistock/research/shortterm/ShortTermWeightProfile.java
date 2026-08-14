@@ -8,7 +8,6 @@ import java.math.BigDecimal;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ShortTermWeightProfile(
-        BigDecimal preliminaryValuation,
         BigDecimal preliminaryLiquidity,
         BigDecimal preliminaryNonChase,
         BigDecimal preliminaryHeat,
@@ -19,11 +18,10 @@ public record ShortTermWeightProfile(
         String modelVersion,
         String weightMeaning
 ) {
-    private static final String CURRENT_VERSION = "short-four-signal-v2";
+    private static final String CURRENT_VERSION = "short-four-signal-v3";
     private static final String LEGACY_VERSION = "legacy-short-term-v1";
 
     public ShortTermWeightProfile(
-            BigDecimal preliminaryValuation,
             BigDecimal preliminaryLiquidity,
             BigDecimal preliminaryNonChase,
             BigDecimal preliminaryHeat,
@@ -33,7 +31,6 @@ public record ShortTermWeightProfile(
             BigDecimal finalCloseStrength
     ) {
         this(
-                preliminaryValuation,
                 preliminaryLiquidity,
                 preliminaryNonChase,
                 preliminaryHeat,
@@ -47,7 +44,6 @@ public record ShortTermWeightProfile(
     }
 
     public ShortTermWeightProfile(
-            BigDecimal preliminaryValuation,
             BigDecimal preliminaryLiquidity,
             BigDecimal preliminaryNonChase,
             BigDecimal preliminaryHeat,
@@ -58,7 +54,6 @@ public record ShortTermWeightProfile(
             BigDecimal finalValuation
     ) {
         this(
-                preliminaryValuation,
                 preliminaryLiquidity,
                 preliminaryNonChase,
                 preliminaryHeat,
@@ -92,7 +87,6 @@ public record ShortTermWeightProfile(
                 || (finalGoldenCross == null && finalTechnical != null);
         if (legacy) {
             return new ShortTermWeightProfile(
-                    preliminaryValuation,
                     preliminaryLiquidity,
                     preliminaryNonChase,
                     preliminaryHeat,
@@ -104,7 +98,6 @@ public record ShortTermWeightProfile(
             );
         }
         return new ShortTermWeightProfile(
-                preliminaryValuation,
                 preliminaryLiquidity,
                 preliminaryNonChase,
                 preliminaryHeat,
@@ -120,8 +113,7 @@ public record ShortTermWeightProfile(
     }
 
     public BigDecimal preliminaryTotal() {
-        return preliminaryValuation
-                .add(preliminaryLiquidity)
+        return preliminaryLiquidity
                 .add(preliminaryNonChase)
                 .add(preliminaryHeat);
     }

@@ -117,8 +117,6 @@ export interface ShortTermParams {
   scanLimit?: number
   klineLimit?: number
   minAmount?: number
-  maxPe?: number
-  maxPb?: number
   minVolumeRatio?: number
   maxEntryRise?: number
   maxDistanceToMa20?: number

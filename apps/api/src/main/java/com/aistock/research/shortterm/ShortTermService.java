@@ -22,8 +22,6 @@ import com.aistock.research.trading.AsharePriceLimitRule;
 import com.aistock.research.trading.QuoteFreshnessService;
 import com.aistock.research.trading.QuoteFreshnessSnapshot;
 import com.aistock.research.trading.TradingClockService;
-import com.aistock.research.valuation.ValuationContext;
-import com.aistock.research.valuation.ValuationContextCalculator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.StandardEnvironment;
 import org.slf4j.Logger;
@@ -59,8 +57,6 @@ public class ShortTermService {
     private static final int DEFAULT_KLINE_LIMIT = 120;
     private static final int MAX_KLINE_LIMIT = 160;
     private static final BigDecimal DEFAULT_MIN_AMOUNT = new BigDecimal("80000000");
-    private static final BigDecimal DEFAULT_MAX_PE = new BigDecimal("100");
-    private static final BigDecimal DEFAULT_MAX_PB = new BigDecimal("15.0");
     private static final BigDecimal DEFAULT_MIN_VOLUME_RATIO = new BigDecimal("1.20");
     private static final BigDecimal DEFAULT_MAX_ENTRY_RISE = new BigDecimal("6.50");
     private static final BigDecimal DEFAULT_MAX_DISTANCE_TO_MA20 = new BigDecimal("8.00");
@@ -80,10 +76,9 @@ public class ShortTermService {
     private static final LocalTime POST_CLOSE_FIXED_PRICE_END = LocalTime.of(15, 30);
     private static final String ACTIONABLE_TAIL_LABEL = "14:45-14:49";
     private static final ShortTermWeightProfile WEIGHT_PROFILE = new ShortTermWeightProfile(
-            new BigDecimal("0.10"),
-            new BigDecimal("0.30"),
-            new BigDecimal("0.25"),
             new BigDecimal("0.35"),
+            new BigDecimal("0.25"),
+            new BigDecimal("0.40"),
             new BigDecimal("0.45"),
             new BigDecimal("0.30"),
             new BigDecimal("0.15"),
@@ -136,7 +131,7 @@ public class ShortTermService {
                     List.of("煤炭", "煤业", "能源", "电力", "石油", "油气")
             )
     );
-    private static final String QUOTE_NOTE = "短线右侧模块先做全 A 股行情漏斗，再对候选拉取近一年 K 线、最近年报和同日资金流；PE/PB 仅作估值语境，影子实验因子不进入生产排序或推荐证据。";
+    private static final String QUOTE_NOTE = "短线右侧模块先做全 A 股行情漏斗，再对候选拉取近一年 K 线、最近年报和同日资金流；影子实验因子不进入生产排序或推荐证据。";
 
     private final EastMoneyClient eastMoneyClient;
     private final EvidenceCompletenessService evidenceCompletenessService;
@@ -155,7 +150,6 @@ public class ShortTermService {
     private final ShortTermVolatilityQualityEvaluator volatilityQualityEvaluator = new ShortTermVolatilityQualityEvaluator();
     private final ShortTermSignalProfileResolver signalProfileResolver = new ShortTermSignalProfileResolver();
     private final ShortTermMarketRegimeClassifier marketRegimeClassifier = new ShortTermMarketRegimeClassifier();
-    private final ValuationContextCalculator valuationContextCalculator = new ValuationContextCalculator();
 
     public ShortTermService(EastMoneyClient eastMoneyClient) {
         this(eastMoneyClient, new EvidenceCompletenessService(), new TradingClockService(), new ShortTermGoldenCrossAnalyzer());
@@ -259,8 +253,6 @@ public class ShortTermService {
             Integer scanLimit,
             Integer klineLimit,
             BigDecimal minAmount,
-            BigDecimal maxPe,
-            BigDecimal maxPb,
             BigDecimal minVolumeRatio,
             BigDecimal maxEntryRise,
             BigDecimal maxDistanceToMa20,
@@ -271,8 +263,6 @@ public class ShortTermService {
                 scanLimit,
                 klineLimit,
                 minAmount,
-                maxPe,
-                maxPb,
                 minVolumeRatio,
                 maxEntryRise,
                 maxDistanceToMa20,
@@ -286,8 +276,6 @@ public class ShortTermService {
             Integer scanLimit,
             Integer klineLimit,
             BigDecimal minAmount,
-            BigDecimal maxPe,
-            BigDecimal maxPb,
             BigDecimal minVolumeRatio,
             BigDecimal maxEntryRise,
             BigDecimal maxDistanceToMa20,
@@ -299,8 +287,6 @@ public class ShortTermService {
                 scanLimit,
                 klineLimit,
                 minAmount,
-                maxPe,
-                maxPb,
                 minVolumeRatio,
                 maxEntryRise,
                 maxDistanceToMa20,
@@ -334,8 +320,6 @@ public class ShortTermService {
                 request.scanLimit(),
                 request.klineLimit(),
                 request.minAmount(),
-                request.maxPe(),
-                request.maxPb(),
                 request.minVolumeRatio(),
                 request.maxEntryRise(),
                 request.maxDistanceToMa20(),
@@ -550,7 +534,7 @@ public class ShortTermService {
                         "金叉动量、下影承接反转和波动收缩突破保持为独立信号族，页面与历史快照保留主信号族和全部激活证据。",
                         "影子实验因子只保留后台诊断，不进入候选解释、风险理由、证据链、生产排序或动作建议。",
                         "默认输出八个短线候选：可执行层在前、观察层补足展示，但不会为了凑数制造加仓建议。",
-                        "PE、PB 和普通财务质量只作上下文与风险说明；热门方向、5/10/20 日相对强度与行业成交额地位仅作有界排序修正。",
+                        "普通财务质量只作上下文与风险说明；热门方向、5/10/20 日相对强度与行业成交额地位仅作有界排序修正。",
                         "热门方向可帮助全市场预选，但不能覆盖金叉、放量、换手、上影线和硬风险门禁。",
                         "涨幅过大、距离 20 日线过远、120 日位置过高、量能过度放大会被视为追涨风险，宁可等待回踩确认。",
                         "最终建议只做短线纪律提示：右侧早期也以分批试错为主，跌破关键均线要退出。",
@@ -820,14 +804,6 @@ public class ShortTermService {
     ) {
         EastMoneyQuote quote = item.quote();
         ShortTermTechnicalSnapshot technical = item.technical().snapshot();
-        ValuationContext valuationContext = valuationContextCalculator.evaluate(
-                pe(quote),
-                quote.pbRatio(),
-                ruleSet.maxPe(),
-                ruleSet.maxPb(),
-                quote.industry()
-        );
-        BigDecimal valuationScore = valuationContext.score();
         BigDecimal financialScore = financial == null ? new BigDecimal("40") : financial.qualityScore();
         QuoteFreshnessSnapshot quoteFreshness = quoteFreshnessService.evaluate(quote);
         BigDecimal marketHeatScore = marketHeatScore(quote, hotDirectionMap);
@@ -899,7 +875,6 @@ public class ShortTermService {
                 quote.pbRatio(),
                 quote.amount(),
                 quoteFreshness,
-                valuationContext,
                 phase(technical, decision),
                 phaseLabel(technical, decision),
                 decision.action(),
@@ -915,7 +890,6 @@ public class ShortTermService {
                         coreSignalScore.closeStrengthScore(),
                         supportReversalScore(technical),
                         marketHeatScore,
-                        valuationScore,
                         financialScore,
                         riskPenalty,
                         finalScore,
@@ -946,18 +920,18 @@ public class ShortTermService {
                 buyZoneHigh(price, technical, ruleSet),
                 stopPrice(price, technical),
                 supplyDemandStrengths(
-                        strengths(quote, technical, financial, valuationContext),
+                        strengths(quote, technical, financial),
                         supplyDemand
                 ),
                 supplyDemandRisks(
-                        risks(quote, technical, financial, ruleSet, valuationContext, quoteFreshness),
+                        risks(quote, technical, financial, ruleSet, quoteFreshness),
                         supplyDemand
                 ),
                 entryRules(decision, ruleSet),
                 exitRules(ruleSet),
                 pendingEvidenceCompleteness(quote, technical, financial, quoteFreshness),
                 supplyDemandEvidence(
-                        evidence(quote, technical, financial, item.technical(), valuationContext, quoteFreshness, ruleSet),
+                        evidence(quote, technical, financial, item.technical(), quoteFreshness, ruleSet),
                         fundFlow,
                         supplyDemand
                 ),
@@ -1632,7 +1606,7 @@ public class ShortTermService {
                     List.of(
                             "股价站上关键均线且距离 20 日线不远。",
                             "量价关系健康，可能是温和放量突破或缩量上涨惜售。",
-                            "估值和最近年报质量没有明显冲突。"
+                            "最近年报质量没有明显冲突。"
                     ),
                     List.of(
                             "单票短线仓位不超过计划仓位的 1/3。",
@@ -1708,8 +1682,8 @@ public class ShortTermService {
                     "WAIT",
                     "观望",
                     confidence(finalScore),
-                    "右侧雏形存在，但量能或突破强度还没有形成强确认，短线不因为估值低就直接买。",
-                    List.of("趋势开始转强。", "财报没有明显否决，估值只作低权重语境提示。"),
+                    "右侧雏形存在，但量能或突破强度还没有形成强确认，不急于直接买。",
+                    List.of("趋势开始转强。", "财报没有明显否决。"),
                     List.of("等待量比重新大于 " + ruleSet.minVolumeRatio() + "。", "等待突破前 20 日高点，或缩量回踩 20 日线不破。")
             );
         }
@@ -1750,7 +1724,6 @@ public class ShortTermService {
                 candidate.pbRatio(),
                 candidate.amount(),
                 candidate.quoteFreshness(),
-                candidate.valuationContext(),
                 candidate.phase(),
                 candidate.phaseLabel(),
                 candidate.action(),
@@ -1860,7 +1833,7 @@ public class ShortTermService {
         return new ShortTermCandidate(
                 candidate.rank(), candidate.symbol(), candidate.name(), candidate.market(), candidate.industry(),
                 candidate.latestPrice(), candidate.changePercent(), candidate.peTtm(), candidate.pbRatio(),
-                candidate.amount(), candidate.quoteFreshness(), candidate.valuationContext(),
+                candidate.amount(), candidate.quoteFreshness(),
                 candidate.phase(), candidate.phaseLabel(), "DATA_REVIEW", "数据阻断",
                 "全市场有效行情覆盖未通过 95% 执行闸门；" + candidate.reason(),
                 blockedAdvice, candidate.tailSignal(), candidate.score(), candidate.technical(), candidate.financial(),
@@ -1884,7 +1857,6 @@ public class ShortTermService {
                 candidate.pbRatio(),
                 candidate.amount(),
                 candidate.quoteFreshness(),
-                candidate.valuationContext(),
                 candidate.phase(),
                 candidate.phaseLabel(),
                 candidate.action(),
@@ -2397,7 +2369,7 @@ public class ShortTermService {
     ) {
         return evidenceCompletenessService.evaluate(EvidenceCompletenessInput.shortTerm(
                 isFreshRealtimeQuote(quoteFreshness) && quote.latestPrice() != null && quote.amount() != null,
-                pe(quote) != null && quote.pbRatio() != null,
+                true,
                 technical.tradeDate() != null,
                 financial != null && financial.qualityScore() != null && financial.dataGaps().isEmpty(),
                 false,
@@ -2415,7 +2387,7 @@ public class ShortTermService {
                 isFreshRealtimeQuote(candidate.quoteFreshness())
                         && candidate.latestPrice() != null
                         && candidate.amount() != null,
-                candidate.peTtm() != null && candidate.pbRatio() != null,
+                true,
                 candidate.technical().tradeDate() != null,
                 candidate.financial() != null
                         && candidate.financial().qualityScore() != null
@@ -2512,8 +2484,7 @@ public class ShortTermService {
     private List<String> strengths(
             EastMoneyQuote quote,
             ShortTermTechnicalSnapshot technical,
-            ShortTermFinancialSnapshot financial,
-            ValuationContext valuationContext
+            ShortTermFinancialSnapshot financial
     ) {
         List<String> strengths = new ArrayList<>();
         ShortTermSupportReversalSignal supportReversal = technical.supportReversal();
@@ -2550,7 +2521,6 @@ public class ShortTermService {
             strengths.add(momentum.closeStrengthLabel() + "，最新收盘位置约 "
                     + valueText(momentum.closeLocationPercent()) + "%。");
         }
-        strengths.add("PE/PB 仅形成 " + valuationContext.score() + " 分估值语境，不参与短线资格淘汰。");
         if (financial != null && financial.qualityScore().compareTo(new BigDecimal("58")) >= 0) {
             strengths.add(financial.statusLabel() + "，财报没有明显否决右侧交易。");
         }
@@ -2582,7 +2552,6 @@ public class ShortTermService {
             ShortTermTechnicalSnapshot technical,
             ShortTermFinancialSnapshot financial,
             ShortTermRuleSet ruleSet,
-            ValuationContext valuationContext,
             QuoteFreshnessSnapshot quoteFreshness
     ) {
         List<String> risks = new ArrayList<>();
@@ -2621,7 +2590,7 @@ public class ShortTermService {
                     + "% 位于降权带，尚未达到 2%-5% 优选区间。");
         }
         if (technical.ma20SlopePercent() != null && technical.ma20SlopePercent().compareTo(new BigDecimal("-0.80")) < 0) {
-            risks.add("20 日线仍在明显下行，右侧确认不足，不能把低估值当买点。");
+            risks.add("20 日线仍在明显下行，右侧确认不足，不宜急于抄底。");
         }
         ShortTermSupportReversalSignal supportReversal = technical.supportReversal();
         if (supportReversal != null && supportReversal.confirmed()) {
@@ -2637,7 +2606,6 @@ public class ShortTermService {
         if (financial != null && !financial.dataGaps().isEmpty()) {
             risks.addAll(financial.dataGaps());
         }
-        risks.addAll(valuationContext.warnings());
         if (risks.isEmpty()) {
             risks.add("短线交易仍受指数波动和板块轮动影响，需要严格止损。");
         }
@@ -2687,7 +2655,7 @@ public class ShortTermService {
                 "右侧信号未共振时不主动建仓。",
                 "等待确认金叉、上涨量比 " + fixedTwo(ruleSet.minVolumeRatio())
                         + "-3.20、换手率 2%-5% 和收盘强度共同改善。",
-                "财报或 K 线关键证据缺失时只放观察池；PE/PB 缺失只降低估值语境置信度。"
+                "财报或 K 线关键证据缺失时只放观察池。"
         );
     }
 
@@ -2705,7 +2673,6 @@ public class ShortTermService {
             ShortTermTechnicalSnapshot technical,
             ShortTermFinancialSnapshot financial,
             TechnicalContext context,
-            ValuationContext valuationContext,
             QuoteFreshnessSnapshot quoteFreshness,
             ShortTermRuleSet ruleSet
     ) {
@@ -2717,16 +2684,6 @@ public class ShortTermService {
                         + "，市场时间=" + (quoteFreshness.marketTimestamp() == null ? "待补" : quoteFreshness.marketTimestamp()) + "。",
                 quote.quoteUrl(),
                 20
-        ));
-        evidence.add(new ShortTermEvidence(
-                "估值语境",
-                "最新价 " + valueText(quote.latestPrice())
-                        + "，PE TTM " + valueText(pe(quote))
-                        + "，PB " + valueText(quote.pbRatio())
-                        + "，状态 " + valuationContext.state().name()
-                        + "；仅作估值语境，不计入短线四项主分，也不参与资格淘汰。",
-                quote.quoteUrl(),
-                0
         ));
         evidence.add(new ShortTermEvidence(
                 "K线结构",
@@ -2875,7 +2832,7 @@ public class ShortTermService {
                 : technical.momentumQuality().closeStrengthLabel())
                 + "，"
                 + financialText
-                + "；PE/PB 只作语境，不计入短线四项主分。";
+                + "。";
     }
 
     private String phase(ShortTermTechnicalSnapshot technical, ActionDecision decision) {
@@ -3068,20 +3025,12 @@ public class ShortTermService {
     }
 
     private BigDecimal preliminaryScore(EastMoneyQuote quote, ShortTermRuleSet ruleSet, Map<String, ShortTermHotDirection> hotDirectionMap) {
-        BigDecimal valuation = valuationContextCalculator.evaluate(
-                pe(quote),
-                quote.pbRatio(),
-                ruleSet.maxPe(),
-                ruleSet.maxPb(),
-                quote.industry()
-        ).score();
         BigDecimal liquidity = liquidityScore(quote, ruleSet);
         BigDecimal marketHeat = marketHeatScore(quote, hotDirectionMap);
         BigDecimal nonChase = quote.changePercent() == null
                 ? new BigDecimal("60")
                 : quote.changePercent().compareTo(ruleSet.maxEntryRisePercent()) <= 0 ? new BigDecimal("82") : new BigDecimal("42");
-        return valuation.multiply(WEIGHT_PROFILE.preliminaryValuation())
-                .add(liquidity.multiply(WEIGHT_PROFILE.preliminaryLiquidity()))
+        return liquidity.multiply(WEIGHT_PROFILE.preliminaryLiquidity())
                 .add(nonChase.multiply(WEIGHT_PROFILE.preliminaryNonChase()))
                 .add(marketHeat.multiply(WEIGHT_PROFILE.preliminaryHeat()));
     }
@@ -3227,8 +3176,6 @@ public class ShortTermService {
             Integer scanLimit,
             Integer klineLimit,
             BigDecimal minAmount,
-            BigDecimal maxPe,
-            BigDecimal maxPb,
             BigDecimal minVolumeRatio,
             BigDecimal maxEntryRise,
             BigDecimal maxDistanceToMa20,
@@ -3239,8 +3186,6 @@ public class ShortTermService {
                 Math.max(50, Math.min(scanLimit == null ? DEFAULT_SCAN_LIMIT : scanLimit, MAX_SCAN_LIMIT)),
                 Math.max(10, Math.min(klineLimit == null ? DEFAULT_KLINE_LIMIT : klineLimit, MAX_KLINE_LIMIT)),
                 RecommendationQuality.requiredAmount(positiveOrDefault(minAmount, DEFAULT_MIN_AMOUNT)),
-                positiveOrDefault(maxPe, DEFAULT_MAX_PE),
-                positiveOrDefault(maxPb, DEFAULT_MAX_PB),
                 approvedVolumeRatioThreshold(minVolumeRatio),
                 positiveOrDefault(maxEntryRise, DEFAULT_MAX_ENTRY_RISE),
                 positiveOrDefault(maxDistanceToMa20, DEFAULT_MAX_DISTANCE_TO_MA20),
@@ -3297,7 +3242,7 @@ public class ShortTermService {
         return new ShortTermScoreBreakdown(
                 score.technicalScore(), score.goldenCrossScore(), score.volumeScore(),
                 score.turnoverScore(), score.closeStrengthScore(), score.supportReversalScore(), score.marketHeatScore(),
-                score.valuationScore(), score.financialScore(), score.riskPenalty(),
+                score.financialScore(), score.riskPenalty(),
                 score.finalScore(), score.stageAdjustment(), score.mainNetInflowRatio(),
                 score.largeOrderNetInflowRatio(), score.buyPressureScore(),
                 score.fundFlowAdjustment(),
@@ -3317,7 +3262,7 @@ public class ShortTermService {
         return new ShortTermCandidate(
                 candidate.rank(), candidate.symbol(), candidate.name(), candidate.market(), candidate.industry(),
                 candidate.latestPrice(), candidate.changePercent(), candidate.peTtm(), candidate.pbRatio(),
-                candidate.amount(), candidate.quoteFreshness(), candidate.valuationContext(),
+                candidate.amount(), candidate.quoteFreshness(),
                 candidate.phase(), candidate.phaseLabel(), candidate.action(), candidate.actionLabel(),
                 candidate.reason(), candidate.todayAdvice(), candidate.tailSignal(), score,
                 candidate.technical(), candidate.financial(), candidate.buyZoneLow(), candidate.buyZoneHigh(),
@@ -3341,7 +3286,6 @@ public class ShortTermService {
                 candidate.pbRatio(),
                 candidate.amount(),
                 candidate.quoteFreshness(),
-                candidate.valuationContext(),
                 candidate.phase(),
                 candidate.phaseLabel(),
                 candidate.action(),

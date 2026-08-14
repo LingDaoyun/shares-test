@@ -65,8 +65,7 @@ class ShortTermScheduledScanServiceTest {
     private static final Instant NOW = Instant.parse("2026-07-23T06:49:30Z");
     private static final Duration STALE_TIMEOUT = Duration.ofMinutes(5);
     private static final ShortTermScanRequest REQUEST = new ShortTermScanRequest(
-            8, 6000, 60, new BigDecimal("80000000"), new BigDecimal("100"),
-            new BigDecimal("15"), new BigDecimal("1.20"), new BigDecimal("4"),
+            8, 6000, 60, new BigDecimal("80000000"),new BigDecimal("1.20"), new BigDecimal("4"),
             new BigDecimal("8"), new BigDecimal("58"), null);
     private static final OvernightRuleSet RULES = new OvernightRuleSet(
             LocalTime.of(14, 45), TradingClockService.SHORT_TERM_ENTRY_END, LocalTime.of(14, 50),

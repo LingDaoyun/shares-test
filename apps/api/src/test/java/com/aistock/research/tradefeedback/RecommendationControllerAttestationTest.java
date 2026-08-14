@@ -51,7 +51,7 @@ class RecommendationControllerAttestationTest {
         ShortTermScanJobService jobs = mock(ShortTermScanJobService.class);
         ShortTermReport report = mock(ShortTermReport.class);
         ShortTermScanJobStatus status = mock(ShortTermScanJobStatus.class);
-        when(service.report(null, null, null, null, null, null, null, null, null, null, null)).thenReturn(report);
+        when(service.report(null, null, null, null,null, null, null, null, null)).thenReturn(report);
         when(jobs.get("job-1")).thenReturn(status);
         when(attestations.attest(report)).thenReturn(report);
         when(attestations.attest(status)).thenReturn(status);
@@ -61,7 +61,7 @@ class RecommendationControllerAttestationTest {
                 attestations
         );
 
-        assertThat(controller.report(null, null, null, null, null, null, null, null, null, null, null)).isSameAs(report);
+        assertThat(controller.report(null, null, null, null,null, null, null, null, null)).isSameAs(report);
         assertThat(controller.scanJob("job-1")).isSameAs(status);
 
         verify(attestations).attest(report);
@@ -174,7 +174,7 @@ class RecommendationControllerAttestationTest {
                 new QuoteFreshnessSnapshot(
                         "FRESH", "新鲜", true, false, tradeDate,
                         now.minusSeconds(60), 60L, "测试"),
-                null, "TAIL_CONFIRMED", "尾盘确认", "RIGHT_EARLY_ADD", "右侧早期确认",
+                "TAIL_CONFIRMED", "尾盘确认", "RIGHT_EARLY_ADD", "右侧早期确认",
                 "尾盘量价结构确认", null, null, null, null, null,
                 new BigDecimal("10.10"), new BigDecimal("10.30"), new BigDecimal("9.80"),
                 List.of(), List.of(), List.of(), List.of(), null, List.of(), null

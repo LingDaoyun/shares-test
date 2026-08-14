@@ -519,8 +519,6 @@ export interface ShortTermRuleSet {
   scanLimit: number
   klineLimit: number
   minAmount: number
-  maxPe: number
-  maxPb: number
   minVolumeRatio: number
   maxEntryRisePercent: number
   maxDistanceToMa20Percent: number
@@ -633,7 +631,6 @@ export interface ShortTermScoreBreakdown {
   closeStrengthScore: number
   supportReversalScore?: number
   marketHeatScore: number
-  valuationScore: number
   financialScore: number
   riskPenalty: number
   finalScore: number
@@ -796,7 +793,6 @@ export interface ShortTermChipSnapshot {
 }
 
 export interface ShortTermWeightProfile {
-  preliminaryValuation: number
   preliminaryLiquidity: number
   preliminaryNonChase: number
   preliminaryHeat: number
@@ -908,7 +904,6 @@ export interface ShortTermCandidate {
   pbRatio: number | null
   amount: number | null
   quoteFreshness: QuoteFreshnessSnapshot
-  valuationContext: ValuationContext
   phase: string
   phaseLabel: string
   action: string

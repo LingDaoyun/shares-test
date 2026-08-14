@@ -61,7 +61,7 @@ class ShortTermServiceTest {
 
     @Test
     void shouldDefaultToFullMarketQuotePoolWithoutStaticStockWhitelist() {
-        ShortTermReport report = service.report(8, null, null, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(8, null, null, null,null, null, null, null);
 
         assertThat(eastMoneyClient.requestedQuoteLimit).isEqualTo(6000);
         assertThat(report.ruleSet().scanLimit()).isEqualTo(6000);
@@ -73,7 +73,7 @@ class ShortTermServiceTest {
     @Test
     void clampsManualVolumeRatioThresholdToTheApprovedRange() {
         ShortTermReport report = service.report(
-                8, null, null, null, null, null, new BigDecimal("0.80"), null, null, null);
+                8, null, null, null,new BigDecimal("0.80"), null, null, null);
 
         assertThat(report.ruleSet().minVolumeRatio()).isEqualByComparingTo("1.00");
     }
@@ -93,14 +93,14 @@ class ShortTermServiceTest {
         });
 
         ShortTermReport defaultReport = service.report(new ShortTermScanRequest(
-                5, 100, 10, null, null, null, null, null, null, null, false
+                5, 100, 10, null,null, null, null, null, false
         ));
         assertThat(defaultReport.ruleSet().allowChiNext()).isFalse();
         assertThat(defaultReport.reviewedSymbols()).doesNotContain("300750");
         assertThat(defaultReport.reviewedSymbols()).contains("600036");
 
         ShortTermReport allowedReport = service.report(new ShortTermScanRequest(
-                5, 100, 10, null, null, null, null, null, null, null, false, true
+                5, 100, 10, null,null, null, null, null, false, true
         ));
         assertThat(allowedReport.ruleSet().allowChiNext()).isTrue();
         assertThat(allowedReport.reviewedSymbols()).contains("300750");
@@ -119,7 +119,7 @@ class ShortTermServiceTest {
         });
 
         ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
                 Set.of("600795", "002128")
         );
 
@@ -155,7 +155,7 @@ class ShortTermServiceTest {
         }
 
         ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
                 Set.of("600000", "600001")
         );
 
@@ -183,7 +183,7 @@ class ShortTermServiceTest {
         eastMoneyClient.snapshotExpectedCount = 5000;
 
         ShortTermReport report = service.report(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null)
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null)
         );
 
         assertThat(eastMoneyClient.requestedQuoteLimit).isEqualTo(100);
@@ -210,7 +210,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600000", goodFinancial("600000"));
 
         ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
                 Set.of("600000")
         );
 
@@ -237,7 +237,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600000", goodFinancial("600000"));
 
         ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
                 Set.of("600000")
         );
 
@@ -267,7 +267,7 @@ class ShortTermServiceTest {
         eastMoneyClient.snapshotExpectedCount = 100;
 
         ShortTermReport report = service.report(
-                new ShortTermScanRequest(3, 6000, 10, null, null, null, null, null, null, null, null, null)
+                new ShortTermScanRequest(3, 6000, 10, null,null, null, null, null, null, null)
         );
 
         assertThat(report.coverage().rawExpectedCount()).isEqualTo(100);
@@ -302,7 +302,7 @@ class ShortTermServiceTest {
         eastMoneyClient.snapshotComplete = false;
 
         ShortTermReport report = service.report(
-                new ShortTermScanRequest(3, 6000, 10, null, null, null, null, null, null, null, null, null)
+                new ShortTermScanRequest(3, 6000, 10, null,null, null, null, null, null, null)
         );
 
         assertThat(report.coverage().rawExpectedCount()).isEqualTo(105);
@@ -331,7 +331,7 @@ class ShortTermServiceTest {
         ShortTermService pointInTimeService = serviceAt(decisionClock);
 
         ShortTermReport report = pointInTimeService.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
                 Set.of("600001", "600002")
         );
 
@@ -362,7 +362,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600001", goodFinancial("600001"));
 
         ShortTermReport report = serviceAt(decisionClock).finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
                 Set.of("600001")
         );
 
@@ -380,7 +380,7 @@ class ShortTermServiceTest {
         ShortTermService pointInTimeService = serviceAt(decisionClock);
 
         ShortTermReport report = pointInTimeService.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null),
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
                 Set.of("600001")
         );
 
@@ -441,7 +441,7 @@ class ShortTermServiceTest {
                 eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "180000")));
 
         ShortTermReport report = service.report(
-                new ShortTermScanRequest(3, 100, 19, null, null, null, null, null, null, null, null)
+                new ShortTermScanRequest(3, 100, 19, null,null, null, null, null, null)
         );
 
         assertThat(report.coverage().expectedCount()).isEqualTo(20);
@@ -503,7 +503,7 @@ class ShortTermServiceTest {
         ));
 
         ShortTermCandidate candidate = find(
-                service.report(1, 100, 5, null, null, null, null, null, null, null),
+                service.report(1, 100, 5, null,null, null, null, null),
                 "600001"
         );
 
@@ -535,7 +535,7 @@ class ShortTermServiceTest {
         ShortTermService pointInTimeService = serviceAt(decisionClock);
 
         ShortTermCandidate candidate = find(
-                pointInTimeService.report(1, 100, 5, null, null, null, null, null, null, null),
+                pointInTimeService.report(1, 100, 5, null,null, null, null, null),
                 "600001"
         );
 
@@ -598,7 +598,7 @@ class ShortTermServiceTest {
         Clock decisionClock = Clock.fixed(Instant.parse("2026-07-07T06:50:00Z"), SHANGHAI);
         ShortTermService pointInTimeService = serviceAt(decisionClock);
         ShortTermScanRequest request = new ShortTermScanRequest(
-                3, 100, 10, null, null, null, null, null, null, null, null
+                3, 100, 10, null,null, null, null, null, null
         );
 
         eastMoneyClient.quotes = List.of(validQuote);
@@ -641,7 +641,7 @@ class ShortTermServiceTest {
             eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
         }
 
-        ShortTermReport report = service.report(null, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(null, 100, 10, null,null, null, null, null);
 
         assertThat(report.candidates()).hasSize(5);
         assertThat(report.methodology()).anySatisfy(item ->
@@ -657,7 +657,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600107", goodFinancial("600107"));
 
         ShortTermCandidate candidate = find(
-                service.report(1, 100, 5, null, null, null, null, null, null, null),
+                service.report(1, 100, 5, null,null, null, null, null),
                 "600107"
         );
 
@@ -675,7 +675,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600108", goodFinancial("600108"));
 
         ShortTermCandidate blocked = find(
-                service.report(1, 100, 5, null, null, null, null, null, null, null),
+                service.report(1, 100, 5, null,null, null, null, null),
                 "600108"
         );
 
@@ -743,7 +743,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600503", establishedRightSideKLines("600503"));
         eastMoneyClient.quotes.forEach(quote -> eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
 
-        ShortTermReport report = service.report(3, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 10, null,null, null, null, null);
 
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
                 .containsExactly("600501", "600503", "600502");
@@ -765,7 +765,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600601", acceptableFinancial("600601"));
         eastMoneyClient.financials.put("600602", goodFinancial("600602"));
 
-        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(2, 100, 10, null,null, null, null, null);
 
         ShortTermCandidate confirmed = find(report, "600601");
         ShortTermCandidate observed = find(report, "600602");
@@ -795,7 +795,7 @@ class ShortTermServiceTest {
         eastMoneyClient.fundFlows.put("600607", fundFlow("600607", "8", "3", "2"));
         eastMoneyClient.fundFlows.put("600608", fundFlow("600608", "-6", "-2", "-1"));
 
-        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(2, 100, 10, null,null, null, null, null);
 
         ShortTermCandidate strongBuying = find(report, "600607");
         ShortTermCandidate outflow = find(report, "600608");
@@ -828,7 +828,7 @@ class ShortTermServiceTest {
                 industryFundFlow("BK1201", "电子", "-120000000000", "-1.8", 100, 220)
         );
 
-        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(2, 100, 10, null,null, null, null, null);
 
         assertThat(report.marketFundDirection().topInflows())
                 .extracting(ShortTermIndustryFundDirection::name)
@@ -845,7 +845,7 @@ class ShortTermServiceTest {
     void marketFundDirectionFailureCreatesDataGapWithoutBlockingReport() {
         eastMoneyClient.industryFundFlowFailure = new IllegalStateException("行业接口超时");
 
-        ShortTermReport report = service.report(3, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 10, null,null, null, null, null);
 
         assertThat(report.marketFundDirection().topInflows()).isEmpty();
         assertThat(report.marketFundDirection().topOutflows()).isEmpty();
@@ -872,9 +872,9 @@ class ShortTermServiceTest {
         });
 
         ShortTermReport shadow = chipAwareService("SHADOW", chipAnalysis)
-                .report(2, 100, 10, null, null, null, null, null, null, null);
+                .report(2, 100, 10, null,null, null, null, null);
         ShortTermReport active = chipAwareService("ACTIVE", chipAnalysis)
-                .report(2, 100, 10, null, null, null, null, null, null, null);
+                .report(2, 100, 10, null,null, null, null, null);
 
         assertThat(shadow.candidates()).extracting(ShortTermCandidate::symbol)
                 .containsExactly("600607", "600608");
@@ -921,7 +921,7 @@ class ShortTermServiceTest {
         });
 
         ShortTermReport report = chipAwareService("ACTIVE", chipAnalysis)
-                .report(3, 100, 10, null, null, null, null, null, null, null);
+                .report(3, 100, 10, null,null, null, null, null);
 
         ShortTermCandidate lowScoreWithFlow = find(report, "600608");
         ShortTermCandidate highScoreWithoutFlow = find(report, "600609");
@@ -940,7 +940,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600607", rightEarlyKLines("600607", "10.62", "180000"));
         eastMoneyClient.financials.put("600607", goodFinancial("600607"));
         ShortTermCandidate current = service
-                .report(1, 100, 10, null, null, null, null, null, null, null)
+                .report(1, 100, 10, null,null, null, null, null)
                 .candidates()
                 .get(0);
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
@@ -974,7 +974,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600604", rightEarlyKLines("600604", "10.62", "105000"));
         eastMoneyClient.financials.put("600604", goodFinancial("600604"));
 
-        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(2, 100, 10, null,null, null, null, null);
 
         ShortTermCandidate blocked = find(report, "600603");
         ShortTermCandidate eligible = find(report, "600604");
@@ -1003,7 +1003,7 @@ class ShortTermServiceTest {
         });
 
         ShortTermReport report = chipAwareService("ACTIVE", chipAnalysis)
-                .report(2, 100, 10, null, null, null, null, null, null, null);
+                .report(2, 100, 10, null,null, null, null, null);
 
         ShortTermCandidate pullback = find(report, "600605");
         ShortTermCandidate observation = find(report, "600606");
@@ -1027,7 +1027,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600504", goodFinancial("600504"));
 
         ShortTermCandidate overextendedConfirmed = find(
-                service.report(3, 100, 10, null, null, null, null, null, null, null),
+                service.report(3, 100, 10, null,null, null, null, null),
                 "600504"
         );
 
@@ -1043,7 +1043,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600505", unfinishedFormingGoldenCrossKLines("600505"));
 
         ShortTermCandidate candidate = find(
-                service.report(3, 100, 10, null, null, null, null, null, null, null),
+                service.report(3, 100, 10, null,null, null, null, null),
                 "600505"
         );
 
@@ -1062,7 +1062,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600506", goodFinancial("600506"));
 
         ShortTermCandidate candidate = find(
-                service.report(3, 100, 10, null, null, null, null, null, null, null),
+                service.report(3, 100, 10, null,null, null, null, null),
                 "600506"
         );
 
@@ -1084,7 +1084,7 @@ class ShortTermServiceTest {
             eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
         }
 
-        ShortTermReport report = service.report(4, 50, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(4, 50, 10, null,null, null, null, null);
 
         assertThat(report.hotDirections()).extracting(ShortTermHotDirection::label).contains("量子通信");
         assertThat(report.hotDirections()).filteredOn(direction -> "量子通信".equals(direction.label()))
@@ -1108,7 +1108,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600201", goodFinancial("600201"));
         eastMoneyClient.intraday.put("600201", confirmedTail("600201"));
 
-        ShortTermReport report = service.report(5, 50, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(5, 50, 10, null,null, null, null, null);
 
         assertThat(report.marketSentiment().phase()).isEqualTo("冰点/混沌");
         assertThat(report.marketRegime().state()).isEqualTo("RISK_OFF");
@@ -1133,7 +1133,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600201", rightEarlyKLines("600201", "10.62", "180000"));
         eastMoneyClient.financials.put("600201", goodFinancial("600201"));
 
-        ShortTermReport report = service.report(8, 6000, 60, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(8, 6000, 60, null,null, null, null, null);
 
         assertThat(report.coverage().executionReliable()).isTrue();
         assertThat(report.marketSentiment().phase()).isEqualTo("极端退潮");
@@ -1165,7 +1165,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600201", rightEarlyKLines("600201", "10.62", "180000"));
         eastMoneyClient.financials.put("600201", goodFinancial("600201"));
 
-        ShortTermReport report = service.report(8, 6000, 60, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(8, 6000, 60, null,null, null, null, null);
 
         assertThat(report.coverage().executionReliable()).isTrue();
         assertThat(report.marketSentiment().phase()).isEqualTo("退潮");
@@ -1191,7 +1191,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600401", goodFinancial("600401"));
         eastMoneyClient.intraday.put("600401", confirmedTail("600401"));
 
-        ShortTermReport report = service.report(3, 50, 12, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 50, 12, null,null, null, null, null);
 
         assertThat(report.marketSentiment().phase()).isEqualTo("结构性行情");
         ShortTermCandidate candidate = find(report, "600401");
@@ -1218,7 +1218,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600399", belowMa20KLines("600399"));
         eastMoneyClient.financials.put("600399", goodFinancial("600399"));
 
-        ShortTermReport report = service.report(3, 100, 12, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 12, null,null, null, null, null);
 
         assertThat(report.marketSentiment().phase()).isEqualTo("冰点/混沌");
         assertThat(report.candidates()).hasSize(3);
@@ -1236,7 +1236,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600214", rightEarlyKLines("600214", "10.62", "80000"));
         eastMoneyClient.financials.put("600214", goodFinancial("600214"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600214");
         assertThat(candidate.technical().volumeRatio20()).isLessThan(BigDecimal.ONE);
@@ -1279,7 +1279,7 @@ class ShortTermServiceTest {
         eastMoneyClient.intraday.put("600301", confirmedTail("600301"));
 
         ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:49:30Z"), SHANGHAI))
-                .report(5, 100, 10, null, null, null, null, null, null, null);
+                .report(5, 100, 10, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600301");
         assertThat(report.coverage().executionReliable()).as(report.coverage().toString()).isTrue();
@@ -1312,7 +1312,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600302", goodFinancial("600302"));
 
         ShortTermCandidate candidate = find(
-                closedService.report(3, 50, 10, null, null, null, null, null, null, null),
+                closedService.report(3, 50, 10, null,null, null, null, null),
                 "600302"
         );
 
@@ -1331,7 +1331,7 @@ class ShortTermServiceTest {
         eastMoneyClient.intraday.put("600303", confirmedTail("600303", LocalDate.parse("2026-07-06")));
 
         ShortTermCandidate candidate = find(
-                service.report(3, 50, 10, null, null, null, null, null, null, null),
+                service.report(3, 50, 10, null,null, null, null, null),
                 "600303"
         );
 
@@ -1350,7 +1350,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600304", goodFinancial("600304"));
         eastMoneyClient.intraday.put("600304", confirmedTail("600304"));
 
-        ShortTermReport report = service.report(3, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 10, null,null, null, null, null);
         ShortTermCandidate candidate = find(report, "600304");
 
         assertThat(report.quoteNote()).contains("覆盖不足", "1/100");
@@ -1382,7 +1382,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("300059", goodFinancial("300059"));
         eastMoneyClient.intraday.put("600001", confirmedTail("600001"));
 
-        ShortTermReport report = service.report(5, 100, 5, null, null, null, null, null, null, null, true);
+        ShortTermReport report = service.report(5, 100, 5, null,null, null, null, null, true);
 
         ShortTermCandidate candidate = find(report, "600001");
         assertThat(report.scope()).contains("短线右侧");
@@ -1423,7 +1423,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600002", rightEarlyKLines("600002", "12.90", "420000"));
         eastMoneyClient.financials.put("600002", goodFinancial("600002"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         assertThat(report.ruleSet().maxEntryRisePercent()).isEqualByComparingTo("6.5");
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("600002");
@@ -1443,7 +1443,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600009", rightEarlyKLines("600009", "14.96", "420000"));
         eastMoneyClient.financials.put("600009", goodFinancial("600009"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("600009");
         assertThat(report.exclusions()).filteredOn(exclusion -> "600009".equals(exclusion.symbol()))
@@ -1472,7 +1472,7 @@ class ShortTermServiceTest {
         eastMoneyClient.intraday.put("600041", confirmedTail("600041"));
 
         ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:49:30Z"), SHANGHAI))
-                .report(8, 100, 8, null, null, null, null, null, null, null);
+                .report(8, 100, 8, null,null, null, null, null);
         ShortTermCandidate candidate = find(report, "600041");
 
         assertThat(candidate.action()).isEqualTo("SUPPORT_REVERSAL_LIGHT_TRIAL");
@@ -1497,7 +1497,7 @@ class ShortTermServiceTest {
         eastMoneyClient.quotes.forEach(quote -> eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
 
         ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:55:00Z"), SHANGHAI))
-                .report(8, 100, 8, null, null, null, null, null, null, null);
+                .report(8, 100, 8, null,null, null, null, null);
 
         assertThat(eastMoneyClient.requestedKlineSymbols).contains("600044");
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("600044");
@@ -1520,7 +1520,7 @@ class ShortTermServiceTest {
             eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
         });
 
-        ShortTermReport report = service.report(4, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(4, 100, 5, null,null, null, null, null);
 
         assertThat(report.reviewedSymbols()).containsExactlyInAnyOrder("600701", "600702", "600703", "600704");
         assertThat(report.exclusions()).filteredOn(exclusion -> "600704".equals(exclusion.symbol())).isEmpty();
@@ -1541,7 +1541,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600711", rightEarlyKLines("600711", "10.62", "180000"));
         eastMoneyClient.financials.put("600711", goodFinancial("600711"));
 
-        ShortTermReport report = service.report(3, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 10, null,null, null, null, null);
 
         assertThat(report.hotDirections()).filteredOn(direction -> "新材料".equals(direction.label()))
                 .singleElement().satisfies(direction -> assertThat(direction.sampleCount()).isEqualTo(4));
@@ -1559,7 +1559,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600715", goodFinancial("600715"));
 
         ShortTermCandidate candidate = find(
-                service.report(3, 100, 10, null, null, null, null, null, null, null),
+                service.report(3, 100, 10, null,null, null, null, null),
                 "600715"
         );
 
@@ -1596,7 +1596,7 @@ class ShortTermServiceTest {
         eastMoneyClient.intraday.put("600716", confirmedTail("600716"));
 
         ShortTermReport report = serviceAt(Clock.fixed(Instant.parse("2026-07-07T06:49:30Z"), SHANGHAI))
-                .report(3, 100, 10, null, null, null, null, null, null, null);
+                .report(3, 100, 10, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600716");
         assertThat(report.marketRegime().state()).isEqualTo("REPAIR");
@@ -1617,7 +1617,7 @@ class ShortTermServiceTest {
                 eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), "10.62", "180000")));
 
         ShortTermReport report = service.report(
-                new ShortTermScanRequest(3, 100, 10, null, null, null, null, null, null, null, null));
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null));
 
         assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9500");
         assertThat(report.coverage().executionReliable()).isTrue();
@@ -1638,7 +1638,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600721", goodFinancial("600721"));
 
         ShortTermCandidate candidate = find(
-                service.report(3, 100, 10, null, null, null, null, null, null, null),
+                service.report(3, 100, 10, null,null, null, null, null),
                 "600721"
         );
 
@@ -1655,7 +1655,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600001", goodFinancial("600001"));
         eastMoneyClient.intraday.put("600001", tailBeforeClosingAuction("600001"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600001");
         assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
@@ -1681,7 +1681,7 @@ class ShortTermServiceTest {
                 new QuoteFreshnessService(postCloseTradingClock, postCloseClock)
         );
 
-        ShortTermReport report = postCloseService.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = postCloseService.report(3, 100, 5, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600001");
         assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
@@ -1699,7 +1699,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600005", longSidewaysKLines("600005"));
         eastMoneyClient.financials.put("600005", goodFinancial("600005"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("600005");
     }
@@ -1715,15 +1715,12 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600010", goodFinancial("600010"));
         eastMoneyClient.financials.put("600011", goodFinancial("600011"));
 
-        ShortTermReport report = service.report(5, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(5, 100, 5, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600010");
-        assertThat(report.ruleSet().maxPe()).isEqualByComparingTo("100");
-        assertThat(report.ruleSet().maxPb()).isEqualByComparingTo("15.0");
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).contains("600010");
         assertThat(report.exclusions()).extracting(ShortTermRiskExclusion::symbol).doesNotContain("600010");
         assertThat(candidate.score().marketHeatScore()).isGreaterThan(new BigDecimal("60"));
-        assertThat(candidate.score().valuationScore()).isGreaterThan(new BigDecimal("65"));
     }
 
     @Test
@@ -1743,12 +1740,12 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600020", rightEarlyKLines("600020", "10.62", "230000"));
         eastMoneyClient.financials.put("600020", goodFinancial("600020"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600020");
         assertThat(report.exclusions()).extracting(ShortTermRiskExclusion::symbol).doesNotContain("600020");
-        assertThat(candidate.valuationContext().state()).isEqualTo(ValuationContextState.STRETCHED);
-        assertThat(candidate.risks()).anySatisfy(item -> assertThat(item).contains("参考"));
+        assertThat(candidate.peTtm()).isEqualByComparingTo("300.00");
+        assertThat(candidate.risks()).isNotNull();
     }
 
     @Test
@@ -1759,11 +1756,13 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600021", rightEarlyKLines("600021", "10.62", "230000"));
         eastMoneyClient.financials.put("600021", goodFinancial("600021"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         assertThat(report.weightProfile().preliminaryTotal()).isEqualByComparingTo("1.00");
         assertThat(report.weightProfile().finalTotal()).isEqualByComparingTo("1.00");
-        assertThat(report.weightProfile().preliminaryValuation()).isEqualByComparingTo("0.10");
+        assertThat(report.weightProfile().preliminaryLiquidity()).isEqualByComparingTo("0.35");
+        assertThat(report.weightProfile().preliminaryNonChase()).isEqualByComparingTo("0.25");
+        assertThat(report.weightProfile().preliminaryHeat()).isEqualByComparingTo("0.40");
         assertThat(report.weightProfile().finalGoldenCross()).isEqualByComparingTo("0.45");
         assertThat(report.weightProfile().finalVolume()).isEqualByComparingTo("0.30");
         assertThat(report.weightProfile().finalTurnover()).isEqualByComparingTo("0.15");
@@ -1792,7 +1791,7 @@ class ShortTermServiceTest {
             eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
         });
 
-        ShortTermReport report = service.report(null, 100, 20, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(null, 100, 20, null,null, null, null, null);
 
         assertThat(report.candidates()).hasSize(8);
         assertThat(report.candidates()).allSatisfy(candidate ->
@@ -1810,7 +1809,7 @@ class ShortTermServiceTest {
             eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
         });
 
-        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(2, 100, 10, null,null, null, null, null);
 
         ShortTermCandidate lowValuation = find(report, "600031");
         ShortTermCandidate highValuation = find(report, "600032");
@@ -1830,7 +1829,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600033", goodFinancial("600033"));
 
         ShortTermCandidate candidate = find(
-                service.report(1, 100, 10, null, null, null, null, null, null, null),
+                service.report(1, 100, 10, null,null, null, null, null),
                 "600033"
         );
 
@@ -1858,7 +1857,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600036", goodFinancial("600036"));
         eastMoneyClient.financials.put("600037", goodFinancial("600037"));
 
-        ShortTermReport report = service.report(8, 100, 20, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(8, 100, 20, null,null, null, null, null);
 
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
                 .contains("600034")
@@ -1884,7 +1883,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("002714", rightEarlyKLines("002714", "10.62", "230000"));
         eastMoneyClient.financials.put("002714", goodFinancial("002714"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "002714");
         assertThat(candidate.score().marketHeatScore()).isEqualByComparingTo("60");
@@ -1900,7 +1899,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600012", goodFinancial("600012"));
         eastMoneyClient.intraday.put("600012", watchedTail("600012"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600012");
         assertThat(candidate.action()).isEqualTo("RIGHT_EARLY_ADD");
@@ -1920,7 +1919,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600018", establishedRightSideKLines("600018"));
         eastMoneyClient.quotes.forEach(quote -> eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
 
-        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(2, 100, 10, null,null, null, null, null);
 
         assertThat(find(report, "600017").technical().goldenCross().state()).isEqualTo("APPROACHING");
         assertThat(find(report, "600017").technical().rightSideSignal()).isEqualTo("尚未右侧");
@@ -1938,7 +1937,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600020", establishedRightSideKLines("600020"));
         eastMoneyClient.quotes.forEach(quote -> eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
 
-        ShortTermReport report = service.report(2, 100, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(2, 100, 10, null,null, null, null, null);
 
         ShortTermCandidate approaching = find(report, "600019");
         assertThat(approaching.technical().goldenCross().state()).isEqualTo("APPROACHING");
@@ -1967,7 +1966,7 @@ class ShortTermServiceTest {
             eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
         });
 
-        ShortTermReport report = service.report(3, 100, 35, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 35, null,null, null, null, null);
 
         assertThat(report.reviewedCount()).isEqualTo(35);
         assertThat(report.klineReviewedCount()).isEqualTo(35);
@@ -1984,7 +1983,7 @@ class ShortTermServiceTest {
         eastMoneyClient.intraday.put("600016", watchedTail("600016"));
 
         ShortTermCandidate candidate = find(
-                service.report(3, 100, 5, null, null, null, null, null, null, null),
+                service.report(3, 100, 5, null,null, null, null, null),
                 "600016"
         );
 
@@ -2003,7 +2002,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600013", goodFinancial("600013"));
         eastMoneyClient.intraday.put("600013", weakTail("600013"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600013");
         assertThat(candidate.action()).isEqualTo("RIGHT_EARLY_ADD");
@@ -2022,7 +2021,7 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600014", goodFinancial("600014"));
         eastMoneyClient.intraday.put("600014", largeTurnoverConfirmedTail("600014"));
 
-        ShortTermReport report = service.report(3, 100, 5, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 100, 5, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600014");
         assertThat(candidate.tailSignal().tailAmountRatioPercent()).isLessThan(new BigDecimal("6.00"));
@@ -2035,7 +2034,7 @@ class ShortTermServiceTest {
     void shouldFailInsteadOfReturningEmptyCandidatesWhenRealtimeQuotesUnavailable() {
         eastMoneyClient.quoteFailure = new IllegalStateException("实时行情超时");
 
-        assertThatThrownBy(() -> service.report(3, 100, 5, null, null, null, null, null, null, null))
+        assertThatThrownBy(() -> service.report(3, 100, 5, null,null, null, null, null))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("短线右侧实时行情加载失败")
                 .hasMessageContaining("不返回空候选降级");
@@ -2049,7 +2048,7 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600021", rightEarlyKLines("600021", "10.50", "180000"));
         eastMoneyClient.financials.put("600021", goodFinancial("600021"));
 
-        ShortTermReport report = service.report(3, 50, 10, null, null, null, null, null, null, null);
+        ShortTermReport report = service.report(3, 50, 10, null,null, null, null, null);
 
         ShortTermCandidate candidate = find(report, "600021");
         assertThat(candidate.financial().roe()).isEqualByComparingTo("0.125");
@@ -2083,7 +2082,6 @@ class ShortTermServiceTest {
                 candidate.pbRatio(),
                 candidate.amount(),
                 freshness,
-                candidate.valuationContext(),
                 candidate.phase(),
                 candidate.phaseLabel(),
                 candidate.action(),

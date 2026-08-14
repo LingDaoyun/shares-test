@@ -7,8 +7,6 @@ public record ShortTermScanRequest(
         Integer scanLimit,
         Integer klineLimit,
         BigDecimal minAmount,
-        BigDecimal maxPe,
-        BigDecimal maxPb,
         BigDecimal minVolumeRatio,
         BigDecimal maxEntryRise,
         BigDecimal maxDistanceToMa20,
@@ -21,8 +19,6 @@ public record ShortTermScanRequest(
             Integer scanLimit,
             Integer klineLimit,
             BigDecimal minAmount,
-            BigDecimal maxPe,
-            BigDecimal maxPb,
             BigDecimal minVolumeRatio,
             BigDecimal maxEntryRise,
             BigDecimal maxDistanceToMa20,
@@ -34,8 +30,6 @@ public record ShortTermScanRequest(
                 scanLimit,
                 klineLimit,
                 minAmount,
-                maxPe,
-                maxPb,
                 minVolumeRatio,
                 maxEntryRise,
                 maxDistanceToMa20,
@@ -46,6 +40,6 @@ public record ShortTermScanRequest(
     }
 
     public static ShortTermScanRequest empty() {
-        return new ShortTermScanRequest(null, null, null, null, null, null, null, null, null, null, null, null);
+        return new ShortTermScanRequest(null, null, null, null, null, null, null, null, null, null);
     }
 }

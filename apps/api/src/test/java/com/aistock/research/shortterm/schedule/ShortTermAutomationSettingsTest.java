@@ -35,8 +35,6 @@ class ShortTermAutomationSettingsTest {
         assertThat(scan.scanLimit()).isEqualTo(6000);
         assertThat(scan.klineLimit()).isEqualTo(120);
         assertThat(scan.minAmount()).isEqualByComparingTo("80000000");
-        assertThat(scan.maxPe()).isEqualByComparingTo("100");
-        assertThat(scan.maxPb()).isEqualByComparingTo("15");
         assertThat(scan.minVolumeRatio()).isEqualByComparingTo("1.20");
         assertThat(scan.maxEntryRise()).isEqualByComparingTo("6.5");
         assertThat(scan.maxDistanceToMa20()).isEqualByComparingTo("8");
@@ -158,7 +156,7 @@ class ShortTermAutomationSettingsTest {
                 .withProperty("research.short-term.schedule.final-deadline", "25:99")
                 .withProperty("research.short-term.schedule.freshness-seconds", "-1")
                 .withProperty("research.short-term.schedule.limit", "0")
-                .withProperty("research.short-term.schedule.max-pe", "NaN")
+                .withProperty("research.short-term.schedule.min-volume-ratio", "NaN")
                 .withProperty("research.short-term.overnight.entry-start", "bad-time")
                 .withProperty("research.short-term.overnight.entry-end", "15:20")
                 .withProperty("research.short-term.overnight.max-holding-trading-days", "0")
@@ -172,7 +170,7 @@ class ShortTermAutomationSettingsTest {
         assertThat(settings.finalDeadline()).isEqualTo(LocalTime.of(14, 49, 40));
         assertThat(settings.freshness()).isEqualTo(Duration.ofSeconds(180));
         assertThat(settings.scanRequest().limit()).isEqualTo(8);
-        assertThat(settings.scanRequest().maxPe()).isEqualByComparingTo("100");
+        assertThat(settings.scanRequest().minVolumeRatio()).isEqualByComparingTo("1.20");
         assertThat(settings.overnightRules().entryStart()).isEqualTo(LocalTime.of(14, 45));
         assertThat(settings.overnightRules().entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);
         assertThat(settings.overnightRules().maxHoldingTradingDays()).isEqualTo(2);

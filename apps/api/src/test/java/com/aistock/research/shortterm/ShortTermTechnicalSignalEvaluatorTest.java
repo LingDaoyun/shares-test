@@ -18,8 +18,6 @@ class ShortTermTechnicalSignalEvaluatorTest {
             6000,
             60,
             new BigDecimal("80000000"),
-            new BigDecimal("100"),
-            new BigDecimal("15"),
             new BigDecimal("1.15"),
             new BigDecimal("4"),
             new BigDecimal("8"),
