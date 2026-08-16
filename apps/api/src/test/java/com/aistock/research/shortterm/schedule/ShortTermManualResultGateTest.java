@@ -143,15 +143,32 @@ class ShortTermManualResultGateTest {
     }
 
     @Test
-    void blocksWrongTradeDate() {
+    void downgradesWrongTradeDateToPreviewInsteadOfBlockingManualScan() {
+        ShortTermFinalResultGate.Result result = gate.evaluateManual(
+                report(
+                        Instant.parse("2026-07-22T06:51:00Z"), true,
+                        new BigDecimal("0.99"), true,
+                        List.of(mock(com.aistock.research.shortterm.ShortTermCandidate.class))),
+                DECISION_AT);
+
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.CACHE_PREVIEW);
+        assertThat(result.blockedReasons()).containsExactly("CUTOFF_WRONG_DATE");
+        assertThat(result.message())
+                .isEqualTo("手动分析已完成，已生成策略候选；尾盘行情不是当日数据，结果仅供研究，不作为今日买点");
+    }
+
+    @Test
+    void downgradesWrongTradeDateToPreviewEvenWithoutCandidates() {
         ShortTermFinalResultGate.Result result = gate.evaluateManual(
                 report(
                         Instant.parse("2026-07-22T06:51:00Z"), true,
                         new BigDecimal("0.99"), true, List.of()),
                 DECISION_AT);
 
-        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.CACHE_PREVIEW);
         assertThat(result.blockedReasons()).containsExactly("CUTOFF_WRONG_DATE");
+        assertThat(result.message())
+                .isEqualTo("手动分析已完成，当前无合格候选；尾盘行情不是当日数据，结果仅供研究，不作为今日买点");
     }
 
     @Test

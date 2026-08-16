@@ -14,11 +14,22 @@ import java.time.LocalTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 @Component
 public class ShortTermFinalResultGate {
 
     private static final BigDecimal MINIMUM_COVERAGE = new BigDecimal("0.95");
+
+    // 手动扫描的执行者知晓当前时点，时点类检查只降级为缓存预览提示，不阻断结果展示；
+    // 覆盖率/完整性类检查仍保持阻断。
+    private static final Set<String> MANUAL_TIMING_REASONS = Set.of(
+            "FINAL_DEADLINE_EXPIRED",
+            "CUTOFF_MISSING",
+            "CUTOFF_WRONG_DATE",
+            "CUTOFF_AFTER_DECISION",
+            "QUOTE_STALE"
+    );
 
     private final ShortTermAutomationSettings settings;
     private final TradingClockService tradingClock;
@@ -47,6 +58,20 @@ public class ShortTermFinalResultGate {
                 tradeDate, report, decisionCompletedAt, decisionCompletedAt, false, true, false);
         if (failure.isPresent()) {
             Failure blocked = failure.orElseThrow();
+            if (MANUAL_TIMING_REASONS.contains(blocked.reason())) {
+                boolean hasCandidates = report != null
+                        && report.candidates() != null
+                        && !report.candidates().isEmpty();
+                String message = (hasCandidates
+                        ? "手动分析已完成，已生成策略候选"
+                        : "手动分析已完成，当前无合格候选")
+                        + "；" + blocked.message() + "，结果仅供研究，不作为今日买点";
+                return new Result(
+                        ShortTermSnapshotStatus.CACHE_PREVIEW,
+                        message,
+                        List.of(blocked.reason())
+                );
+            }
             return blocked(blocked.reason(), blocked.message());
         }
         return classify(

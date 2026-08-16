@@ -42,6 +42,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -403,12 +404,9 @@ public class ShortTermService {
                 .map(EastMoneyQuote::symbol)
                 .toList();
 
-        Map<String, List<EastMoneyKLine>> klineMap = tradableQuotes.parallelStream()
-                .collect(Collectors.toMap(
-                        EastMoneyQuote::symbol,
-                        quote -> fetchKLinesSafely(quote.symbol()),
-                        (left, right) -> left
-                ));
+        Map<String, List<EastMoneyKLine>> klineMap = tradableQuotes.isEmpty()
+                ? Map.of()
+                : fetchKLinesWithSourceGuard(tradableQuotes);
 
         ShortTermCrossSectionAnalysis crossSection = crossSectionAnalyzer.analyze(
                 marketContextUniverse,
@@ -3107,21 +3105,47 @@ public class ShortTermService {
         return new BigDecimal("52");
     }
 
+    private List<EastMoneyKLine> fetchKLinesOrThrow(String symbol) {
+        LocalDate end = tradingClockService.currentMarketDate();
+        LocalDate begin = end.minusDays(420);
+        List<EastMoneyKLine> rows = eastMoneyClient.fetchDailyKLines(symbol, begin, end);
+        if (chipAnalysisService == null || !chipSettings.enabled()) {
+            return rows;
+        }
+        List<EastMoneyKLine> enriched = eastMoneyClient.enrichDailyKLineTurnover(
+                symbol, begin, end, rows);
+        return enriched == null || enriched.isEmpty() ? rows : enriched;
+    }
+
     private List<EastMoneyKLine> fetchKLinesSafely(String symbol) {
         try {
-            LocalDate end = tradingClockService.currentMarketDate();
-            LocalDate begin = end.minusDays(420);
-            List<EastMoneyKLine> rows = eastMoneyClient.fetchDailyKLines(symbol, begin, end);
-            if (chipAnalysisService == null || !chipSettings.enabled()) {
-                return rows;
-            }
-            List<EastMoneyKLine> enriched = eastMoneyClient.enrichDailyKLineTurnover(
-                    symbol, begin, end, rows);
-            return enriched == null || enriched.isEmpty() ? rows : enriched;
+            return fetchKLinesOrThrow(symbol);
         } catch (RuntimeException exception) {
             logger.warn("短线右侧 K 线获取失败：{}", symbol, exception);
             return List.of();
         }
+    }
+
+    // K 线源健康守卫：第一只串行先抓，等价于源探测——失败（内部已多轮重试）立刻
+    // 快速失败，避免逐只空等拖满扫描超时（例如东财历史行情接口限流封禁时）。
+    private Map<String, List<EastMoneyKLine>> fetchKLinesWithSourceGuard(List<EastMoneyQuote> tradableQuotes) {
+        EastMoneyQuote probe = tradableQuotes.get(0);
+        List<EastMoneyKLine> probeRows;
+        try {
+            probeRows = fetchKLinesOrThrow(probe.symbol());
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException(
+                    "K线数据源当前不可用（" + probe.symbol() + " 探测失败，可能被行情接口限流），请稍后重试",
+                    exception
+            );
+        }
+        Map<String, List<EastMoneyKLine>> klineMap = new ConcurrentHashMap<>();
+        klineMap.put(probe.symbol(), probeRows);
+        tradableQuotes.stream()
+                .filter(quote -> !quote.symbol().equals(probe.symbol()))
+                .parallel()
+                .forEach(quote -> klineMap.put(quote.symbol(), fetchKLinesSafely(quote.symbol())));
+        return klineMap;
     }
 
     private Map<String, EastMoneyFundFlowSnapshot> fetchFundFlows(List<String> symbols) {
