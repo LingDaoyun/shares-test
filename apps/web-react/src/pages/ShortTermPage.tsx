@@ -257,17 +257,22 @@ export function ShortTermPage() {
             ) : null}
             {viewPreferences.snapshotVisible ? (
               <ScanSnapshotSummaryCard report={report} diagnostics={diagnostics} />
-            ): null}
+            ) : null}
             {viewPreferences.hotDirectionsVisible ? (
               <HotDirectionsCard directions={report.hotDirections} />
             ) : null}
-            {viewPreferences.methodologyVisible ? (
-              <MethodologyCard methodology={report.methodology} />
-            ) : null}
-            {viewPreferences.fundFlowVisible ? (
-              <MarketFundDirectionCard direction={report.marketFundDirection} />
-            ) : null}
           </div>
+
+          {viewPreferences.methodologyVisible || viewPreferences.fundFlowVisible ? (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {viewPreferences.methodologyVisible ? (
+                <MethodologyCard methodology={report.methodology} />
+              ) : null}
+              {viewPreferences.fundFlowVisible ? (
+                <MarketFundDirectionCard direction={report.marketFundDirection} />
+              ) : null}
+            </div>
+          ) : null}
 
           <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧候选</span>} flush>
             {report.candidates.length ? (
@@ -621,7 +626,7 @@ function FundDirectionList({
         {items.map((item) => (
           <div key={`${title}-${item.code}`} className="rounded-lg border border-line-soft px-2.5 py-2">
             <div className="flex items-baseline justify-between gap-2">
-              <span className="truncate font-semibold text-ink-900">{item.name}</span>
+              <span className="min-w-0 truncate font-semibold text-ink-900">{item.name || item.code || '未知板块'}</span>
               <span className={`shrink-0 tabular font-semibold ${changeClass(item.mainNetInflow)}`}>
                 {formatAmount(item.mainNetInflow)}
               </span>
