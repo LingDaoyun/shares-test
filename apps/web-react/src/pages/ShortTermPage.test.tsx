@@ -33,6 +33,7 @@ vi.mock('../components/ui/Toast', () => ({
     error: vi.fn(),
     info: vi.fn(),
     warning: vi.fn(),
+    loading: vi.fn(),
     dismiss: vi.fn()
   }
 }))

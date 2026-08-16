@@ -1,10 +1,11 @@
+import { forwardRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { RefreshCw, Settings, ArrowLeft } from 'lucide-react'
 import { useAppStore } from '../../store/appStore'
 import { pageMeta, pathToPage, type PageKey } from './pageMeta'
 import { Spinner } from '../ui/Loader'
 
-export function Header() {
+export const Header = forwardRef<HTMLElement>(function Header(_props, ref) {
   const location = useLocation()
   const navigate = useNavigate()
   const loading = useAppStore((s) => s.loading)
@@ -19,7 +20,7 @@ export function Header() {
   const isSettings = page === 'settings'
 
   return (
-    <header className="card flex flex-wrap items-end justify-between gap-4 px-6 py-5">
+    <header ref={ref} className="card flex flex-wrap items-end justify-between gap-4 px-6 py-5">
       <div className="min-w-0">
         <div className="eyebrow mb-1">{meta.eyebrow}</div>
         <h1 className="text-2xl font-bold tracking-tight text-ink-900">{meta.title}</h1>
@@ -52,7 +53,7 @@ export function Header() {
       </div>
     </header>
   )
-}
+})
 
 function StatusChip({ label, value }: { label: string; value: string }) {
   return (

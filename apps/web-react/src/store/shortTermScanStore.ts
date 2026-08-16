@@ -100,7 +100,7 @@ export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
     const generation = manualRunGeneration + 1
     manualRunGeneration = generation
     clearPollTimer()
-    toast.info(
+    toast.loading(
       '短线扫描已开始，正在获取实时行情…',
       MANUAL_SCAN_PERSISTENT_TOAST
     )

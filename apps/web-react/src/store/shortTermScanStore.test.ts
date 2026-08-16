@@ -28,6 +28,7 @@ vi.mock('../components/ui/Toast', () => ({
     error: vi.fn(),
     info: vi.fn(),
     warning: vi.fn(),
+    loading: vi.fn(),
     dismiss: vi.fn()
   }
 }))
@@ -107,7 +108,7 @@ describe('shortTermScanStore manual notifications', () => {
       report: report(2)
     }))
 
-    expect(toast.info).toHaveBeenCalledWith(
+    expect(toast.loading).toHaveBeenCalledWith(
       '短线扫描已开始，正在获取实时行情…',
       persistentOptions
     )

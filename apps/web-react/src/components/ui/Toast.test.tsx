@@ -27,12 +27,15 @@ describe('Toast lifecycle', () => {
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
   })
 
-  it('anchors the global notification stack at the top-right', () => {
-    const viewport = host.firstElementChild as HTMLElement | null
-    const classes = viewport?.className.split(/\s+/) ?? []
+  it('anchors the global notification stack to the header center without blocking the page', () => {
+    const overlay = host.firstElementChild as HTMLElement | null
+    const overlayClasses = overlay?.className.split(/\s+/) ?? []
+    expect(overlayClasses).toEqual(expect.arrayContaining(['fixed', 'inset-0', 'pointer-events-none']))
 
-    expect(classes).toEqual(expect.arrayContaining(['fixed', 'top-6', 'right-6']))
-    expect(classes).not.toContain('bottom-6')
+    const stack = overlay?.firstElementChild as HTMLElement | null
+    const stackClasses = stack?.className.split(/\s+/) ?? []
+    expect(stackClasses).toEqual(expect.arrayContaining(['flex', 'items-center']))
+    expect(stack?.style.top).toBe('var(--toast-top, 4rem)')
   })
 
   it('keeps the 3200 ms default for existing unkeyed calls', () => {
