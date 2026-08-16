@@ -8,6 +8,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       SERVER_PORT: 19080
+      NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-host.docker.internal:8848}
       JDBC_DATABASE_URL: ${JDBC_DATABASE_URL:-jdbc:h2:file:/data/aistock;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_ON_EXIT=FALSE}
       JDBC_DATABASE_DRIVER: ${JDBC_DATABASE_DRIVER:-org.h2.Driver}
       JDBC_DATABASE_USERNAME: ${JDBC_DATABASE_USERNAME:-sa}

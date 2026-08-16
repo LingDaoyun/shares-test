@@ -251,28 +251,23 @@ export function ShortTermPage() {
             onChange={updateViewPreference}
           />
 
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3" data-testid="short-term-horizontal-summary">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3" data-testid="short-term-horizontal-summary">
             {viewPreferences.marketSentimentVisible ? (
               <MarketSentimentSummaryCard report={report} />
             ) : null}
             {viewPreferences.snapshotVisible ? (
               <ScanSnapshotSummaryCard report={report} diagnostics={diagnostics} />
-            ) : null}
+            ): null}
             {viewPreferences.hotDirectionsVisible ? (
               <HotDirectionsCard directions={report.hotDirections} />
             ) : null}
+            {viewPreferences.methodologyVisible ? (
+              <MethodologyCard methodology={report.methodology} />
+            ) : null}
+            {viewPreferences.fundFlowVisible ? (
+              <MarketFundDirectionCard direction={report.marketFundDirection} />
+            ) : null}
           </div>
-
-          {viewPreferences.methodologyVisible || viewPreferences.fundFlowVisible ? (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              {viewPreferences.methodologyVisible ? (
-                <MethodologyCard methodology={report.methodology} />
-              ) : null}
-              {viewPreferences.fundFlowVisible ? (
-                <MarketFundDirectionCard direction={report.marketFundDirection} />
-              ) : null}
-            </div>
-          ) : null}
 
           <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧候选</span>} flush>
             {report.candidates.length ? (
@@ -515,7 +510,7 @@ function HotDirectionsCard({ directions }: { directions: ShortTermHotDirection[]
             </div>
             <Tag tone="warning">{directions.length} 组</Tag>
           </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
+          <div className="grid grid-cols-1 gap-2">
             {directions.slice(0, 5).map((direction) => (
               <div key={direction.code} className="rounded-xl border border-amber-100 bg-white/80 px-3 py-2">
                 <div className="flex items-center justify-between gap-2">
