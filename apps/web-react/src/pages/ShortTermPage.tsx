@@ -195,7 +195,7 @@ export function ShortTermPage() {
           </div>
         }
       >
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
           <NumberField label="候选数量" value={draft.limit} min={3} max={12} onChange={(value) => setDraft({ ...draft, limit: value })} />
           <NumberField label="扫描数量" value={draft.scanLimit} min={50} max={6000} step={100} onChange={(value) => setDraft({ ...draft, scanLimit: value })} />
           <NumberField label="K线复核数" value={draft.klineLimit} min={10} max={160} step={10} onChange={(value) => setDraft({ ...draft, klineLimit: value })} />
@@ -1197,17 +1197,50 @@ function NumberField({
   step?: number
   onChange: (value: number) => void
 }) {
+  const [draft, setDraft] = useState(String(value))
+  const [focused, setFocused] = useState(false)
+
+  // 未聚焦时跟随外部值，聚焦编辑期间不打断用户（清空、逐位输入都允许）
+  useEffect(() => {
+    if (!focused) setDraft(String(value))
+  }, [value, focused])
+
+  const commit = (raw: string) => {
+    if (raw.trim() === '') return
+    const parsed = Number(raw)
+    if (Number.isFinite(parsed)) {
+      onChange(parsed)
+    }
+  }
+
+  const settle = () => {
+    setFocused(false)
+    const parsed = Number(draft)
+    if (draft.trim() === '' || !Number.isFinite(parsed)) {
+      setDraft(String(value))
+      return
+    }
+    const clamped = Math.min(max, Math.max(min, parsed))
+    onChange(clamped)
+    setDraft(String(clamped))
+  }
+
   return (
-    <label>
-      <span className="field-label">{label}</span>
+    <label className="group flex flex-col gap-1 rounded-xl border border-line bg-line-soft/40 px-3.5 py-2.5 transition hover:border-brand-300 hover:bg-white focus-within:border-brand-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-brand-100">
+      <span className="text-xs font-medium text-ink-500 group-focus-within:text-brand-600">{label}</span>
       <input
-        className="field tabular"
+        className="w-full border-0 bg-transparent p-0 text-base font-semibold tabular text-ink-900 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         type="number"
         min={min}
         max={max}
         step={step ?? 1}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        value={draft}
+        onFocus={() => setFocused(true)}
+        onBlur={settle}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          commit(e.target.value)
+        }}
       />
     </label>
   )
