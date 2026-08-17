@@ -32,6 +32,7 @@ interface DraftParams {
   scanLimit: number
   klineLimit: number
   minAmountYi: number
+  maxPricePerShare: number
   minVolumeRatio: number
   maxEntryRise: number
   maxDistanceToMa20: number
@@ -45,6 +46,7 @@ const DEFAULT_DRAFT: DraftParams = {
   scanLimit: 6000,
   klineLimit: 120,
   minAmountYi: 0.8,
+  maxPricePerShare: 100,
   minVolumeRatio: 1.2,
   maxEntryRise: 6.5,
   maxDistanceToMa20: 8,
@@ -97,7 +99,11 @@ export function ShortTermPage() {
   }, [report, selectedSymbol])
 
   const selected = useMemo(() => {
-    return resolveDetailSelection(report?.candidates ?? [], selectedSymbol, (candidate) => candidate.symbol)
+    return resolveDetailSelection(
+      orderByRankingScoreDesc(report?.candidates ?? []),
+      selectedSymbol,
+      (candidate) => candidate.symbol
+    )
   }, [report, selectedSymbol])
 
   const diagnostics = useMemo(() => shortTermDiagnostics(report), [report])
@@ -194,6 +200,7 @@ export function ShortTermPage() {
           <NumberField label="扫描数量" value={draft.scanLimit} min={50} max={6000} step={100} onChange={(value) => setDraft({ ...draft, scanLimit: value })} />
           <NumberField label="K线复核数" value={draft.klineLimit} min={10} max={160} step={10} onChange={(value) => setDraft({ ...draft, klineLimit: value })} />
           <NumberField label="成交额下限(亿)" value={draft.minAmountYi} min={0.8} max={30} step={0.05} onChange={(value) => setDraft({ ...draft, minAmountYi: value })} />
+          <NumberField label="每股价格上限(元)" value={draft.maxPricePerShare} min={1} max={2000} step={1} onChange={(value) => setDraft({ ...draft, maxPricePerShare: value })} />
           <NumberField label="量比下限" value={draft.minVolumeRatio} min={1} max={3.2} step={0.05} onChange={(value) => setDraft({ ...draft, minVolumeRatio: value })} />
           <NumberField label="追涨上限%" value={draft.maxEntryRise} min={1} max={10} step={0.1} onChange={(value) => setDraft({ ...draft, maxEntryRise: value })} />
           <NumberField label="距20日线%" value={draft.maxDistanceToMa20} min={2} max={20} step={0.5} onChange={(value) => setDraft({ ...draft, maxDistanceToMa20: value })} />
@@ -261,23 +268,19 @@ export function ShortTermPage() {
             {viewPreferences.hotDirectionsVisible ? (
               <HotDirectionsCard directions={report.hotDirections} />
             ) : null}
+            {viewPreferences.fundFlowVisible ? (
+              <MarketFundDirectionCard direction={report.marketFundDirection} />
+            ) : null}
           </div>
 
-          {viewPreferences.methodologyVisible || viewPreferences.fundFlowVisible ? (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              {viewPreferences.methodologyVisible ? (
-                <MethodologyCard methodology={report.methodology} />
-              ) : null}
-              {viewPreferences.fundFlowVisible ? (
-                <MarketFundDirectionCard direction={report.marketFundDirection} />
-              ) : null}
-            </div>
+          {viewPreferences.methodologyVisible ? (
+            <MethodologyCard methodology={report.methodology} />
           ) : null}
 
           <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧候选</span>} flush>
             {report.candidates.length ? (
               <div className="divide-y divide-line-soft">
-                {report.candidates.map((candidate) => (
+                {orderByRankingScoreDesc(report.candidates).map((candidate) => (
                   <CandidateRow
                     key={candidate.symbol}
                     candidate={candidate}
@@ -438,12 +441,12 @@ function MarketSentimentSummaryCard({ report }: { report: ShortTermReport }) {
             {sentiment.phase}
           </Tag>
         </div>
-        <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
+        <div className="flex flex-col gap-3">
           <div>
             <p className="text-xs text-ink-400">情绪分</p>
             <p className="tabular text-3xl font-semibold text-ink-900">{formatNumber(sentiment.score)}</p>
           </div>
-          <div className="flex flex-1 flex-wrap gap-2 text-xs">
+          <div className="flex flex-wrap gap-2 text-xs">
             <InlineMetric label="上涨 / 下跌" value={`${sentiment.advancing} / ${sentiment.declining}`} />
             <InlineMetric label="涨停 / 跌停" value={`${sentiment.limitUpLike} / ${sentiment.limitDownLike}`} />
             <InlineMetric label="市场宽度" value={formatPercent(sentiment.breadthPercent)} />
@@ -553,6 +556,7 @@ function toApiParams(params: DraftParams): ShortTermParams {
     scanLimit: params.scanLimit,
     klineLimit: params.klineLimit,
     minAmount: Math.round(params.minAmountYi * 100000000),
+    maxPricePerShare: params.maxPricePerShare,
     minVolumeRatio: params.minVolumeRatio,
     maxEntryRise: params.maxEntryRise,
     maxDistanceToMa20: params.maxDistanceToMa20,
@@ -566,26 +570,12 @@ function MarketFundDirectionCard({ direction }: { direction?: ShortTermMarketFun
   const topInflows = direction?.topInflows ?? []
   const topOutflows = direction?.topOutflows ?? []
   const hasRows = topInflows.length > 0 || topOutflows.length > 0
-  const coverage = direction && direction.expectedIndustryCount > 0
-    ? `${direction.coveredIndustryCount}/${direction.expectedIndustryCount}`
-    : '待补'
 
   return (
     <Card title="今日资金去向">
-      <div className="grid grid-cols-1 gap-3 text-sm text-ink-600 xl:grid-cols-[220px_1fr]">
-        <div className="rounded-xl border border-line-soft bg-line-soft/30 p-3">
-          <div className="eyebrow mb-1">FUND FLOW</div>
-          <h3 className="text-base font-semibold text-ink-900">行业资金流</h3>
-          <div className="mt-3 flex flex-wrap gap-2 text-xs">
-            <InlineMetric label="数据日" value={direction?.tradeDate ?? '待确认'} />
-            <InlineMetric label="覆盖" value={coverage} />
-          </div>
-          <p className="mt-3 text-xs leading-relaxed text-ink-500">
-            覆盖 {coverage} · {direction?.sourceName ?? '行业资金流未返回'}
-          </p>
-        </div>
+      <div className="flex flex-col gap-3 text-sm text-ink-600">
         {hasRows ? (
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3">
             <FundDirectionList title="主力流入" items={topInflows} tone="success" />
             <FundDirectionList title="主力流出" items={topOutflows} tone="danger" />
           </div>
@@ -595,7 +585,7 @@ function MarketFundDirectionCard({ direction }: { direction?: ShortTermMarketFun
           </p>
         )}
         {direction?.dataGaps?.length ? (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 xl:col-span-2">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
             {direction.dataGaps.slice(0, 2).join('；')}
           </div>
         ) : null}
@@ -645,8 +635,29 @@ function FundDirectionList({
   )
 }
 
-function shortTermDiagnostics(report: ShortTermReport | null) {
-  const candidates = report?.candidates ?? []
+// 候选列表按排序分从大到小展示，最大的排第一；缺排序快照的旧候选保持相对顺序垫底，
+// 序号按展示顺序重编，与卡片上的「排序分」口径一致。
+function orderByRankingScoreDesc(candidates: ShortTermCandidate[]): ShortTermCandidate[] {
+  return candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .sort((left, right) => {
+      const leftScore = hasClosedShortTermScoreSnapshot(left.candidate)
+          && left.candidate.score.rankingScore != null
+        ? left.candidate.score.rankingScore
+        : null
+      const rightScore = hasClosedShortTermScoreSnapshot(right.candidate)
+          && right.candidate.score.rankingScore != null
+        ? right.candidate.score.rankingScore
+        : null
+      if (leftScore === null && rightScore === null) return left.index - right.index
+      if (leftScore === null) return 1
+      if (rightScore === null) return -1
+      return rightScore - leftScore || left.index - right.index
+    })
+    .map((entry, position) => ({ ...entry.candidate, rank: position + 1 }))
+}
+
+function shortTermDiagnostics(report: ShortTermReport | null) {  const candidates = report?.candidates ?? []
   return {
     addCount: candidates.filter((candidate) => candidate.todayAdvice.action === 'ADD').length,
     lightTrialCount: candidates.filter((candidate) => candidate.todayAdvice.action === 'LIGHT_TRIAL').length,

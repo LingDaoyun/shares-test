@@ -519,6 +519,7 @@ export interface ShortTermRuleSet {
   scanLimit: number
   klineLimit: number
   minAmount: number
+  maxPricePerShare: number
   minVolumeRatio: number
   maxEntryRisePercent: number
   maxDistanceToMa20Percent: number

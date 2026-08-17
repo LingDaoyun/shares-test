@@ -35,6 +35,7 @@ class ShortTermAutomationSettingsTest {
         assertThat(scan.scanLimit()).isEqualTo(6000);
         assertThat(scan.klineLimit()).isEqualTo(120);
         assertThat(scan.minAmount()).isEqualByComparingTo("80000000");
+        assertThat(scan.maxPricePerShare()).isEqualByComparingTo("100");
         assertThat(scan.minVolumeRatio()).isEqualByComparingTo("1.20");
         assertThat(scan.maxEntryRise()).isEqualByComparingTo("6.5");
         assertThat(scan.maxDistanceToMa20()).isEqualByComparingTo("8");

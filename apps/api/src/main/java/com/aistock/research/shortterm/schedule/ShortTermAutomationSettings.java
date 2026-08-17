@@ -77,12 +77,15 @@ public class ShortTermAutomationSettings {
                 integer("research.short-term.schedule.kline-limit", 120, 20, 500),
                 decimal("research.short-term.schedule.min-amount", "80000000", ZERO,
                         new BigDecimal("100000000000000")),
+                decimal("research.short-term.schedule.max-price-per-share", "100",
+                        ONE, new BigDecimal("100000")),
                 decimal("research.short-term.schedule.min-volume-ratio", "1.20",
                         ONE, new BigDecimal("3.20")),
                 decimal("research.short-term.schedule.max-entry-rise", "6.5", ZERO, new BigDecimal("20")),
                 decimal("research.short-term.schedule.max-distance-to-ma20", "8", ZERO, new BigDecimal("50")),
                 decimal("research.short-term.schedule.min-financial-score", "55", ZERO, HUNDRED),
-                false);
+                false,
+                null);
     }
 
     public OvernightRuleSet overnightRules() {

@@ -117,6 +117,7 @@ export interface ShortTermParams {
   scanLimit?: number
   klineLimit?: number
   minAmount?: number
+  maxPricePerShare?: number
   minVolumeRatio?: number
   maxEntryRise?: number
   maxDistanceToMa20?: number

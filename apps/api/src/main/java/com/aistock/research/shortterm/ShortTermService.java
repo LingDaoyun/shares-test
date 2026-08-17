@@ -58,6 +58,7 @@ public class ShortTermService {
     private static final int DEFAULT_KLINE_LIMIT = 120;
     private static final int MAX_KLINE_LIMIT = 160;
     private static final BigDecimal DEFAULT_MIN_AMOUNT = new BigDecimal("80000000");
+    private static final BigDecimal DEFAULT_MAX_PRICE_PER_SHARE = new BigDecimal("100");
     private static final BigDecimal DEFAULT_MIN_VOLUME_RATIO = new BigDecimal("1.20");
     private static final BigDecimal DEFAULT_MAX_ENTRY_RISE = new BigDecimal("6.50");
     private static final BigDecimal DEFAULT_MAX_DISTANCE_TO_MA20 = new BigDecimal("8.00");
@@ -254,6 +255,7 @@ public class ShortTermService {
             Integer scanLimit,
             Integer klineLimit,
             BigDecimal minAmount,
+            BigDecimal maxPricePerShare,
             BigDecimal minVolumeRatio,
             BigDecimal maxEntryRise,
             BigDecimal maxDistanceToMa20,
@@ -264,6 +266,7 @@ public class ShortTermService {
                 scanLimit,
                 klineLimit,
                 minAmount,
+                maxPricePerShare,
                 minVolumeRatio,
                 maxEntryRise,
                 maxDistanceToMa20,
@@ -277,6 +280,7 @@ public class ShortTermService {
             Integer scanLimit,
             Integer klineLimit,
             BigDecimal minAmount,
+            BigDecimal maxPricePerShare,
             BigDecimal minVolumeRatio,
             BigDecimal maxEntryRise,
             BigDecimal maxDistanceToMa20,
@@ -288,6 +292,7 @@ public class ShortTermService {
                 scanLimit,
                 klineLimit,
                 minAmount,
+                maxPricePerShare,
                 minVolumeRatio,
                 maxEntryRise,
                 maxDistanceToMa20,
@@ -321,6 +326,7 @@ public class ShortTermService {
                 request.scanLimit(),
                 request.klineLimit(),
                 request.minAmount(),
+                request.maxPricePerShare(),
                 request.minVolumeRatio(),
                 request.maxEntryRise(),
                 request.maxDistanceToMa20(),
@@ -2878,6 +2884,17 @@ public class ShortTermService {
             ShortTermRuleSet ruleSet,
             Set<String> unstableIndustrySymbols
     ) {
+        if (quote.latestPrice() != null
+                && quote.latestPrice().compareTo(ruleSet.maxPricePerShare()) > 0) {
+            return riskExclusion(
+                    quote,
+                    "PRICE_ABOVE_LIMIT",
+                    "股价高于每股价格上限",
+                    "最新价 " + valueText(quote.latestPrice()) + " 元高于每股价格上限 "
+                            + ruleSet.maxPricePerShare().toPlainString()
+                            + " 元，资金门槛外不进入量化筛选。"
+            );
+        }
         if (isShortTermUnstableIndustry(quote, unstableIndustrySymbols)) {
             return riskExclusion(
                     quote,
@@ -3200,6 +3217,7 @@ public class ShortTermService {
             Integer scanLimit,
             Integer klineLimit,
             BigDecimal minAmount,
+            BigDecimal maxPricePerShare,
             BigDecimal minVolumeRatio,
             BigDecimal maxEntryRise,
             BigDecimal maxDistanceToMa20,
@@ -3210,6 +3228,7 @@ public class ShortTermService {
                 Math.max(50, Math.min(scanLimit == null ? DEFAULT_SCAN_LIMIT : scanLimit, MAX_SCAN_LIMIT)),
                 Math.max(10, Math.min(klineLimit == null ? DEFAULT_KLINE_LIMIT : klineLimit, MAX_KLINE_LIMIT)),
                 RecommendationQuality.requiredAmount(positiveOrDefault(minAmount, DEFAULT_MIN_AMOUNT)),
+                positiveOrDefault(maxPricePerShare, DEFAULT_MAX_PRICE_PER_SHARE),
                 approvedVolumeRatioThreshold(minVolumeRatio),
                 positiveOrDefault(maxEntryRise, DEFAULT_MAX_ENTRY_RISE),
                 positiveOrDefault(maxDistanceToMa20, DEFAULT_MAX_DISTANCE_TO_MA20),

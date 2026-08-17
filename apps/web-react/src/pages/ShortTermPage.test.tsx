@@ -70,8 +70,7 @@ const emptyReport = {
     scanLimit: 6000,
     klineLimit: 120,
     minAmount: 80000000,
-    maxPe: 100,
-    maxPb: 15,
+    maxPricePerShare: 100,
     minVolumeRatio: 1.2,
     maxEntryRisePercent: 6.5,
     maxDistanceToMa20Percent: 8,
@@ -576,7 +575,6 @@ describe('ShortTermPage manual scan flow', () => {
     expect(document.body.textContent).toContain('电子')
     expect(document.body.textContent).toContain('主力流出')
     expect(document.body.textContent).toContain('银行')
-    expect(document.body.textContent).toContain('覆盖 496/496')
   })
 
   it('renders an explicit unavailable state for legacy reports without market fund direction', async () => {
