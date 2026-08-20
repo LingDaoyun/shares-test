@@ -12,7 +12,7 @@
 
 - The previous-three-day average strictly excludes the latest K-line and uses the immediately preceding three trading days.
 - Missing, zero, or negative volume in any of the four required rows makes the comparison unavailable; do not skip backward or invent a value.
-- Preserve the existing 5-day and 20-day volume ratios, scoring, filters, ranking, actions, and Agent committee inputs.
+- Preserve the existing 5-day and 20-day volume ratios, scoring, filters, ranking, and actions; the new three-day comparison is display-only.
 - The frontend must not fetch K-lines or recompute the average.
 - Historical payloads without the additive fields must render `成交量待补` without throwing.
 - Existing uncommitted user changes in `ShortTermPage.tsx`, `ShortTermPage.test.tsx`, and `types.ts` must be preserved and must not be staged wholesale.
