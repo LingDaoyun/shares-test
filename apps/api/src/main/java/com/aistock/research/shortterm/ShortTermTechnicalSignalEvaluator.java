@@ -69,6 +69,7 @@ public class ShortTermTechnicalSignalEvaluator {
         BigDecimal high60 = high(rows, 60);
         BigDecimal volumeRatio5 = volumeRatio(rows, 5);
         BigDecimal volumeRatio20 = volumeRatio(rows, 20);
+        VolumeComparison volumeComparison = threeDayVolumeComparison(rows);
         BigDecimal range60 = rangePosition(close, low60, high60);
         BigDecimal range120 = rangePosition(close, low120, high120);
         BigDecimal distanceToMa20 = percent(close.subtract(nullToZero(ma20)), ma20);
@@ -127,6 +128,10 @@ public class ShortTermTechnicalSignalEvaluator {
                 goldenCross,
                 scale(atr14Percent),
                 scale(recentSupportPrice)
+        ).withVolumeComparison(
+                scale(volumeComparison.todayVolume()),
+                scale(volumeComparison.averageVolume3()),
+                scale(volumeComparison.volumeRatio3())
         );
         return new ShortTermTechnicalSignalEvaluation(rows, snapshot, last, previous, List.of());
     }
@@ -255,6 +260,29 @@ public class ShortTermTechnicalSignalEvaluator {
                 : last.volume().divide(averageVolume, 4, RoundingMode.HALF_UP);
     }
 
+    private VolumeComparison threeDayVolumeComparison(List<EastMoneyKLine> rows) {
+        if (rows == null || rows.size() < 4) {
+            return VolumeComparison.unavailable();
+        }
+        int size = rows.size();
+        BigDecimal today = rows.get(size - 1).volume();
+        List<BigDecimal> previousVolumes = rows.subList(size - 4, size - 1).stream()
+                .map(EastMoneyKLine::volume)
+                .toList();
+        if (!positive(today) || previousVolumes.stream().anyMatch(value -> !positive(value))) {
+            return VolumeComparison.unavailable();
+        }
+        BigDecimal averageVolume3 = previousVolumes.stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(BigDecimal.valueOf(3), 6, RoundingMode.HALF_UP);
+        BigDecimal volumeRatio3 = today.divide(averageVolume3, 6, RoundingMode.HALF_UP);
+        return new VolumeComparison(today, averageVolume3, volumeRatio3);
+    }
+
+    private boolean positive(BigDecimal value) {
+        return value != null && value.signum() > 0;
+    }
+
     private BigDecimal high(List<EastMoneyKLine> rows, int window) {
         return lastRows(rows, window).stream()
                 .map(EastMoneyKLine::high)
@@ -318,5 +346,15 @@ public class ShortTermTechnicalSignalEvaluator {
 
     private BigDecimal scale(BigDecimal value) {
         return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private record VolumeComparison(
+            BigDecimal todayVolume,
+            BigDecimal averageVolume3,
+            BigDecimal volumeRatio3
+    ) {
+        private static VolumeComparison unavailable() {
+            return new VolumeComparison(null, null, null);
+        }
     }
 }

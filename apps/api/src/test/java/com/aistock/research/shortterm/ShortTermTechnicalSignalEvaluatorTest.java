@@ -86,6 +86,71 @@ class ShortTermTechnicalSignalEvaluatorTest {
         assertThat(result.eligibleForOvernightValidation()).isFalse();
     }
 
+    @Test
+    void returnsTodayVolumeAndTheImmediatelyPreviousThreeDayAverage() {
+        List<EastMoneyKLine> rows = new ArrayList<>(confirmedReplayRows("600205"));
+        int size = rows.size();
+        replaceVolume(rows, size - 4, "100000");
+        replaceVolume(rows, size - 3, "200000");
+        replaceVolume(rows, size - 2, "300000");
+        replaceVolume(rows, size - 1, "300000");
+
+        ShortTermTechnicalSignalEvaluation result = evaluator.evaluate(
+                rows,
+                rows.get(rows.size() - 1).close(),
+                false,
+                ruleSet
+        );
+
+        assertThat(result.snapshot().todayVolume()).isEqualByComparingTo("300000.00");
+        assertThat(result.snapshot().averageVolume3()).isEqualByComparingTo("200000.00");
+        assertThat(result.snapshot().volumeRatio3()).isEqualByComparingTo("1.50");
+    }
+
+    @Test
+    void marksThreeDayVolumeComparisonUnavailableWhenARequiredVolumeIsMissing() {
+        List<EastMoneyKLine> rows = new ArrayList<>(confirmedReplayRows("600206"));
+        int size = rows.size();
+        replaceVolume(rows, size - 4, "100000");
+        replaceVolume(rows, size - 3, null);
+        replaceVolume(rows, size - 2, "300000");
+        replaceVolume(rows, size - 1, "300000");
+
+        ShortTermTechnicalSignalEvaluation result = evaluator.evaluate(
+                rows,
+                rows.get(rows.size() - 1).close(),
+                false,
+                ruleSet
+        );
+
+        assertThat(result.snapshot().todayVolume()).isNull();
+        assertThat(result.snapshot().averageVolume3()).isNull();
+        assertThat(result.snapshot().volumeRatio3()).isNull();
+    }
+
+    @Test
+    void marksThreeDayVolumeComparisonUnavailableForZeroOrNegativeRequiredVolume() {
+        for (String invalidVolume : List.of("0", "-1")) {
+            List<EastMoneyKLine> rows = new ArrayList<>(confirmedReplayRows("600207"));
+            int size = rows.size();
+            replaceVolume(rows, size - 4, "100000");
+            replaceVolume(rows, size - 3, invalidVolume);
+            replaceVolume(rows, size - 2, "300000");
+            replaceVolume(rows, size - 1, "300000");
+
+            ShortTermTechnicalSignalEvaluation result = evaluator.evaluate(
+                    rows,
+                    rows.get(rows.size() - 1).close(),
+                    false,
+                    ruleSet
+            );
+
+            assertThat(result.snapshot().todayVolume()).isNull();
+            assertThat(result.snapshot().averageVolume3()).isNull();
+            assertThat(result.snapshot().volumeRatio3()).isNull();
+        }
+    }
+
     private List<EastMoneyKLine> confirmedReplayRows(String symbol) {
         List<BigDecimal> closes = new ArrayList<>();
         for (int index = 0; index < 65; index++) {
@@ -148,5 +213,20 @@ class ShortTermTechnicalSignalEvaluatorTest {
                 new BigDecimal(volume),
                 null
         );
+    }
+
+    private void replaceVolume(List<EastMoneyKLine> rows, int index, String volume) {
+        EastMoneyKLine existing = rows.get(index);
+        rows.set(index, new EastMoneyKLine(
+                existing.symbol(),
+                existing.tradeDate(),
+                existing.open(),
+                existing.close(),
+                existing.high(),
+                existing.low(),
+                volume == null ? null : new BigDecimal(volume),
+                existing.amount(),
+                existing.turnoverRate()
+        ));
     }
 }

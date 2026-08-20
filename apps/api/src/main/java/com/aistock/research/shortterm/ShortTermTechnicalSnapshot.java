@@ -30,7 +30,10 @@ public record ShortTermTechnicalSnapshot(
         BigDecimal atr14Percent,
         BigDecimal recentSupportPrice,
         ShortTermMomentumQuality momentumQuality,
-        ShortTermSupportReversalSignal supportReversal
+        ShortTermSupportReversalSignal supportReversal,
+        BigDecimal todayVolume,
+        BigDecimal averageVolume3,
+        BigDecimal volumeRatio3
 ) {
     public ShortTermTechnicalSnapshot(
             LocalDate tradeDate,
@@ -68,7 +71,10 @@ public record ShortTermTechnicalSnapshot(
                 drawdownFrom120HighPercent, todayAmplitudePercent, consecutiveAboveMa20Days,
                 rightSideSignal, goldenCross, atr14Percent, recentSupportPrice,
                 momentumQuality,
-                ShortTermSupportReversalSignal.unavailable()
+                ShortTermSupportReversalSignal.unavailable(),
+                null,
+                null,
+                null
         );
     }
 
@@ -126,7 +132,10 @@ public record ShortTermTechnicalSnapshot(
                 atr14Percent,
                 recentSupportPrice,
                 ShortTermMomentumQuality.unavailable(),
-                ShortTermSupportReversalSignal.unavailable()
+                ShortTermSupportReversalSignal.unavailable(),
+                null,
+                null,
+                null
         );
     }
 
@@ -158,7 +167,10 @@ public record ShortTermTechnicalSnapshot(
                 atr14Percent,
                 recentSupportPrice,
                 quality == null ? ShortTermMomentumQuality.unavailable() : quality,
-                supportReversal == null ? ShortTermSupportReversalSignal.unavailable() : supportReversal
+                supportReversal == null ? ShortTermSupportReversalSignal.unavailable() : supportReversal,
+                todayVolume,
+                averageVolume3,
+                volumeRatio3
         );
     }
 
@@ -190,7 +202,49 @@ public record ShortTermTechnicalSnapshot(
                 atr14Percent,
                 recentSupportPrice,
                 momentumQuality == null ? ShortTermMomentumQuality.unavailable() : momentumQuality,
-                signal == null ? ShortTermSupportReversalSignal.unavailable() : signal
+                signal == null ? ShortTermSupportReversalSignal.unavailable() : signal,
+                todayVolume,
+                averageVolume3,
+                volumeRatio3
+        );
+    }
+
+    public ShortTermTechnicalSnapshot withVolumeComparison(
+            BigDecimal today,
+            BigDecimal previousThreeDayAverage,
+            BigDecimal ratio
+    ) {
+        return new ShortTermTechnicalSnapshot(
+                tradeDate,
+                ma5,
+                ma10,
+                ma20,
+                ma60,
+                ma20SlopePercent,
+                ma60SlopePercent,
+                previousHigh20,
+                previousHigh60,
+                breakoutFromPreviousHigh20Percent,
+                previousRange20Percent,
+                high120,
+                low120,
+                volumeRatio5,
+                volumeRatio20,
+                rangePosition60,
+                rangePosition120,
+                distanceToMa20Percent,
+                drawdownFrom120HighPercent,
+                todayAmplitudePercent,
+                consecutiveAboveMa20Days,
+                rightSideSignal,
+                goldenCross,
+                atr14Percent,
+                recentSupportPrice,
+                momentumQuality,
+                supportReversal,
+                today,
+                previousThreeDayAverage,
+                ratio
         );
     }
 }
