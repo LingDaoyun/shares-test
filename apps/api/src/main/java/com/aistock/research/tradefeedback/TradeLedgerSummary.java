@@ -1,6 +1,7 @@
 package com.aistock.research.tradefeedback;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 
 public record TradeLedgerSummary(
         BigDecimal latestPrice,
@@ -8,6 +9,7 @@ public record TradeLedgerSummary(
         BigDecimal averageCost,
         BigDecimal realizedProfit,
         BigDecimal unrealizedProfit,
-        BigDecimal totalProfit
+        BigDecimal totalProfit,
+        Instant openedAt
 ) {
 }

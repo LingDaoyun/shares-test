@@ -115,6 +115,59 @@ describe('TradeReviewPage case removal', () => {
     expect(table?.className).toContain('trade-review-table')
   })
 
+  it('sorts holding cases by opened time ahead of closed and planned ones', async () => {
+    vi.mocked(fetchTradeCases).mockResolvedValue([
+      tradeCase('case-planned', '600000', '浦发银行', 'PLANNED', { updatedAt: '2026-08-16T10:00:00+08:00' }),
+      tradeCase('case-closed', '601318', '中国平安', 'CLOSED', {
+        updatedAt: '2026-08-15T10:00:00+08:00',
+        ledger: { totalProfit: 120, realizedProfit: 120, positionQuantity: 0 }
+      }),
+      tradeCase('case-holding-late', '600519', '贵州茅台', 'HOLDING', {
+        updatedAt: '2026-08-16T09:00:00+08:00',
+        ledger: { openedAt: '2026-08-10T09:30:00+08:00', positionQuantity: 100, totalProfit: 27.5, unrealizedProfit: 27.5 }
+      }),
+      tradeCase('case-holding-early', '600367', '红星发展', 'HOLDING', {
+        updatedAt: '2026-07-20T09:00:00+08:00',
+        ledger: { openedAt: '2026-08-01T09:30:00+08:00', positionQuantity: 200, totalProfit: -40, unrealizedProfit: -40 }
+      })
+    ])
+
+    await renderPage(root)
+
+    expect(rowSymbols()).toEqual(['600367', '600519', '601318', '600000'])
+  })
+
+  it('accumulates the gross profit of every listed case above the table', async () => {
+    vi.mocked(fetchTradeCases).mockResolvedValue([
+      tradeCase('case-closed', '601318', '中国平安', 'CLOSED', {
+        ledger: { totalProfit: 120, realizedProfit: 120, positionQuantity: 0 }
+      }),
+      tradeCase('case-holding', '600519', '贵州茅台', 'HOLDING', {
+        ledger: { openedAt: '2026-08-10T09:30:00+08:00', positionQuantity: 100, totalProfit: 27.5, unrealizedProfit: 27.5 }
+      }),
+      tradeCase('case-holding-loss', '600367', '红星发展', 'HOLDING', {
+        ledger: { openedAt: '2026-08-01T09:30:00+08:00', positionQuantity: 200, totalProfit: -40, unrealizedProfit: -40 }
+      })
+    ])
+
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('总计盈亏')
+    expect(document.body.textContent).toContain('3 笔复盘单毛收益累加')
+    expect(document.body.textContent).toContain('+107.50 元')
+    expect(document.body.textContent).toContain('已实现')
+    expect(document.body.textContent).toContain('浮动')
+  })
+
+  it('hides the accumulated profit strip once the list is empty', async () => {
+    vi.mocked(fetchTradeCases).mockResolvedValue([])
+
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('暂无复盘单')
+    expect(document.body.textContent).not.toContain('总计盈亏')
+  })
+
   it('opens a standalone manual trade entry and submits a buy fill', async () => {
     vi.mocked(fetchTradeCases).mockResolvedValue([])
     mockedRecordManualTradeFill().mockResolvedValue(tradeCaseDetail('manual-case', '600367', '红星发展'))
@@ -172,6 +225,12 @@ async function flushPromises() {
   await new Promise((resolve) => window.setTimeout(resolve, 0))
 }
 
+function rowSymbols() {
+  return Array.from(document.querySelectorAll('table.trade-review-table tbody tr')).map(
+    (row) => row.querySelector('td span')?.textContent ?? ''
+  )
+}
+
 function setInputValue(label: string, value: string) {
   const input = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)
   if (!input) throw new Error(`missing input: ${label}`)
@@ -186,7 +245,11 @@ function tradeCase(
   caseId: string,
   symbol: string,
   companyName: string,
-  status: TradeCaseSummary['status'] = 'PLANNED'
+  status: TradeCaseSummary['status'] = 'PLANNED',
+  overrides: {
+    updatedAt?: string
+    ledger?: Partial<TradeCaseSummary['ledger']>
+  } = {}
 ): TradeCaseSummary {
   return {
     caseId,
@@ -206,11 +269,13 @@ function tradeCase(
       averageCost: 0,
       realizedProfit: 0,
       unrealizedProfit: null,
-      totalProfit: null
+      totalProfit: null,
+      openedAt: null,
+      ...overrides.ledger
     },
     outcomes: [],
     createdAt: '2026-07-30T14:50:00+08:00',
-    updatedAt: '2026-07-30T14:50:00+08:00'
+    updatedAt: overrides.updatedAt ?? '2026-07-30T14:50:00+08:00'
   }
 }
 

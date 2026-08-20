@@ -564,6 +564,9 @@ export interface ShortTermTechnicalSnapshot {
   low120: number | null
   volumeRatio5: number | null
   volumeRatio20: number | null
+  todayVolume?: number | null
+  averageVolume3?: number | null
+  volumeRatio3?: number | null
   rangePosition60: number | null
   rangePosition120: number | null
   distanceToMa20Percent: number | null
@@ -1606,6 +1609,7 @@ export interface TradeLedgerSummary {
   realizedProfit: number
   unrealizedProfit: number | null
   totalProfit: number | null
+  openedAt: string | null
 }
 
 export interface TradeOutcomeView {

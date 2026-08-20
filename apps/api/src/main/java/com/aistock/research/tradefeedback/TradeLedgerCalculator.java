@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 
 import org.springframework.stereotype.Component;
 
@@ -53,7 +54,13 @@ public final class TradeLedgerCalculator {
         BigDecimal total = position == 0 && !orderedFills.isEmpty()
                 ? realized
                 : unrealized == null ? null : realized.add(unrealized);
-        return new TradeLedgerSummary(latestPrice, position, averageCost, realized, unrealized, total);
+        Instant openedAt = orderedFills.stream()
+                .filter(fill -> fill.side() == TradeSide.BUY)
+                .map(LedgerFill::executedAt)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        return new TradeLedgerSummary(latestPrice, position, averageCost, realized, unrealized, total, openedAt);
     }
 
     public TradeLedgerSummary calculate(Collection<TradeFillEntity> fills, BigDecimal latestPrice) {

@@ -53,6 +53,19 @@ class TradeLedgerCalculatorTest {
         TradeLedgerSummary result = calculator.calculate(List.<LedgerFill>of(), null);
 
         assertThat(result.totalProfit()).isNull();
+        assertThat(result.openedAt()).isNull();
+    }
+
+    @Test
+    void recordsOpenedAtFromTheEarliestBuyFill() {
+        List<LedgerFill> shuffled = List.of(
+                new LedgerFill(SELL, at("2026-07-15T01:35:00Z"), decimal("45"), 150),
+                new LedgerFill(BUY, at("2026-07-14T01:35:00Z"), decimal("40"), 300),
+                new LedgerFill(BUY, at("2026-07-13T01:35:00Z"), decimal("30"), 100));
+
+        TradeLedgerSummary result = calculator.calculate(shuffled, decimal("44"));
+
+        assertThat(result.openedAt()).isEqualTo(at("2026-07-13T01:35:00Z"));
     }
 
     @Test

@@ -55,6 +55,8 @@ const statusMeta: Record<TradeCaseStatus, { label: string; tone: 'brand' | 'succ
   CANCELLED: { label: '已取消', tone: 'danger' }
 }
 
+const statusRank: Record<TradeCaseStatus, number> = { HOLDING: 0, CLOSED: 1, PLANNED: 2, CANCELLED: 3 }
+
 const outcomeMeta: Record<string, { label: string; tone: 'sky' | 'success' | 'danger' | 'neutral' }> = {
   PENDING: { label: 'PENDING', tone: 'sky' },
   MATURED: { label: 'MATURED', tone: 'success' },
@@ -88,7 +90,12 @@ export function TradeReviewPage() {
   const selectedIdRef = useRef<string | null>(null)
 
   const allCases = useMemo(
-    () => Object.values(casesById).sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
+    () => Object.values(casesById).sort((left, right) => {
+      const rankGap = statusRank[left.status] - statusRank[right.status]
+      if (rankGap !== 0) return rankGap
+      if (left.status === 'HOLDING') return positionOpenedTime(left) - positionOpenedTime(right)
+      return Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
+    }),
     [casesById]
   )
   const filteredCases = useMemo(
@@ -168,6 +175,31 @@ export function TradeReviewPage() {
     allCases.forEach((tradeCase) => { next[tradeCase.status] += 1 })
     return next
   }, [allCases])
+
+  const profitTotals = useMemo(() => {
+    let total = 0
+    let hasTotal = false
+    let realized = 0
+    let unrealized = 0
+    let hasUnrealized = false
+    filteredCases.forEach((tradeCase) => {
+      const ledger = tradeCase.ledger
+      if (ledger.totalProfit !== null) {
+        total += ledger.totalProfit
+        hasTotal = true
+      }
+      if (ledger.realizedProfit !== null) realized += ledger.realizedProfit
+      if (ledger.unrealizedProfit !== null) {
+        unrealized += ledger.unrealizedProfit
+        hasUnrealized = true
+      }
+    })
+    return {
+      total: hasTotal ? total : null,
+      realized,
+      unrealized: hasUnrealized ? unrealized : null
+    }
+  }, [filteredCases])
 
   const selectCase = useCallback((caseId: string) => {
     selectedIdRef.current = caseId
@@ -399,6 +431,22 @@ export function TradeReviewPage() {
             </div>
           </div>
           {listError ? <div role="alert" className="border-b border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{listError}</div> : null}
+          {filteredCases.length ? (
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line-soft px-4 py-2.5">
+              <span className="text-sm font-medium text-ink-700">
+                总计盈亏
+                <span className="ml-2 text-xs font-normal text-ink-400">{filteredCases.length} 笔复盘单毛收益累加</span>
+              </span>
+              <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                <span className={`tabular text-base font-semibold ${changeClass(profitTotals.total)}`}>{formatSignedMoney(profitTotals.total)}</span>
+                <span className="tabular text-xs text-ink-500">
+                  已实现 <span className={changeClass(profitTotals.realized)}>{formatSignedMoney(profitTotals.realized)}</span>
+                  <span className="mx-1.5 text-ink-300">·</span>
+                  浮动 <span className={changeClass(profitTotals.unrealized)}>{profitTotals.unrealized === null ? '—' : formatSignedMoney(profitTotals.unrealized)}</span>
+                </span>
+              </span>
+            </div>
+          ) : null}
           {!loaded && loading ? (
             <div role="status"><Loader text="复盘单加载中" className="py-14" /></div>
           ) : (
@@ -569,6 +617,7 @@ function CaseDetail({
       <DetailSection title="仓位与毛收益">
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
           <Metric label="当前持仓" value={`${tradeCase.ledger.positionQuantity} 股`} />
+          <Metric label="建仓时间" value={tradeCase.ledger.openedAt ? formatDateTime(tradeCase.ledger.openedAt) : '—'} />
           <Metric label="加权成本" value={formatMoney(tradeCase.ledger.averageCost)} />
           <Metric label="最新价" value={formatMoney(tradeCase.ledger.latestPrice)} />
           <Metric label="执行偏差" value={<span className={changeClass(executionDeviation)}>{formatSignedPercent(executionDeviation)}</span>} />
@@ -1172,6 +1221,18 @@ function IconButton({ label, icon, danger = false, loading = false, ...props }: 
 function canDeleteReviewCase(tradeCase: TradeCase) {
   return (tradeCase.status === 'PLANNED' || tradeCase.status === 'CANCELLED')
     && tradeCase.ledger.positionQuantity === 0
+}
+
+function positionOpenedTime(tradeCase: TradeCase) {
+  const openedAt = tradeCase.ledger.openedAt ? Date.parse(tradeCase.ledger.openedAt) : Number.NaN
+  if (Number.isFinite(openedAt)) return openedAt
+  const createdAt = Date.parse(tradeCase.createdAt)
+  return Number.isFinite(createdAt) ? createdAt : 0
+}
+
+function formatSignedMoney(value: number | null) {
+  if (value === null) return '待补充'
+  return `${value > 0 ? '+' : ''}${formatNumber(value)} 元`
 }
 
 function isTradeCaseDetail(tradeCase: TradeCase | undefined): tradeCase is TradeCaseDetail {

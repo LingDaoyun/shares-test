@@ -54,7 +54,8 @@ describe('BuyEntryButton', () => {
         averageCost: 7.2,
         realizedProfit: 0,
         unrealizedProfit: null,
-        totalProfit: null
+        totalProfit: null,
+        openedAt: null
       },
       fills: [{
         fillId: 'fill-buy',
@@ -268,7 +269,8 @@ function tradeCaseDetail(overrides: Partial<TradeCaseDetail>): TradeCaseDetail {
       averageCost: 0,
       realizedProfit: 0,
       unrealizedProfit: null,
-      totalProfit: null
+      totalProfit: null,
+      openedAt: null
     },
     outcomes: [],
     decisionId: null,

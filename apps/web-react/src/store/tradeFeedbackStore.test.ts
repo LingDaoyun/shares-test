@@ -98,7 +98,8 @@ function summary(caseId: string, createdAt: string): TradeCaseSummary {
       averageCost: 0,
       realizedProfit: 0,
       unrealizedProfit: null,
-      totalProfit: null
+      totalProfit: null,
+      openedAt: null
     },
     outcomes: [],
     createdAt,
