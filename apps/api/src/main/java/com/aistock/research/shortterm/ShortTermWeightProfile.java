@@ -18,7 +18,7 @@ public record ShortTermWeightProfile(
         String modelVersion,
         String weightMeaning
 ) {
-    private static final String CURRENT_VERSION = "short-four-signal-v3";
+    private static final String CURRENT_VERSION = "short-four-signal-v4";
     private static final String LEGACY_VERSION = "legacy-short-term-v1";
 
     public ShortTermWeightProfile(

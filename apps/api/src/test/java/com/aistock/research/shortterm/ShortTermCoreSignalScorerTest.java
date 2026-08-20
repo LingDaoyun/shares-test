@@ -24,7 +24,7 @@ class ShortTermCoreSignalScorerTest {
         assertThat(result.volumeScore()).isEqualByComparingTo("100.00");
         assertThat(result.turnoverScore()).isEqualByComparingTo("100.00");
         assertThat(result.closeStrengthScore()).isEqualByComparingTo("95.00");
-        assertThat(result.finalScore()).isEqualByComparingTo("99.50");
+        assertThat(result.finalScore()).isEqualByComparingTo("99.70");
     }
 
     @Test

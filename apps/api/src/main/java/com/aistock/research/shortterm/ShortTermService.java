@@ -81,10 +81,10 @@ public class ShortTermService {
             new BigDecimal("0.35"),
             new BigDecimal("0.25"),
             new BigDecimal("0.40"),
-            new BigDecimal("0.45"),
-            new BigDecimal("0.30"),
-            new BigDecimal("0.15"),
-            new BigDecimal("0.10")
+            new BigDecimal("0.60"),
+            new BigDecimal("0.24"),
+            new BigDecimal("0.10"),
+            new BigDecimal("0.06")
     );
     private static final List<HotDirectionDefinition> HOT_DIRECTION_DEFINITIONS = List.of(
             new HotDirectionDefinition(

@@ -805,7 +805,7 @@ class ShortTermServiceTest {
         ShortTermCandidate observed = find(report, "600602");
         assertThat(confirmed.technical().rightSideSignal()).isEqualTo("右侧早期确认");
         assertThat(observed.technical().rightSideSignal()).isEqualTo("右侧早期观察");
-        assertThat(confirmed.action()).isEqualTo(observed.action()).isEqualTo("WATCH_RIGHT_SIDE");
+        assertThat(confirmed.action()).isEqualTo(observed.action()).isEqualTo("WAIT_CONFIRM");
         assertThat(confirmed.technical().goldenCross().priorityTier())
                 .isEqualTo(observed.technical().goldenCross().priorityTier())
                 .isEqualTo(1);
@@ -1015,7 +1015,7 @@ class ShortTermServiceTest {
         assertThat(blocked.technical().rightSideSignal()).isEqualTo("右侧早期确认");
         assertThat(blocked.action()).isEqualTo("DATA_REVIEW");
         assertThat(eligible.technical().rightSideSignal()).isEqualTo("右侧早期观察");
-        assertThat(eligible.action()).isEqualTo("WATCH_RIGHT_SIDE");
+        assertThat(eligible.action()).isEqualTo("WAIT_CONFIRM");
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
                 .containsExactly("600604", "600603");
     }
@@ -1044,12 +1044,12 @@ class ShortTermServiceTest {
         assertThat(pullback.technical().rightSideSignal()).isEqualTo("右侧已拉开");
         assertThat(pullback.action()).isEqualTo("WAIT_PULLBACK");
         assertThat(observation.technical().rightSideSignal()).isEqualTo("右侧早期观察");
-        assertThat(observation.action()).isEqualTo("WATCH_RIGHT_SIDE");
+        assertThat(observation.action()).isEqualTo("WAIT_CONFIRM");
         assertThat(pullback.technical().goldenCross().priorityTier())
                 .isEqualTo(observation.technical().goldenCross().priorityTier())
                 .isEqualTo(1);
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
-                .containsExactly("600606", "600605");
+                .containsExactly("600605", "600606");
     }
 
     @Test
@@ -1825,10 +1825,10 @@ class ShortTermServiceTest {
         assertThat(report.weightProfile().preliminaryLiquidity()).isEqualByComparingTo("0.35");
         assertThat(report.weightProfile().preliminaryNonChase()).isEqualByComparingTo("0.25");
         assertThat(report.weightProfile().preliminaryHeat()).isEqualByComparingTo("0.40");
-        assertThat(report.weightProfile().finalGoldenCross()).isEqualByComparingTo("0.45");
-        assertThat(report.weightProfile().finalVolume()).isEqualByComparingTo("0.30");
-        assertThat(report.weightProfile().finalTurnover()).isEqualByComparingTo("0.15");
-        assertThat(report.weightProfile().finalCloseStrength()).isEqualByComparingTo("0.10");
+        assertThat(report.weightProfile().finalGoldenCross()).isEqualByComparingTo("0.60");
+        assertThat(report.weightProfile().finalVolume()).isEqualByComparingTo("0.24");
+        assertThat(report.weightProfile().finalTurnover()).isEqualByComparingTo("0.10");
+        assertThat(report.weightProfile().finalCloseStrength()).isEqualByComparingTo("0.06");
     }
 
     @Test
@@ -2051,7 +2051,7 @@ class ShortTermServiceTest {
 
         assertThat(candidate.technical().goldenCross().state()).isEqualTo("ESTABLISHED");
         assertThat(candidate.tailSignal().status()).isEqualTo("WATCH");
-        assertThat(candidate.action()).isEqualTo("WATCH_RIGHT_SIDE");
+        assertThat(candidate.action()).isEqualTo("WAIT_CONFIRM");
         assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
     }
 

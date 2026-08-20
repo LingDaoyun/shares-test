@@ -8,10 +8,10 @@ import java.math.RoundingMode;
 @Component
 public class ShortTermCoreSignalScorer {
 
-    private static final BigDecimal GOLDEN_CROSS_WEIGHT = new BigDecimal("0.45");
-    private static final BigDecimal VOLUME_WEIGHT = new BigDecimal("0.30");
-    private static final BigDecimal TURNOVER_WEIGHT = new BigDecimal("0.15");
-    private static final BigDecimal CLOSE_STRENGTH_WEIGHT = new BigDecimal("0.10");
+    private static final BigDecimal GOLDEN_CROSS_WEIGHT = new BigDecimal("0.60");
+    private static final BigDecimal VOLUME_WEIGHT = new BigDecimal("0.24");
+    private static final BigDecimal TURNOVER_WEIGHT = new BigDecimal("0.10");
+    private static final BigDecimal CLOSE_STRENGTH_WEIGHT = new BigDecimal("0.06");
 
     public ShortTermCoreSignalScore score(
             ShortTermGoldenCrossSnapshot goldenCross,
@@ -61,7 +61,10 @@ public class ShortTermCoreSignalScorer {
         }
         if (goldenCross.confirmedRecent()) {
             if ("WIDENING".equals(goldenCross.spreadTrend())) {
-                return new BigDecimal("100");
+                return goldenCross.tradingDaysSinceCross() != null
+                        && goldenCross.tradingDaysSinceCross() <= 1
+                        ? new BigDecimal("100")
+                        : new BigDecimal("92");
             }
             if ("NARROWING".equals(goldenCross.spreadTrend())) {
                 return new BigDecimal("88");
@@ -71,11 +74,11 @@ public class ShortTermCoreSignalScorer {
         return switch (goldenCross.state()) {
             case "ESTABLISHED" -> goldenCross.tradingDaysSinceCross() != null
                     && goldenCross.tradingDaysSinceCross() <= 5
-                    ? new BigDecimal("76")
-                    : new BigDecimal("52");
+                    ? new BigDecimal("60")
+                    : new BigDecimal("34");
             case "FORMING" -> new BigDecimal("68");
             case "APPROACHING" -> new BigDecimal("62");
-            case "CONFIRMED" -> new BigDecimal("72");
+            case "CONFIRMED" -> new BigDecimal("45");
             case "NONE" -> new BigDecimal("30");
             default -> new BigDecimal("35");
         };
