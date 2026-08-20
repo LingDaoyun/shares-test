@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
 
@@ -134,6 +135,39 @@ public class ShortTermTechnicalSignalEvaluator {
                 scale(volumeComparison.volumeRatio3())
         );
         return new ShortTermTechnicalSignalEvaluation(rows, snapshot, last, previous, List.of());
+    }
+
+    public ShortTermTechnicalSignalEvaluation evaluate(
+            List<EastMoneyKLine> source,
+            BigDecimal evaluationClose,
+            LocalDate evaluationTradeDate,
+            BigDecimal evaluationVolume,
+            boolean latestBarCompleted,
+            ShortTermRuleSet ruleSet
+    ) {
+        ShortTermTechnicalSignalEvaluation evaluation = evaluate(
+                source,
+                evaluationClose,
+                latestBarCompleted,
+                ruleSet
+        );
+        VolumeComparison comparison = threeDayVolumeComparison(
+                evaluation.rows(),
+                evaluationTradeDate,
+                evaluationVolume
+        );
+        ShortTermTechnicalSnapshot snapshot = evaluation.snapshot().withVolumeComparison(
+                scale(comparison.todayVolume()),
+                scale(comparison.averageVolume3()),
+                scale(comparison.volumeRatio3())
+        );
+        return new ShortTermTechnicalSignalEvaluation(
+                evaluation.rows(),
+                snapshot,
+                evaluation.last(),
+                evaluation.previous(),
+                evaluation.dataGaps()
+        );
     }
 
     private ShortTermTechnicalSnapshot unavailableSnapshot() {
@@ -277,6 +311,40 @@ public class ShortTermTechnicalSignalEvaluator {
                 .divide(BigDecimal.valueOf(3), 6, RoundingMode.HALF_UP);
         BigDecimal volumeRatio3 = today.divide(averageVolume3, 6, RoundingMode.HALF_UP);
         return new VolumeComparison(today, averageVolume3, volumeRatio3);
+    }
+
+    private VolumeComparison threeDayVolumeComparison(
+            List<EastMoneyKLine> rows,
+            LocalDate evaluationTradeDate,
+            BigDecimal evaluationVolume
+    ) {
+        if (rows == null || evaluationTradeDate == null || !positive(evaluationVolume)) {
+            return VolumeComparison.unavailable();
+        }
+        List<EastMoneyKLine> completedRows = rows.stream()
+                .filter(row -> row != null && row.tradeDate() != null)
+                .filter(row -> row.tradeDate().isBefore(evaluationTradeDate))
+                .toList();
+        if (completedRows.size() < 3) {
+            return VolumeComparison.unavailable();
+        }
+        List<BigDecimal> previousVolumes = completedRows
+                .subList(completedRows.size() - 3, completedRows.size())
+                .stream()
+                .map(EastMoneyKLine::volume)
+                .toList();
+        if (previousVolumes.stream().anyMatch(value -> !positive(value))) {
+            return VolumeComparison.unavailable();
+        }
+        BigDecimal averageVolume3 = previousVolumes.stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(BigDecimal.valueOf(3), 6, RoundingMode.HALF_UP);
+        BigDecimal volumeRatio3 = evaluationVolume.divide(
+                averageVolume3,
+                6,
+                RoundingMode.HALF_UP
+        );
+        return new VolumeComparison(evaluationVolume, averageVolume3, volumeRatio3);
     }
 
     private boolean positive(BigDecimal value) {

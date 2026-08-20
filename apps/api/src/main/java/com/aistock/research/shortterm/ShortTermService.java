@@ -988,6 +988,8 @@ public class ShortTermService {
         ShortTermTechnicalSignalEvaluation evaluation = technicalSignalEvaluator.evaluate(
                 sorted,
                 close,
+                quote.tradeDate(),
+                quote.volume(),
                 latestBarCompleted,
                 ruleSet
         );

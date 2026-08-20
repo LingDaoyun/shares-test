@@ -1282,6 +1282,34 @@ class ShortTermServiceTest {
     }
 
     @Test
+    void usesScanSnapshotVolumeForDisplayAndKeepsLowThreeDayRatioAsCandidate() {
+        String symbol = "600215";
+        EastMoneyQuote scanQuote = withVolume(
+                quote(symbol, "扫描量样本", "10.62", "1.10", "28", "2.6", "280000000"),
+                "50000"
+        );
+        eastMoneyClient.quotes = List.of(scanQuote);
+        eastMoneyClient.klines.put(
+                symbol,
+                endingOn(
+                        confirmedRightEarlyKLines(symbol, "10.62", "230000"),
+                        scanQuote.tradeDate()
+                )
+        );
+        eastMoneyClient.financials.put(symbol, goodFinancial(symbol));
+
+        ShortTermReport report = service.report(
+                3, 100, 10, null, null, null, null, null, null, null
+        );
+
+        ShortTermCandidate candidate = find(report, symbol);
+        assertThat(candidate.technical().todayVolume()).isEqualByComparingTo("50000.00");
+        assertThat(candidate.technical().averageVolume3()).isEqualByComparingTo("105000.00");
+        assertThat(candidate.technical().volumeRatio3()).isEqualByComparingTo("0.48");
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).contains(symbol);
+    }
+
+    @Test
     void shouldAllowOnlyLightTrialWhenCrowdedMarketHasConfirmedRightSideAndTailEvidence() {
         List<EastMoneyQuote> quotes = new ArrayList<>();
         quotes.add(withTurnover(
@@ -2204,6 +2232,26 @@ class ShortTermServiceTest {
         return rows;
     }
 
+    private List<EastMoneyKLine> endingOn(List<EastMoneyKLine> rows, LocalDate endDate) {
+        LocalDate startDate = endDate.minusDays(rows.size() - 1L);
+        return IntStream.range(0, rows.size())
+                .mapToObj(index -> {
+                    EastMoneyKLine row = rows.get(index);
+                    return new EastMoneyKLine(
+                            row.symbol(),
+                            startDate.plusDays(index),
+                            row.open(),
+                            row.close(),
+                            row.high(),
+                            row.low(),
+                            row.volume(),
+                            row.amount(),
+                            row.turnoverRate()
+                    );
+                })
+                .toList();
+    }
+
     private List<EastMoneyKLine> approachingGoldenCrossKLines(String symbol) {
         List<BigDecimal> closes = new ArrayList<>(Collections.nCopies(15, new BigDecimal("10.50")));
         closes.addAll(Collections.nCopies(5, new BigDecimal("10.00")));
@@ -2364,6 +2412,28 @@ class ShortTermServiceTest {
                 quote.changePercent(),
                 new BigDecimal(turnoverRate),
                 quote.volume(),
+                quote.amount(),
+                quote.peRatio(),
+                quote.pbRatio(),
+                quote.peTtm(),
+                quote.sourceName(),
+                quote.quoteUrl(),
+                quote.fetchedAt(),
+                quote.tradeDate(),
+                quote.marketTimestamp()
+        );
+    }
+
+    private EastMoneyQuote withVolume(EastMoneyQuote quote, String volume) {
+        return new EastMoneyQuote(
+                quote.symbol(),
+                quote.name(),
+                quote.market(),
+                quote.industry(),
+                quote.latestPrice(),
+                quote.changePercent(),
+                quote.turnoverRate(),
+                new BigDecimal(volume),
                 quote.amount(),
                 quote.peRatio(),
                 quote.pbRatio(),

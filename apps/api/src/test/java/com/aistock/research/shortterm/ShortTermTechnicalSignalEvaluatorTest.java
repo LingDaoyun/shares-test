@@ -108,6 +108,30 @@ class ShortTermTechnicalSignalEvaluatorTest {
     }
 
     @Test
+    void comparesSnapshotVolumeWithThreeCompletedBarsWhenCurrentDailyBarIsAbsent() {
+        List<EastMoneyKLine> rows = new ArrayList<>(confirmedReplayRows("600208"));
+        int size = rows.size();
+        replaceVolume(rows, size - 4, "50000");
+        replaceVolume(rows, size - 3, "100000");
+        replaceVolume(rows, size - 2, "200000");
+        replaceVolume(rows, size - 1, "300000");
+        LocalDate scanTradeDate = rows.get(size - 1).tradeDate().plusDays(1);
+
+        ShortTermTechnicalSignalEvaluation result = evaluator.evaluate(
+                rows,
+                rows.get(size - 1).close(),
+                scanTradeDate,
+                new BigDecimal("150000"),
+                false,
+                ruleSet
+        );
+
+        assertThat(result.snapshot().todayVolume()).isEqualByComparingTo("150000.00");
+        assertThat(result.snapshot().averageVolume3()).isEqualByComparingTo("200000.00");
+        assertThat(result.snapshot().volumeRatio3()).isEqualByComparingTo("0.75");
+    }
+
+    @Test
     void marksThreeDayVolumeComparisonUnavailableWhenARequiredVolumeIsMissing() {
         List<EastMoneyKLine> rows = new ArrayList<>(confirmedReplayRows("600206"));
         int size = rows.size();
