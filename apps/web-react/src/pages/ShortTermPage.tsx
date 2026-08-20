@@ -15,13 +15,13 @@ import {
   ShortTermSignalEvidencePanel
 } from '../components/shortterm/ShortTermSignalEvidencePanel'
 import type { ShortTermValidationViewState } from '../components/shortterm/ShortTermSignalEvidencePanel'
-import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
 import { BuyEntryButton } from '../components/tradefeedback/BuyEntryButton'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { changeClass, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent } from '../lib/format'
 import { goldenCrossAlignmentLabel, goldenCrossCounterEvidence, goldenCrossCounterEvidenceTone, goldenCrossDisplayLabel, goldenCrossSpreadLabel, goldenCrossSpreadTrendLabel, goldenCrossTone, goldenCrossV2Context } from '../lib/shortTermGoldenCross'
+import { formatThreeDayVolumeComparison } from '../lib/shortTermVolume'
 import { loadShortTermViewPreferences, saveShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import type { ShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import { useShortTermScanStore } from '../store/shortTermScanStore'
@@ -73,7 +73,6 @@ export function ShortTermPage() {
   const [viewPreferences, setViewPreferences] = useState<ShortTermViewPreferences>(() => loadShortTermViewPreferences())
   const origin = useShortTermScanStore((state) => state.origin)
   const scheduledSnapshot = useShortTermScanStore((state) => state.scheduledSnapshot)
-  const snapshot = useShortTermScanStore((state) => state.snapshot)
   const report = useShortTermScanStore((state) => state.report)
   const loading = useShortTermScanStore((state) => state.loading)
   const error = useShortTermScanStore((state) => state.error)
@@ -154,12 +153,8 @@ export function ShortTermPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      {origin === 'SCHEDULED' ? (
-        scheduledSnapshot && isScheduledScanRunning(scheduledSnapshot) ? (
-          <ScheduledScanPulse snapshot={scheduledSnapshot} />
-        ) : snapshot && !isWaitingScheduledSnapshot(snapshot) ? (
-          <ScheduledSnapshotStatus snapshot={snapshot} origin="SCHEDULED" />
-        ) : null
+      {origin === 'SCHEDULED' && scheduledSnapshot && isScheduledScanRunning(scheduledSnapshot) ? (
+        <ScheduledScanPulse snapshot={scheduledSnapshot} />
       ) : null}
 
       <Card
@@ -737,6 +732,7 @@ function CandidateRow({
         <Metric label="涨跌幅" value={<span className={changeClass(candidate.changePercent)}>{formatSignedPercent(candidate.changePercent)}</span>} compact />
         <Metric label="距20日" value={`${formatNumber(candidate.technical.distanceToMa20Percent)}%`} compact />
         <Metric label="突破20高" value={`${formatNumber(candidate.technical.breakoutFromPreviousHigh20Percent)}%`} compact />
+        <Metric label="今日量 / 前3日均" value={formatThreeDayVolumeComparison(candidate.technical)} compact />
           <Metric label="20日量比" value={formatNumber(candidate.technical.volumeRatio20)} compact />
           <Metric label="换手率" value={`${formatNumber(candidate.technical.momentumQuality?.turnoverRatePercent)}%`} compact />
       </div>

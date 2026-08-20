@@ -2,7 +2,6 @@
 
 import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchOvernightBacktest,
@@ -11,11 +10,10 @@ import {
   fetchShortTermValidationSummaries,
   startShortTermScanJob
 } from '../api/client'
-import { ScheduledSnapshotStatus } from '../components/shortterm/ScheduledSnapshotStatus'
 import { toast } from '../components/ui/Toast'
 import { SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY } from '../lib/shortTermViewPreferences'
 import { resetShortTermScanStoreForTest, useShortTermScanStore } from '../store/shortTermScanStore'
-import type { ShortTermReport, ShortTermScheduledSnapshot, ShortTermSnapshotStatus } from '../types'
+import type { ShortTermReport, ShortTermScheduledSnapshot } from '../types'
 import { ShortTermPage } from './ShortTermPage'
 
 vi.mock('../api/client', () => ({
@@ -227,6 +225,9 @@ const candidate = (symbol: string, name = `候选${symbol}`) => ({
     distanceToMa20Percent: 2.1,
     breakoutFromPreviousHigh20Percent: 1.3,
     volumeRatio20: 1.5,
+    todayVolume: 1_284_000,
+    averageVolume3: 962_000,
+    volumeRatio3: 1.3347,
     momentumQuality: {
       turnoverRatePercent: 3,
       turnoverBand: 'PREFERRED',
@@ -411,8 +412,50 @@ describe('ShortTermPage manual scan flow', () => {
     await renderPage(root)
 
     expect(document.body.textContent).toContain('候选600795')
-    expect(document.body.textContent).toContain('14:49:40 前买入确认已就绪')
+    expect(document.body.textContent).not.toContain('买入确认已就绪')
     expect(startShortTermScanJob).not.toHaveBeenCalled()
+  })
+
+  it('does not expose the removed Agent discussion feature', async () => {
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600795'])
+    })
+
+    await renderPage(root)
+
+    expect(document.body.textContent).not.toContain(['Agent', '讨论'].join(''))
+    expect(document.body.textContent).not.toContain(['Agent', '推荐'].join(''))
+  })
+
+  it('shows today volume against the previous three-day average on each candidate row', async () => {
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report: reportWithCandidates(['600795'])
+    })
+
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('今日量 / 前3日均')
+    expect(document.body.textContent).toContain('128.4万手 / 96.2万手 · 1.33×')
+  })
+
+  it('shows a fail-closed placeholder for historical candidates without the new fields', async () => {
+    const report = reportWithCandidates(['600795'])
+    Object.assign(report.candidates[0].technical, {
+      todayVolume: null,
+      averageVolume3: null,
+      volumeRatio3: null
+    })
+    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue({
+      ...finalReadySnapshot,
+      report
+    })
+
+    await renderPage(root)
+
+    expect(document.body.textContent).toContain('今日量 / 前3日均')
+    expect(document.body.textContent).toContain('成交量待补')
   })
 
   it('lets a newer scheduled final run take control after an earlier manual scan', async () => {
@@ -1116,79 +1159,6 @@ describe('ShortTermPage manual scan flow', () => {
       manualSuccessToastOptions
     )
     vi.useRealTimers()
-  })
-})
-
-describe('ScheduledSnapshotStatus', () => {
-  const expectations: Array<[ShortTermSnapshotStatus, string, string]> = [
-    ['FINAL_READY', '14:49:40 前买入确认已就绪', 'emerald'],
-    ['FINAL_PENDING' as ShortTermSnapshotStatus, '尾盘结果等待截止认证', 'border-line'],
-    ['CACHE_PREVIEW', '缓存行情预览', 'sky'],
-    ['PRESELECT_READY', '自动预选已就绪', 'border-line'],
-    ['RUNNING', '自动任务执行中', 'border-line'],
-    ['NO_TRADE', '今日不交易', 'amber'],
-    ['DATA_BLOCKED', '数据质量阻断', 'red'],
-    ['FAILED', '自动任务失败', 'red']
-  ]
-
-  it.each(expectations)('renders %s with its status discipline', (status, label, tone) => {
-    const html = renderToStaticMarkup(
-      <ScheduledSnapshotStatus
-        snapshot={{
-          ...finalReadySnapshot,
-          status,
-          message: label,
-          report: status === 'FINAL_READY' ? emptyReport : null
-        }}
-        origin="SCHEDULED"
-      />
-    )
-
-    expect(html).toContain(label)
-    expect(html).toContain(tone)
-    expect(html).toContain('short-term-right-side-v4-transparent-ranking')
-    if (status === 'FINAL_READY') {
-      expect(html).not.toContain('尾盘最终结果已就绪')
-    }
-  })
-
-  it.each([
-    ['RUNNING', '手动扫描执行中'],
-    ['FAILED', '手动扫描失败'],
-    ['FINAL_READY', '手动最终结果已就绪']
-  ] as const)('uses manual copy for %s', (status, label) => {
-    const html = renderToStaticMarkup(
-      <ScheduledSnapshotStatus
-        snapshot={{ ...finalReadySnapshot, status, message: '' }}
-        origin="MANUAL"
-      />
-    )
-
-    expect(html).toContain(label)
-    expect(html).not.toContain('自动任务')
-    expect(html).not.toContain('自动预选')
-  })
-
-  it('shows the configured waiting message when there is no same-day record', () => {
-    const html = renderToStaticMarkup(
-      <ScheduledSnapshotStatus
-        snapshot={{
-          ...finalReadySnapshot,
-          stage: 'PRESELECT',
-          status: 'RUNNING',
-          message: '等待 0 30 14 * * MON-FRI 自动预选',
-          dataCutoffAt: null,
-          completedAt: null,
-          report: null
-        }}
-        origin="SCHEDULED"
-      />
-    )
-
-    expect(html).toContain('等待自动扫描')
-    expect(html).toContain('等待 0 30 14 * * MON-FRI 自动预选')
-    expect(html).not.toContain('自动任务执行中')
-    expect(html).toContain('计划任务')
   })
 })
 
