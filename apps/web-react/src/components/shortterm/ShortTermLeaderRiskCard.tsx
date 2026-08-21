@@ -93,12 +93,14 @@ export function ShortTermLeaderRiskCard({ risk }: ShortTermLeaderRiskCardProps) 
           />
           <RiskFact
             label="候选结构"
-            value={`候选集中：${candidateConcentration(risk.dominantCandidateIndustry, risk.candidateConcentrationPercent)}`}
+            value={risk.status === 'UNAVAILABLE'
+              ? '暂无法评估'
+              : `候选集中：${candidateConcentration(risk.dominantCandidateIndustry, risk.candidateConcentrationPercent)}`}
           />
           <RiskFact
             label="方向关系"
-            value={risk.directionConflict ? '候选方向与异动方向冲突' : '未发现候选方向冲突'}
-            valueClass={risk.directionConflict ? 'text-amber-800' : 'text-ink-700'}
+            value={directionRelationship(risk.status, risk.directionConflict)}
+            valueClass={isEvaluatedStatus(risk.status) && risk.directionConflict ? 'text-amber-800' : 'text-ink-700'}
           />
           <RiskFact label="评估时间" value={formatDateTime(risk.evaluatedAt)} />
         </div>
@@ -199,6 +201,16 @@ function candidateConcentration(industry: string | null, concentrationPercent: n
   if (industry) return industry
   if (concentrationPercent !== null) return formatPercent(concentrationPercent)
   return '待补充'
+}
+
+function directionRelationship(status: ShortTermLeaderRiskStatus, directionConflict: boolean) {
+  if (status === 'UNAVAILABLE') return '暂无法评估'
+  if (status === 'BASELINE_BUILDING') return '待下一次可靠扫描确认'
+  return directionConflict ? '候选方向与异动方向冲突' : '未发现候选方向冲突'
+}
+
+function isEvaluatedStatus(status: ShortTermLeaderRiskStatus) {
+  return status === 'WARNING' || status === 'CLEAR'
 }
 
 function amountRankSummary(currentRank: number | null, baselineRank: number | null) {
