@@ -1,21 +1,16 @@
 package com.aistock.research.shortterm.schedule;
 
 import com.aistock.research.shortterm.OvernightRuleSet;
-import com.aistock.research.shortterm.ShortTermScanRequest;
 import com.aistock.research.trading.TradingClockService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.env.Environment;
-import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class ShortTermAutomationSettings {
@@ -23,69 +18,16 @@ public class ShortTermAutomationSettings {
     private static final Logger log = LoggerFactory.getLogger(ShortTermAutomationSettings.class);
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal ONE = BigDecimal.ONE;
-    private static final BigDecimal HUNDRED = new BigDecimal("100");
-    private static final String CHINA_MARKET_ZONE = "Asia/Shanghai";
 
     private final Environment environment;
-    private final Map<String, String> lastValidCrons = new ConcurrentHashMap<>();
-    private final Set<String> warnedInvalidValues = ConcurrentHashMap.newKeySet();
 
     public ShortTermAutomationSettings(Environment environment) {
         this.environment = environment;
     }
 
-    public boolean enabled() {
-        return bool("research.short-term.schedule.enabled", true);
-    }
-
-    public String zone() {
-        String key = "research.short-term.schedule.zone";
-        String value = text(key, CHINA_MARKET_ZONE);
-        if (CHINA_MARKET_ZONE.equals(value)) {
-            clearInvalidWarnings(key);
-            return CHINA_MARKET_ZONE;
-        }
-        warnFallbackOnce(key, value, CHINA_MARKET_ZONE);
-        return CHINA_MARKET_ZONE;
-    }
-
-    public String preselectCron() {
-        return cron("research.short-term.schedule.preselect-cron", "0 30 14 * * MON-FRI");
-    }
-
-    public String finalCron() {
-        return cron("research.short-term.schedule.final-cron", "0 47 14 * * MON-FRI");
-    }
-
-    public String readinessCron() {
-        return cron("research.short-term.schedule.readiness-cron", "50 49 14 * * MON-FRI");
-    }
-
-    public LocalTime finalDeadline() {
-        return time("research.short-term.schedule.final-deadline", "14:49:40");
-    }
-
     public Duration freshness() {
         return Duration.ofSeconds(integer(
-                "research.short-term.schedule.freshness-seconds", 180, 30, 3600));
-    }
-
-    public ShortTermScanRequest scanRequest() {
-        return new ShortTermScanRequest(
-                integer("research.short-term.schedule.limit", 8, 1, 20),
-                integer("research.short-term.schedule.scan-limit", 6000, 100, 10000),
-                integer("research.short-term.schedule.kline-limit", 120, 20, 500),
-                decimal("research.short-term.schedule.min-amount", "80000000", ZERO,
-                        new BigDecimal("100000000000000")),
-                decimal("research.short-term.schedule.max-price-per-share", "100",
-                        ONE, new BigDecimal("100000")),
-                decimal("research.short-term.schedule.min-volume-ratio", "1.20",
-                        ONE, new BigDecimal("3.20")),
-                decimal("research.short-term.schedule.max-entry-rise", "6.5", ZERO, new BigDecimal("20")),
-                decimal("research.short-term.schedule.max-distance-to-ma20", "8", ZERO, new BigDecimal("50")),
-                decimal("research.short-term.schedule.min-financial-score", "55", ZERO, HUNDRED),
-                false,
-                null);
+                "research.short-term.freshness-seconds", 180, 30, 3600));
     }
 
     public OvernightRuleSet overnightRules() {
@@ -126,22 +68,6 @@ public class ShortTermAutomationSettings {
                         new BigDecimal("20")),
                 decimal("research.short-term.overnight.trailing-drawdown-percent", "2.0", ZERO,
                         new BigDecimal("20")));
-    }
-
-    private boolean bool(String key, boolean fallback) {
-        String raw = environment.getProperty(key);
-        if (raw == null || raw.isBlank()) {
-            return fallback;
-        }
-        String value = raw.trim();
-        if ("true".equalsIgnoreCase(value)) {
-            return true;
-        }
-        if ("false".equalsIgnoreCase(value)) {
-            return false;
-        }
-        warnFallback(key, value, fallback);
-        return fallback;
     }
 
     private int integer(String key, int fallback, int minimum, int maximum) {
@@ -212,20 +138,6 @@ public class ShortTermAutomationSettings {
         return fallback;
     }
 
-    private String cron(String key, String fallback) {
-        String value = text(key, fallback);
-        try {
-            CronExpression.parse(value);
-            lastValidCrons.put(key, value);
-            clearInvalidWarnings(key);
-            return value;
-        } catch (IllegalArgumentException exception) {
-            String retained = lastValidCrons.getOrDefault(key, fallback);
-            warnFallbackOnce(key, value, retained);
-            return retained;
-        }
-    }
-
     private String text(String key, String fallback) {
         String raw = environment.getProperty(key);
         if (raw == null || raw.isBlank()) {
@@ -238,15 +150,4 @@ public class ShortTermAutomationSettings {
         log.warn("Invalid refreshed setting {}={}, using default {}", key, rejected, fallback);
     }
 
-    private void warnFallbackOnce(String key, Object rejected, Object fallback) {
-        String warningKey = key + "\u0000" + rejected;
-        if (warnedInvalidValues.add(warningKey)) {
-            log.warn("Invalid refreshed setting {}={}, retaining/falling back to {}", key, rejected, fallback);
-        }
-    }
-
-    private void clearInvalidWarnings(String key) {
-        String prefix = key + "\u0000";
-        warnedInvalidValues.removeIf(value -> value.startsWith(prefix));
-    }
 }

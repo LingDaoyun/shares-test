@@ -2,7 +2,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  fetchLatestShortTermScheduledSnapshot,
   fetchShortTermScanJob,
   startShortTermScanJob
 } from '../api/client'
@@ -11,13 +10,11 @@ import { toast } from '../components/ui/Toast'
 import type {
   ShortTermReport,
   ShortTermScanJobStatus,
-  ShortTermScheduledSnapshot,
-  ShortTermSnapshotStatus
+  ShortTermScanResultStatus
 } from '../types'
 import { resetShortTermScanStoreForTest, useShortTermScanStore } from './shortTermScanStore'
 
 vi.mock('../api/client', () => ({
-  fetchLatestShortTermScheduledSnapshot: vi.fn(),
   fetchShortTermScanJob: vi.fn(),
   startShortTermScanJob: vi.fn()
 }))
@@ -65,21 +62,6 @@ function job(overrides: Partial<ShortTermScanJobStatus> = {}): ShortTermScanJobS
     message: '扫描任务已创建',
     report: null,
     ...overrides
-  }
-}
-
-function scheduledFinal(): ShortTermScheduledSnapshot {
-  return {
-    tradeDate: '2026-08-13',
-    stage: 'FINAL',
-    status: 'FINAL_READY',
-    strategyVersion: 'short-term-right-side-v4-transparent-ranking',
-    message: '计划任务完成',
-    dataCutoffAt: '2026-08-13T14:49:20+08:00',
-    startedAt: '2026-08-13T14:47:00+08:00',
-    completedAt: '2026-08-13T14:49:30+08:00',
-    blockedReasons: [],
-    report: report(1)
   }
 }
 
@@ -141,15 +123,11 @@ describe('shortTermScanStore manual notifications', () => {
   it.each([
     ['NO_TRADE', '当前没有满足全部条件的标的', [], '未生成合格候选'],
     ['DATA_BLOCKED', '行情覆盖不足', ['覆盖率 82%', '分钟线缺失'], '数据质量已阻断'],
-    ['CACHE_PREVIEW', '休市期间使用缓存', [], '不是当前买点'],
-    ['FINAL_PENDING', '尾盘结果仍待认证', [], '暂未形成可操作结果'],
-    ['PRESELECT_READY', '当前仅完成预选', [], '暂未形成可操作结果']
-  ] as Array<[ShortTermSnapshotStatus, string, string[], string]>) (
+    ['CACHE_PREVIEW', '休市期间使用缓存', [], '不是当前买点']
+  ] as Array<[ShortTermScanResultStatus, string, string[], string]>) (
     'publishes a persistent warning for %s with the server explanation',
     async (resultStatus, message, blockedReasons, meaning) => {
       const allowsNoReport = resultStatus === 'DATA_BLOCKED'
-        || resultStatus === 'FINAL_PENDING'
-        || resultStatus === 'PRESELECT_READY'
       await runWith(job({
         status: 'SUCCEEDED',
         resultStatus,
@@ -239,58 +217,4 @@ describe('shortTermScanStore manual notifications', () => {
     )
   })
 
-  it('dismisses only an active manual progress Toast when a newer scheduled result takes control', async () => {
-    useShortTermScanStore.setState({
-      origin: 'MANUAL',
-      loading: true,
-      snapshot: {
-        ...scheduledFinal(),
-        stage: 'MANUAL',
-        status: 'RUNNING',
-        startedAt: '2026-08-13T10:00:00+08:00',
-        completedAt: null,
-        report: null
-      },
-      report: null
-    })
-    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue(scheduledFinal())
-
-    await useShortTermScanStore.getState().refreshScheduledSnapshot()
-
-    expect(toast.dismiss).toHaveBeenCalledWith('short-term-manual-scan')
-    expect(useShortTermScanStore.getState().origin).toBe('SCHEDULED')
-  })
-
-  it('does not dismiss a completed persistent manual warning during later scheduled refresh', async () => {
-    useShortTermScanStore.setState({
-      origin: 'MANUAL',
-      loading: false,
-      snapshot: {
-        ...scheduledFinal(),
-        stage: 'MANUAL',
-        status: 'DATA_BLOCKED',
-        startedAt: '2026-08-13T10:00:00+08:00',
-        completedAt: '2026-08-13T10:01:00+08:00',
-        report: null
-      },
-      report: null
-    })
-    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue(scheduledFinal())
-
-    await useShortTermScanStore.getState().refreshScheduledSnapshot()
-
-    expect(toast.dismiss).not.toHaveBeenCalled()
-  })
-
-  it('keeps scheduled completion on the existing unkeyed Toast contract', async () => {
-    vi.mocked(fetchLatestShortTermScheduledSnapshot).mockResolvedValue(scheduledFinal())
-
-    await useShortTermScanStore.getState().refreshScheduledSnapshot()
-
-    expect(toast.success).toHaveBeenCalledWith('计划任务完成，已生成 1 个候选')
-    expect(toast.success).not.toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ key: 'short-term-manual-scan' })
-    )
-  })
 })

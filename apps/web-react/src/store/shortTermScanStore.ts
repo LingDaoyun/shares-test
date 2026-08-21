@@ -1,30 +1,21 @@
 import { create } from 'zustand'
-import { fetchLatestShortTermScheduledSnapshot, fetchShortTermScanJob, startShortTermScanJob } from '../api/client'
+import { fetchShortTermScanJob, startShortTermScanJob } from '../api/client'
 import type { ShortTermParams } from '../api/client'
 import { toast } from '../components/ui/Toast'
 import { extractErrorMessage } from '../lib/format'
-import type { ShortTermReport, ShortTermScanJobStatus, ShortTermScheduledSnapshot } from '../types'
-
-export type ShortTermScanOrigin = 'SCHEDULED' | 'MANUAL'
+import type { ShortTermReport, ShortTermScanJobStatus, ShortTermScanResultStatus } from '../types'
 
 interface ShortTermScanState {
-  origin: ShortTermScanOrigin
-  scheduledSnapshot: ShortTermScheduledSnapshot | null
-  snapshot: ShortTermScheduledSnapshot | null
   report: ShortTermReport | null
   loading: boolean
   error: string
   scanMessage: string
   activeJobId: string
-  refreshScheduledSnapshot: () => Promise<void>
   runManualScan: (params: ShortTermParams) => Promise<void>
 }
 
 let manualRunGeneration = 0
 let pollTimer: number | undefined
-let completionToastKey = ''
-let scheduledLoadGeneration = 0
-let scheduledSnapshotRequest: Promise<ShortTermScheduledSnapshot> | null = null
 const MANUAL_SCAN_TOAST_KEY = 'short-term-manual-scan'
 const MANUAL_SCAN_PERSISTENT_TOAST = {
   key: MANUAL_SCAN_TOAST_KEY,
@@ -37,9 +28,6 @@ const MANUAL_SCAN_SUCCESS_TOAST = {
 
 function initialState() {
   return {
-    origin: 'SCHEDULED' as ShortTermScanOrigin,
-    scheduledSnapshot: null,
-    snapshot: null,
     report: null,
     loading: false,
     error: '',
@@ -55,46 +43,8 @@ function clearPollTimer() {
   }
 }
 
-export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
+export const useShortTermScanStore = create<ShortTermScanState>((set) => ({
   ...initialState(),
-
-  refreshScheduledSnapshot: async () => {
-    const generation = scheduledLoadGeneration
-    const request = scheduledSnapshotRequest ?? fetchLatestShortTermScheduledSnapshot()
-    scheduledSnapshotRequest = request
-    try {
-      const scheduledSnapshot = await request
-      if (generation !== scheduledLoadGeneration) return
-      const current = get()
-      const takesControl = scheduledSnapshotTakesControl(current, scheduledSnapshot)
-      if (!takesControl) {
-        set({ scheduledSnapshot })
-        return
-      }
-      if (current.origin === 'MANUAL' && current.loading) {
-        toast.dismiss(MANUAL_SCAN_TOAST_KEY)
-      }
-      manualRunGeneration += 1
-      clearPollTimer()
-      set({
-        origin: 'SCHEDULED',
-        scheduledSnapshot,
-        snapshot: scheduledSnapshot,
-        report: visibleSnapshotReport(scheduledSnapshot),
-        loading: false,
-        error: '',
-        scanMessage: scheduledSnapshot.message,
-        activeJobId: ''
-      })
-      notifySnapshotCompleted('SCHEDULED', scheduledSnapshot)
-    } catch {
-      // The lightweight background refresh must not replace a usable manual result.
-    } finally {
-      if (scheduledSnapshotRequest === request) {
-        scheduledSnapshotRequest = null
-      }
-    }
-  },
 
   runManualScan: async (params) => {
     const generation = manualRunGeneration + 1
@@ -106,44 +56,22 @@ export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
     )
 
     const ownsRun = () => manualRunGeneration === generation
-    set((current) => ({
-      origin: 'MANUAL',
+    set({
       loading: true,
       error: '',
       report: null,
       scanMessage: '提交实时扫描任务',
-      activeJobId: '',
-      snapshot: {
-        tradeDate: current.snapshot?.tradeDate ?? currentShanghaiDate(),
-        stage: 'MANUAL',
-        status: 'RUNNING',
-        strategyVersion: current.snapshot?.strategyVersion ?? '',
-        message: '提交实时扫描任务',
-        dataCutoffAt: null,
-        startedAt: new Date().toISOString(),
-        completedAt: null,
-        blockedReasons: [],
-        report: null
-      }
-    }))
+      activeJobId: ''
+    })
 
     try {
       const started = await startShortTermScanJob(params)
       if (!ownsRun()) return
       const runningMessage = started.message || '短线右侧实时扫描中'
-      set((current) => ({
+      set({
         activeJobId: started.jobId,
-        scanMessage: runningMessage,
-        snapshot: current.snapshot ? {
-          ...current.snapshot,
-          tradeDate: started.tradeDate,
-          status: started.resultStatus,
-          strategyVersion: started.strategyVersion,
-          blockedReasons: started.blockedReasons,
-          message: runningMessage,
-          startedAt: started.startedAt ?? started.createdAt ?? current.snapshot.startedAt
-        } : current.snapshot
-      }))
+        scanMessage: runningMessage
+      })
 
       const poll = async () => {
         try {
@@ -151,135 +79,86 @@ export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
           if (!ownsRun()) return
           const runningJobMessage = job.message || '短线右侧实时扫描中'
           set({ scanMessage: runningJobMessage })
+
           if (job.status === 'SUCCEEDED') {
             if (!job.report && !manualResultMayOmitReport(job.resultStatus)) {
               const message = missingReportMessage(job)
-              set((current) => ({
-                snapshot: current.snapshot ? {
-                  ...current.snapshot,
-                  status: 'FAILED',
-                  strategyVersion: job.strategyVersion,
-                  blockedReasons: job.blockedReasons,
-                  message,
-                  completedAt: job.finishedAt
-                } : current.snapshot,
+              set({
+                report: null,
                 error: message,
-                loading: false
-              }))
+                loading: false,
+                activeJobId: ''
+              })
               publishManualScanFailure(message)
               return
             }
 
-            const manualSnapshot = snapshotFromManualJob(job)
-            const visibleReport = visibleSnapshotReport(manualSnapshot)
-            const outcome = manualScanOutcome(manualSnapshot)
+            const visibleReport = visibleManualReport(job)
+            const outcome = manualScanOutcome(job)
             set({
-              snapshot: manualSnapshot,
               report: visibleReport,
               error: visibleReport === null ? outcome.message : '',
-              loading: false
+              loading: false,
+              activeJobId: ''
             })
-            notifySnapshotCompleted('MANUAL', manualSnapshot)
+            publishManualScanOutcome(job)
             return
           }
+
           if (job.status === 'FAILED') {
             const message = job.message || '短线右侧实时扫描失败'
-            set((current) => ({
-              snapshot: current.snapshot ? {
-                ...current.snapshot,
-                status: 'FAILED',
-                strategyVersion: job.strategyVersion,
-                blockedReasons: job.blockedReasons,
-                message,
-                completedAt: job.finishedAt
-              } : current.snapshot,
+            set({
+              report: null,
               error: message,
-              loading: false
-            }))
+              loading: false,
+              activeJobId: ''
+            })
             publishManualScanFailure(message, job.blockedReasons)
             return
           }
-          set((current) => ({
-            snapshot: current.snapshot ? {
-              ...current.snapshot,
-              status: job.resultStatus,
-              strategyVersion: job.strategyVersion,
-              blockedReasons: job.blockedReasons,
-              message: runningJobMessage
-            } : current.snapshot
-          }))
+
           pollTimer = window.setTimeout(() => void poll(), 1500)
-        } catch (e) {
-          if (ownsRun()) {
-            const message = extractErrorMessage(e)
-            set((current) => ({
-              snapshot: current.snapshot ? {
-                ...current.snapshot,
-                status: 'FAILED',
-                message,
-                completedAt: new Date().toISOString()
-              } : current.snapshot,
-              error: message,
-              loading: false
-            }))
-            publishManualScanFailure(message)
-          }
+        } catch (error) {
+          if (!ownsRun()) return
+          const message = extractErrorMessage(error)
+          set({
+            report: null,
+            error: message,
+            loading: false,
+            activeJobId: ''
+          })
+          publishManualScanFailure(message)
         }
       }
 
       await poll()
-    } catch (e) {
-      if (ownsRun()) {
-        const message = extractErrorMessage(e)
-        set((current) => ({
-          snapshot: current.snapshot ? {
-            ...current.snapshot,
-            status: 'FAILED',
-            message,
-            completedAt: new Date().toISOString()
-          } : current.snapshot,
-          error: message,
-          loading: false
-        }))
-        publishManualScanFailure(message)
-      }
+    } catch (error) {
+      if (!ownsRun()) return
+      const message = extractErrorMessage(error)
+      set({
+        report: null,
+        error: message,
+        loading: false,
+        activeJobId: ''
+      })
+      publishManualScanFailure(message)
     }
   }
 }))
 
 export function resetShortTermScanStoreForTest() {
   manualRunGeneration += 1
-  scheduledLoadGeneration += 1
-  scheduledSnapshotRequest = null
   clearPollTimer()
-  completionToastKey = ''
   useShortTermScanStore.setState(initialState())
 }
 
-function visibleSnapshotReport(snapshot: ShortTermScheduledSnapshot) {
-  if (snapshot.status === 'DATA_BLOCKED'
-    || snapshot.status === 'FAILED'
-    || snapshot.status === 'RUNNING'
-    || snapshot.status === 'FINAL_PENDING'
-    || snapshot.status === 'PRESELECT_READY') {
+function visibleManualReport(job: ShortTermScanJobStatus) {
+  if (job.resultStatus === 'DATA_BLOCKED'
+    || job.resultStatus === 'FAILED'
+    || job.resultStatus === 'RUNNING') {
     return null
   }
-  return snapshot.report
-}
-
-function snapshotFromManualJob(job: ShortTermScanJobStatus): ShortTermScheduledSnapshot {
-  return {
-    tradeDate: job.tradeDate,
-    stage: 'MANUAL',
-    status: job.resultStatus,
-    strategyVersion: job.strategyVersion,
-    message: job.message,
-    dataCutoffAt: job.report?.dataCutoffAt ?? null,
-    startedAt: job.startedAt ?? job.createdAt,
-    completedAt: job.finishedAt,
-    blockedReasons: job.blockedReasons,
-    report: job.report
-  }
+  return job.report
 }
 
 type ManualScanOutcome = {
@@ -310,70 +189,65 @@ function outcomeMessage(
   return `${prefix}：${details.length > 0 ? details.join('；') : fallback}`
 }
 
-function manualScanOutcome(snapshot: ShortTermScheduledSnapshot): ManualScanOutcome {
-  const candidateCount = snapshot.report?.candidateCount
-  if (snapshot.status === 'FINAL_READY' && candidateCount !== undefined && candidateCount > 0) {
+function manualScanOutcome(job: ShortTermScanJobStatus): ManualScanOutcome {
+  const candidateCount = job.report?.candidateCount
+  if (job.resultStatus === 'FINAL_READY' && candidateCount !== undefined && candidateCount > 0) {
     return {
       tone: 'success',
-      message: snapshotCompletionToastMessage(snapshot),
+      message: scanCompletionToastMessage(job),
       options: MANUAL_SCAN_SUCCESS_TOAST
     }
   }
 
-  if (snapshot.status === 'FAILED') {
+  if (job.resultStatus === 'FAILED') {
     return {
       tone: 'error',
       message: outcomeMessage(
         '手动扫描失败',
-        snapshot.message,
-        snapshot.blockedReasons,
+        job.message,
+        job.blockedReasons,
         '扫描任务未完成'
       ),
       options: MANUAL_SCAN_PERSISTENT_TOAST
     }
   }
 
-  const warning = (() => {
-    switch (snapshot.status) {
-      case 'FINAL_READY':
-      case 'NO_TRADE':
-        return ['手动扫描完成，未生成合格候选', '当前条件下没有满足全部规则的标的'] as const
-      case 'DATA_BLOCKED':
-        return ['手动扫描未生成结果，数据质量已阻断', '行情数据质量未通过'] as const
-      case 'CACHE_PREVIEW':
-        return ['手动扫描仅返回缓存预览，不是当前买点', '当前实时行情不可用'] as const
-      case 'FINAL_PENDING':
-        return ['手动扫描暂未形成可操作结果', '最终结果仍待截止认证'] as const
-      case 'PRESELECT_READY':
-        return ['手动扫描暂未形成可操作结果', '当前仅完成预选'] as const
-      case 'RUNNING':
-        return ['手动扫描返回了非终态结果', '请稍后重新扫描'] as const
-    }
-  })()
-
+  const warning = warningCopy(job.resultStatus)
   return {
     tone: 'warning',
     message: outcomeMessage(
       warning[0],
-      snapshot.message,
-      snapshot.blockedReasons,
+      job.message,
+      job.blockedReasons,
       warning[1]
     ),
     options: MANUAL_SCAN_PERSISTENT_TOAST
   }
 }
 
-function publishManualScanOutcome(snapshot: ShortTermScheduledSnapshot) {
-  const outcome = manualScanOutcome(snapshot)
-  toast[outcome.tone](outcome.message, outcome.options)
-  return outcome
+function warningCopy(status: ShortTermScanResultStatus): readonly [string, string] {
+  switch (status) {
+    case 'FINAL_READY':
+    case 'NO_TRADE':
+      return ['手动扫描完成，未生成合格候选', '当前条件下没有满足全部规则的标的']
+    case 'DATA_BLOCKED':
+      return ['手动扫描未生成结果，数据质量已阻断', '行情数据质量未通过']
+    case 'CACHE_PREVIEW':
+      return ['手动扫描仅返回缓存预览，不是当前买点', '当前实时行情不可用']
+    case 'RUNNING':
+      return ['手动扫描返回了非终态结果', '请稍后重新扫描']
+    case 'FAILED':
+      return ['手动扫描失败', '扫描任务未完成']
+  }
 }
 
-function manualResultMayOmitReport(status: ShortTermScheduledSnapshot['status']) {
-  return status === 'NO_TRADE'
-    || status === 'DATA_BLOCKED'
-    || status === 'FINAL_PENDING'
-    || status === 'PRESELECT_READY'
+function publishManualScanOutcome(job: ShortTermScanJobStatus) {
+  const outcome = manualScanOutcome(job)
+  toast[outcome.tone](outcome.message, outcome.options)
+}
+
+function manualResultMayOmitReport(status: ShortTermScanResultStatus) {
+  return status === 'NO_TRADE' || status === 'DATA_BLOCKED'
 }
 
 function missingReportMessage(job: ShortTermScanJobStatus) {
@@ -392,52 +266,9 @@ function publishManualScanFailure(message: string, blockedReasons: string[] = []
   )
 }
 
-function notifySnapshotCompleted(origin: ShortTermScanOrigin, snapshot: ShortTermScheduledSnapshot) {
-  if (origin === 'MANUAL') {
-    publishManualScanOutcome(snapshot)
-    return
-  }
-  if (snapshot.status !== 'FINAL_READY') return
-  const key = [
-    origin,
-    snapshot.tradeDate,
-    snapshot.completedAt ?? '',
-    snapshot.report?.candidateCount ?? -1
-  ].join('|')
-  if (completionToastKey === key) return
-  completionToastKey = key
-  toast.success(snapshotCompletionToastMessage(snapshot))
-}
-
-function snapshotCompletionToastMessage(snapshot: ShortTermScheduledSnapshot) {
-  const count = snapshot.report?.candidateCount
-  if (count === null || count === undefined) return snapshot.message
-  if (count === 0) return `${snapshot.message}，暂无候选`
-  return `${snapshot.message}，已生成 ${count} 个候选`
-}
-
-function currentShanghaiDate() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
-}
-
-function scheduledSnapshotTakesControl(
-  current: Pick<ShortTermScanState, 'origin' | 'snapshot' | 'report'>,
-  scheduled: ShortTermScheduledSnapshot
-) {
-  if (current.origin === 'SCHEDULED') return true
-  if (!current.snapshot) return current.report === null
-  if (scheduled.tradeDate > current.snapshot.tradeDate) return true
-  if (scheduled.tradeDate < current.snapshot.tradeDate) return false
-  if (scheduled.stage !== 'FINAL') return false
-
-  const scheduledTime = snapshotActivityTime(scheduled)
-  const currentTime = snapshotActivityTime(current.snapshot)
-  return scheduledTime !== null && (currentTime === null || scheduledTime > currentTime)
-}
-
-function snapshotActivityTime(snapshot: ShortTermScheduledSnapshot) {
-  const value = snapshot.completedAt ?? snapshot.startedAt ?? snapshot.dataCutoffAt
-  if (!value) return null
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : null
+function scanCompletionToastMessage(job: ShortTermScanJobStatus) {
+  const count = job.report?.candidateCount
+  if (count === null || count === undefined) return job.message
+  if (count === 0) return `${job.message}，暂无候选`
+  return `${job.message}，已生成 ${count} 个候选`
 }

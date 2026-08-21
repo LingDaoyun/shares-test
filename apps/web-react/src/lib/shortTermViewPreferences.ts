@@ -1,8 +1,6 @@
 export type ShortTermViewPreferences = {
-  methodologyVisible: boolean
   marketSentimentVisible: boolean
   fundFlowVisible: boolean
-  snapshotVisible: boolean
   hotDirectionsVisible: boolean
 }
 
@@ -10,10 +8,8 @@ export const SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY = 'ai-stock.short-term.resu
 
 export function defaultShortTermViewPreferences(): ShortTermViewPreferences {
   return {
-    methodologyVisible: false,
     marketSentimentVisible: true,
     fundFlowVisible: false,
-    snapshotVisible: true,
     hotDirectionsVisible: true
   }
 }
@@ -31,10 +27,8 @@ export function loadShortTermViewPreferences(): ShortTermViewPreferences {
     if (!raw) return defaults
     const parsed = JSON.parse(raw) as Partial<Record<keyof ShortTermViewPreferences, unknown>>
     return {
-      methodologyVisible: typeof parsed.methodologyVisible === 'boolean' ? parsed.methodologyVisible : defaults.methodologyVisible,
       marketSentimentVisible: typeof parsed.marketSentimentVisible === 'boolean' ? parsed.marketSentimentVisible : defaults.marketSentimentVisible,
       fundFlowVisible: typeof parsed.fundFlowVisible === 'boolean' ? parsed.fundFlowVisible : defaults.fundFlowVisible,
-      snapshotVisible: typeof parsed.snapshotVisible === 'boolean' ? parsed.snapshotVisible : defaults.snapshotVisible,
       hotDirectionsVisible: typeof parsed.hotDirectionsVisible === 'boolean' ? parsed.hotDirectionsVisible : defaults.hotDirectionsVisible
     }
   } catch {

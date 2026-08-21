@@ -141,67 +141,6 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void finalReportRestrictsExpensiveReviewToPreselectedSymbols() {
-        eastMoneyClient.quotes = List.of(
-                quote("600795", "国电电力", "4.90", "1.03", "12.95", "1.49", "900000000"),
-                quote("002128", "电投能源", "26.40", "1.42", "14.08", "1.60", "800000000"),
-                quote("601918", "新集能源", "9.86", "-3.52", "11.87", "1.46", "700000000")
-        );
-        eastMoneyClient.quotes.forEach(quote -> {
-            eastMoneyClient.klines.put(quote.symbol(), rightEarlyKLines(quote.symbol(), quote.latestPrice().toPlainString(), "180000"));
-            eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol()));
-        });
-
-        ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
-                Set.of("600795", "002128")
-        );
-
-        assertThat(report.reviewedSymbols()).containsExactlyInAnyOrder("600795", "002128");
-        assertThat(eastMoneyClient.requestedKlineSymbols).containsExactlyInAnyOrder("600795", "002128");
-        assertThat(eastMoneyClient.requestedKlineSymbols).doesNotContain("601918");
-        assertThat(eastMoneyClient.requestedFinancialSymbols).containsExactly("002128");
-        assertThat(eastMoneyClient.requestedFinancialSymbols).doesNotContain("601918");
-        assertThat(report.exclusions()).anySatisfy(exclusion -> {
-            assertThat(exclusion.symbol()).isEqualTo("600795");
-            assertThat(exclusion.category()).isEqualTo("GOLDEN_CROSS_UNAVAILABLE");
-        });
-        assertThat(report.universeCount()).isEqualTo(3);
-    }
-
-    @Test
-    void finalReportFetchesReportedFullMarketIndependentOfManualScanLimit() {
-        eastMoneyClient.quotes = IntStream.range(0, 5000)
-                .mapToObj(index -> quote(
-                        String.format("%06d", 600000 + index),
-                        "全市场样本" + index,
-                        "10.62",
-                        "1.20",
-                        "18",
-                        "1.60",
-                        "600000000"
-                ))
-                .toList();
-        eastMoneyClient.snapshotExpectedCount = 5000;
-        for (String symbol : List.of("600000", "600001")) {
-            eastMoneyClient.klines.put(symbol, rightEarlyKLines(symbol, "10.62", "180000"));
-            eastMoneyClient.financials.put(symbol, goodFinancial(symbol));
-        }
-
-        ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
-                Set.of("600000", "600001")
-        );
-
-        assertThat(eastMoneyClient.requestedQuoteLimit).isGreaterThan(5000);
-        assertThat(report.coverage().expectedCount()).isEqualTo(5000);
-        assertThat(report.coverage().fetchedCount()).isEqualTo(5000);
-        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("1.0000");
-        assertThat(report.coverage().executionReliable()).isTrue();
-        assertThat(report.reviewedSymbols()).containsExactlyInAnyOrder("600000", "600001");
-    }
-
-    @Test
     void manualSampleDoesNotPretendToHaveFullMarketCoverage() {
         eastMoneyClient.quotes = IntStream.range(0, 5000)
                 .mapToObj(index -> quote(
@@ -227,7 +166,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void absentReportedUniverseNeverProducesReliableFinalCoverage() {
+    void absentReportedUniverseNeverProducesReliableManualCoverage() {
         eastMoneyClient.quotes = IntStream.range(0, 100)
                 .mapToObj(index -> quote(
                         String.format("%06d", 600000 + index),
@@ -243,17 +182,15 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600000", rightEarlyKLines("600000", "10.62", "180000"));
         eastMoneyClient.financials.put("600000", goodFinancial("600000"));
 
-        ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
-                Set.of("600000")
-        );
+        ShortTermReport report = service.report(
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null));
 
         assertThat(report.coverage().executionReliable()).isFalse();
         assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0");
     }
 
     @Test
-    void incompleteFinalUniverseNeverBecomesReliableAtTheNinetyPercentThreshold() {
+    void incompleteManualUniverseNeverBecomesReliableAtTheNinetyPercentThreshold() {
         eastMoneyClient.quotes = IntStream.range(0, 9)
                 .mapToObj(index -> quote(
                         String.format("600%03d", index),
@@ -270,10 +207,8 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600000", rightEarlyKLines("600000", "10.62", "180000"));
         eastMoneyClient.financials.put("600000", goodFinancial("600000"));
 
-        ShortTermReport report = service.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
-                Set.of("600000")
-        );
+        ShortTermReport report = service.report(
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null));
 
         assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("0.9000");
         assertThat(report.coverage().executionReliable()).isFalse();
@@ -350,7 +285,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void finalReportExcludesFutureQuoteBeforeAnyExpensiveReview() {
+    void manualReportExcludesFutureQuoteBeforeAnyExpensiveReview() {
         Instant validTimestamp = Instant.parse("2026-07-07T06:49:00Z");
         eastMoneyClient.quotes = List.of(
                 quoteAt("600001", "有效报价", "普通行业", validTimestamp),
@@ -364,10 +299,8 @@ class ShortTermServiceTest {
         Clock decisionClock = Clock.fixed(Instant.parse("2026-07-07T06:50:00Z"), SHANGHAI);
         ShortTermService pointInTimeService = serviceAt(decisionClock);
 
-        ShortTermReport report = pointInTimeService.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
-                Set.of("600001", "600002")
-        );
+        ShortTermReport report = pointInTimeService.report(
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null));
 
         assertThat(report.coverage().fetchedCount()).isEqualTo(1);
         assertThat(report.coverage().executionReliable()).isFalse();
@@ -379,7 +312,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void finalReportUsesQuoteFetchCompletionAsDecisionTime() {
+    void manualReportUsesQuoteFetchCompletionAsDecisionTime() {
         MutableClock decisionClock = new MutableClock(
                 Instant.parse("2026-07-07T06:50:00Z"),
                 SHANGHAI
@@ -395,10 +328,8 @@ class ShortTermServiceTest {
         eastMoneyClient.klines.put("600001", rightEarlyKLines("600001", "10.62", "180000"));
         eastMoneyClient.financials.put("600001", goodFinancial("600001"));
 
-        ShortTermReport report = serviceAt(decisionClock).finalReport(
-                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
-                Set.of("600001")
-        );
+        ShortTermReport report = serviceAt(decisionClock).report(
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null));
 
         assertThat(report.coverage().fetchedCount()).isEqualTo(1);
         assertThat(report.coverage().executionReliable()).isTrue();
@@ -407,16 +338,14 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void finalReportBlocksMissingMarketTimestampAndNeverUsesFetchedAtAsCutoff() {
+    void manualReportBlocksMissingMarketTimestampAndNeverUsesFetchedAtAsCutoff() {
         eastMoneyClient.quotes = List.of(quoteAt("600001", "无市场时间", "普通行业", null));
         eastMoneyClient.snapshotExpectedCount = 1;
         Clock decisionClock = Clock.fixed(Instant.parse("2026-07-07T06:50:00Z"), SHANGHAI);
         ShortTermService pointInTimeService = serviceAt(decisionClock);
 
-        ShortTermReport report = pointInTimeService.finalReport(
-                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null),
-                Set.of("600001")
-        );
+        ShortTermReport report = pointInTimeService.report(
+                new ShortTermScanRequest(3, 100, 10, null,null, null, null, null, null));
 
         assertThat(report.coverage().fetchedCount()).isZero();
         assertThat(report.coverage().executionReliable()).isFalse();
@@ -447,13 +376,6 @@ class ShortTermServiceTest {
                 "8.50",
                 "2000000000"
         ));
-    }
-
-    @Test
-    void finalReportRejectsEmptyPreselection() {
-        assertThatThrownBy(() -> service.finalReport(ShortTermScanRequest.empty(), Set.of()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("预选股票为空");
     }
 
     @Test

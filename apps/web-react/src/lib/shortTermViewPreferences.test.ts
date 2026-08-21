@@ -19,24 +19,20 @@ describe('shortTermViewPreferences', () => {
 
   it('persists toggled result view preferences', () => {
     saveShortTermViewPreferences({
-      methodologyVisible: true,
       marketSentimentVisible: false,
       fundFlowVisible: true,
-      snapshotVisible: false,
       hotDirectionsVisible: false
     })
 
     expect(loadShortTermViewPreferences()).toEqual({
-      methodologyVisible: true,
       marketSentimentVisible: false,
       fundFlowVisible: true,
-      snapshotVisible: false,
       hotDirectionsVisible: false
     })
   })
 
   it('recovers from invalid stored payloads', () => {
-    window.localStorage.setItem(SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY, '{"methodologyVisible":"yes"}')
+    window.localStorage.setItem(SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY, '{"marketSentimentVisible":"yes"}')
 
     expect(loadShortTermViewPreferences()).toEqual(defaultShortTermViewPreferences())
   })

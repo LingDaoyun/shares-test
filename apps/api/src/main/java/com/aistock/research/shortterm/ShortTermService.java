@@ -14,9 +14,6 @@ import com.aistock.research.quality.EvidenceCompleteness;
 import com.aistock.research.quality.EvidenceCompletenessInput;
 import com.aistock.research.quality.EvidenceCompletenessService;
 import com.aistock.research.quality.RecommendationQuality;
-import com.aistock.research.shortterm.leader.ShortTermLeaderRisk;
-import com.aistock.research.shortterm.leader.ShortTermLeaderRiskInput;
-import com.aistock.research.shortterm.leader.ShortTermLeaderRiskModule;
 import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
 import com.aistock.research.shortterm.chip.ShortTermChipAnalysisService;
 import com.aistock.research.shortterm.chip.ShortTermChipSnapshot;
@@ -57,7 +54,6 @@ public class ShortTermService {
     private static final int DEFAULT_LIMIT = 8;
     private static final int DEFAULT_SCAN_LIMIT = 6000;
     private static final int MAX_SCAN_LIMIT = 6000;
-    private static final int FULL_MARKET_QUOTE_REQUEST = Integer.MAX_VALUE;
     private static final int DEFAULT_KLINE_LIMIT = 120;
     private static final int MAX_KLINE_LIMIT = 160;
     private static final BigDecimal DEFAULT_MIN_AMOUNT = new BigDecimal("80000000");
@@ -147,7 +143,6 @@ public class ShortTermService {
     private final ShortTermAutomationSettings automationSettings;
     private final ShortTermChipAnalysisService chipAnalysisService;
     private final ShortTermChipSettings chipSettings;
-    private final ShortTermLeaderRiskModule leaderRiskModule;
     private final ShortTermMomentumQualityEvaluator momentumQualityEvaluator = new ShortTermMomentumQualityEvaluator();
     private final ShortTermSupportReversalEvaluator supportReversalEvaluator = new ShortTermSupportReversalEvaluator();
     private final ShortTermCoreSignalScorer coreSignalScorer = new ShortTermCoreSignalScorer();
@@ -205,8 +200,7 @@ public class ShortTermService {
                 new ShortTermTradePlanService(tradingClockService),
                 new ShortTermAutomationSettings(new StandardEnvironment()),
                 null,
-                new ShortTermChipSettings(new StandardEnvironment()),
-                ShortTermLeaderRiskModule.unavailable()
+                new ShortTermChipSettings(new StandardEnvironment())
         );
     }
 
@@ -228,33 +222,7 @@ public class ShortTermService {
                 tradePlanService,
                 automationSettings,
                 null,
-                new ShortTermChipSettings(new StandardEnvironment()),
-                ShortTermLeaderRiskModule.unavailable()
-        );
-    }
-
-    public ShortTermService(
-            EastMoneyClient eastMoneyClient,
-            EvidenceCompletenessService evidenceCompletenessService,
-            TradingClockService tradingClockService,
-            QuoteFreshnessService quoteFreshnessService,
-            ShortTermTechnicalSignalEvaluator technicalSignalEvaluator,
-            ShortTermTradePlanService tradePlanService,
-            ShortTermAutomationSettings automationSettings,
-            ShortTermChipAnalysisService chipAnalysisService,
-            ShortTermChipSettings chipSettings
-    ) {
-        this(
-                eastMoneyClient,
-                evidenceCompletenessService,
-                tradingClockService,
-                quoteFreshnessService,
-                technicalSignalEvaluator,
-                tradePlanService,
-                automationSettings,
-                chipAnalysisService,
-                chipSettings,
-                ShortTermLeaderRiskModule.unavailable()
+                new ShortTermChipSettings(new StandardEnvironment())
         );
     }
 
@@ -268,8 +236,7 @@ public class ShortTermService {
             ShortTermTradePlanService tradePlanService,
             ShortTermAutomationSettings automationSettings,
             ShortTermChipAnalysisService chipAnalysisService,
-            ShortTermChipSettings chipSettings,
-            ShortTermLeaderRiskModule leaderRiskModule
+            ShortTermChipSettings chipSettings
     ) {
         this.eastMoneyClient = eastMoneyClient;
         this.evidenceCompletenessService = evidenceCompletenessService;
@@ -280,7 +247,6 @@ public class ShortTermService {
         this.automationSettings = automationSettings;
         this.chipAnalysisService = chipAnalysisService;
         this.chipSettings = chipSettings;
-        this.leaderRiskModule = leaderRiskModule;
     }
 
     public ShortTermReport report(
@@ -336,60 +302,10 @@ public class ShortTermService {
     }
 
     public ShortTermReport report(ShortTermScanRequest request) {
-        return buildReport(request == null ? ShortTermScanRequest.empty() : request, Set.of(), false);
+        return buildReport(request == null ? ShortTermScanRequest.empty() : request);
     }
 
-    public ShortTermLeaderRisk captureLeaderRiskCheckpoint() {
-        AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(FULL_MARKET_QUOTE_REQUEST);
-        LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
-        List<EastMoneyQuote> marketQuotes = uniqueMarketQuotes(quoteSnapshot.quotes());
-        List<EastMoneyQuote> pointInTimeCoverageQuotes = marketQuotes.stream()
-                .filter(quote -> quoteAvailableAtDecision(quote, decisionAt, false))
-                .toList();
-        List<EastMoneyQuote> marketContextUniverse = pointInTimeCoverageQuotes.stream()
-                .filter(this::isAshareContextQuote)
-                .filter(this::hasUsablePrice)
-                .toList();
-        ShortTermCoverageSnapshot coverage = coverageSnapshot(
-                quoteSnapshot,
-                marketQuotes,
-                marketContextUniverse,
-                decisionAt,
-                true,
-                false
-        );
-        Instant capturedAt = dataCutoffAt(pointInTimeCoverageQuotes, List.of());
-        if (capturedAt == null) {
-            capturedAt = quoteSnapshot.fetchedAt() == null
-                    ? decisionAt.atZone(SHANGHAI).toInstant()
-                    : quoteSnapshot.fetchedAt();
-        }
-        return leaderRiskModule.captureCheckpoint(new ShortTermLeaderRiskInput(
-                decisionAt.toLocalDate(),
-                capturedAt,
-                coverage,
-                marketContextUniverse,
-                resolveHotDirections(marketContextUniverse),
-                List.of()
-        ));
-    }
-
-    public ShortTermReport finalReport(ShortTermScanRequest request, Set<String> preselectedSymbols) {
-        if (preselectedSymbols == null || preselectedSymbols.isEmpty()) {
-            throw new IllegalArgumentException("当日预选股票为空，不能执行尾盘终选");
-        }
-        return buildReport(
-                request == null ? ShortTermScanRequest.empty() : request,
-                Set.copyOf(preselectedSymbols),
-                true
-        );
-    }
-
-    private ShortTermReport buildReport(
-            ShortTermScanRequest request,
-            Set<String> preselectedSymbols,
-            boolean fullMarketExecution
-    ) {
+    private ShortTermReport buildReport(ShortTermScanRequest request) {
         ShortTermRuleSet ruleSet = resolveRuleSet(
                 request.scanLimit(),
                 request.klineLimit(),
@@ -402,11 +318,9 @@ public class ShortTermService {
                 request.allowChiNext()
         );
 
-        int quoteRequestLimit = fullMarketExecution ? FULL_MARKET_QUOTE_REQUEST : ruleSet.scanLimit();
-        AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(quoteRequestLimit);
+        AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(ruleSet.scanLimit());
         LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
-        boolean allowClosedMarketCachePreview = !fullMarketExecution
-                && Boolean.TRUE.equals(request.allowStaticCachePreview())
+        boolean allowClosedMarketCachePreview = Boolean.TRUE.equals(request.allowStaticCachePreview())
                 && tradingClockService.isMarketClosedDay(decisionAt.toLocalDate());
         List<EastMoneyQuote> marketQuotes = uniqueMarketQuotes(quoteSnapshot.quotes());
         List<EastMoneyQuote> pointInTimeCoverageQuotes = marketQuotes.stream()
@@ -424,7 +338,7 @@ public class ShortTermService {
                 marketQuotes,
                 marketContextUniverse,
                 decisionAt,
-                fullMarketExecution,
+                false,
                 allowClosedMarketCachePreview
         );
         Set<String> unstableIndustrySymbols = fetchUnstableIndustrySymbols();
@@ -455,9 +369,7 @@ public class ShortTermService {
                     quoteExclusions,
                     pointInTimeCoverageQuotes,
                     preFilteredQuotes.size(),
-                    marketContextUniverse,
-                    hotDirections,
-                    decisionAt
+                    marketContextUniverse
             );
         }
         Map<String, ShortTermHotDirection> hotDirectionMap = hotDirections.stream()
@@ -467,11 +379,7 @@ public class ShortTermService {
                         (left, right) -> left,
                         LinkedHashMap::new
                 ));
-        List<EastMoneyQuote> reviewPool = preselectedSymbols.isEmpty()
-                ? preFilteredQuotes
-                : preFilteredQuotes.stream()
-                .filter(quote -> preselectedSymbols.contains(quote.symbol()))
-                .toList();
+        List<EastMoneyQuote> reviewPool = preFilteredQuotes;
         List<EastMoneyQuote> tradableQuotes = reviewPool.stream()
                 .sorted(Comparator.comparing((EastMoneyQuote quote) -> preliminaryScore(quote, ruleSet, hotDirectionMap)).reversed())
                 .limit(ruleSet.klineLimit())
@@ -590,14 +498,6 @@ public class ShortTermService {
                 (int) validKlineCount
         );
         Instant reportDataCutoffAt = dataCutoffAt(pointInTimeCoverageQuotes, candidates);
-        ShortTermLeaderRisk leaderRisk = leaderRisk(
-                decisionAt.toLocalDate(),
-                reportDataCutoffAt,
-                coverage,
-                marketContextUniverse,
-                hotDirections,
-                candidates.stream().map(ShortTermCandidate::industry).toList()
-        );
 
         return new ShortTermReport(
                 "A 股短线右侧启动池",
@@ -637,32 +537,8 @@ public class ShortTermService {
                 Instant.now(),
                 technicalReviewCoverage,
                 crossSection.context(),
-                marketRegime,
-                leaderRisk
+                marketRegime
         );
-    }
-
-    private ShortTermLeaderRisk leaderRisk(
-            LocalDate tradeDate,
-            Instant capturedAt,
-            ShortTermCoverageSnapshot coverage,
-            List<EastMoneyQuote> quotes,
-            List<ShortTermHotDirection> hotDirections,
-            List<String> candidateIndustries
-    ) {
-        try {
-            return leaderRiskModule.evaluate(new ShortTermLeaderRiskInput(
-                    tradeDate,
-                    capturedAt,
-                    coverage,
-                    quotes,
-                    hotDirections,
-                    candidateIndustries
-            ));
-        } catch (RuntimeException exception) {
-            logger.warn("短线龙头异动风险计算失败，本轮仅关闭风险提示", exception);
-            return ShortTermLeaderRisk.unavailable("龙头异动风险计算失败：" + rootMessage(exception));
-        }
     }
 
     private AshareQuoteSnapshot fetchMarketQuoteSnapshot(int scanLimit) {
@@ -831,9 +707,7 @@ public class ShortTermService {
             List<ShortTermRiskExclusion> quoteExclusions,
             List<EastMoneyQuote> pointInTimeCoverageQuotes,
             int quotePreselectedCount,
-            List<EastMoneyQuote> marketContextUniverse,
-            List<ShortTermHotDirection> hotDirections,
-            LocalDateTime decisionAt
+            List<EastMoneyQuote> marketContextUniverse
     ) {
         ShortTermTechnicalReviewCoverage technicalReviewCoverage = ShortTermTechnicalReviewCoverage.of(
                 quotePreselectedCount,
@@ -850,14 +724,6 @@ public class ShortTermService {
                 + marketRegime.explanation()
                 + " 本轮不拉取K线、不生成短线推荐，等待广度修复后再评估。";
         Instant reportDataCutoffAt = dataCutoffAt(pointInTimeCoverageQuotes, List.of());
-        ShortTermLeaderRisk leaderRisk = leaderRisk(
-                decisionAt.toLocalDate(),
-                reportDataCutoffAt,
-                coverage,
-                marketContextUniverse,
-                hotDirections,
-                List.of()
-        );
         return new ShortTermReport(
                 "A 股短线右侧启动池",
                 quoteUniverse.size(),
@@ -885,8 +751,7 @@ public class ShortTermService {
                 Instant.now(),
                 technicalReviewCoverage,
                 crossSectionContext,
-                marketRegime,
-                leaderRisk
+                marketRegime
         );
     }
 

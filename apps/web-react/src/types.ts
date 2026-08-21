@@ -951,43 +951,6 @@ export interface ShortTermCrossSectionContext {
   dataGaps: string[]
 }
 
-export type ShortTermLeaderRiskStatus = 'WARNING' | 'CLEAR' | 'BASELINE_BUILDING' | 'UNAVAILABLE'
-export type ShortTermLeaderRiskBaseline = 'PREVIOUS_SCAN' | 'PREVIOUS_TRADING_DAY' | 'INITIAL'
-export type ShortTermLeaderRiskTrack = 'WEIGHT' | 'THEME'
-
-export interface ShortTermLeaderRiskSignal {
-  track: ShortTermLeaderRiskTrack
-  symbol: string
-  name: string
-  direction: string | null
-  currentChangePercent: number | null
-  baselineChangePercent: number | null
-  changeDeltaPercentPoints: number | null
-  currentAmountRank: number | null
-  baselineAmountRank: number | null
-  amountSharePercent: number | null
-  totalMarketValue: number | null
-  reason: string
-  detectedAt?: string | null
-  movementState?: 'DETECTED' | 'ONGOING' | 'RECEDED'
-}
-
-export interface ShortTermLeaderRisk {
-  ruleVersion: string
-  status: ShortTermLeaderRiskStatus
-  baselineType: ShortTermLeaderRiskBaseline
-  baselineAt: string | null
-  signals: ShortTermLeaderRiskSignal[]
-  dominantCandidateIndustry: string | null
-  candidateConcentrationPercent: number | null
-  directionConflict: boolean
-  summary: string
-  evidence: string
-  dataGaps: string[]
-  advisoryOnly: boolean
-  evaluatedAt: string | null
-}
-
 export interface ShortTermReport {
   scope: string
   universeCount: number
@@ -1012,7 +975,6 @@ export interface ShortTermReport {
   technicalReviewCoverage?: ShortTermTechnicalReviewCoverage | null
   crossSectionContext?: ShortTermCrossSectionContext | null
   marketRegime?: ShortTermMarketRegime | null
-  leaderRisk?: ShortTermLeaderRisk | null
 }
 
 export interface ShortTermValidationCohortRequest {
@@ -1040,30 +1002,13 @@ export interface ShortTermValidationSummary {
   averageMaePercent: number | null
 }
 
-export type ShortTermSnapshotStatus =
+export type ShortTermScanResultStatus =
   | 'RUNNING'
-  | 'PRESELECT_READY'
-  | 'FINAL_PENDING'
   | 'FINAL_READY'
   | 'CACHE_PREVIEW'
   | 'NO_TRADE'
   | 'DATA_BLOCKED'
   | 'FAILED'
-
-export interface ShortTermScheduledSnapshot {
-  tradeDate: string
-  stage: 'PRESELECT' | 'FINAL' | 'READINESS_GUARD' | 'MANUAL'
-  status: ShortTermSnapshotStatus
-  strategyVersion: string
-  message: string
-  dataCutoffAt: string | null
-  startedAt?: string | null
-  completedAt: string | null
-  blockedReasons: string[]
-  report: ShortTermReport | null
-  reportPayloadHash?: string | null
-  payloadCommittedByAt?: string | null
-}
 
 export interface ShortTermMarketSentiment {
   phase: string
@@ -1108,7 +1053,7 @@ export interface ShortTermScanJobStatus {
   jobId: string
   status: ShortTermScanJobState
   tradeDate: string
-  resultStatus: ShortTermSnapshotStatus
+  resultStatus: ShortTermScanResultStatus
   strategyVersion: string
   blockedReasons: string[]
   createdAt: string

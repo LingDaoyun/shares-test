@@ -10,7 +10,6 @@ import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOv
 import { Loader } from '../components/ui/Loader'
 import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
 import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
-import { ShortTermLeaderRiskCard } from '../components/shortterm/ShortTermLeaderRiskCard'
 import {
   hasClosedShortTermScoreSnapshot,
   ShortTermSignalEvidencePanel
@@ -26,7 +25,7 @@ import { formatThreeDayVolumeComparison } from '../lib/shortTermVolume'
 import { loadShortTermViewPreferences, saveShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import type { ShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import { useShortTermScanStore } from '../store/shortTermScanStore'
-import type { ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermScheduledSnapshot, ShortTermSupportReversalSignal, ShortTermTailSignal, ShortTermValidationBatchRequest, ShortTermValidationSummary, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermSupportReversalSignal, ShortTermTailSignal, ShortTermValidationBatchRequest, ShortTermValidationSummary, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -67,30 +66,19 @@ const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'n
   DATA_REVIEW: 'neutral'
 }
 
-const SCHEDULED_SCAN_POLL_MS = 5_000
-
 export function ShortTermPage() {
   const [draft, setDraft] = useState<DraftParams>(DEFAULT_DRAFT)
   const [viewPreferences, setViewPreferences] = useState<ShortTermViewPreferences>(() => loadShortTermViewPreferences())
-  const origin = useShortTermScanStore((state) => state.origin)
-  const scheduledSnapshot = useShortTermScanStore((state) => state.scheduledSnapshot)
   const report = useShortTermScanStore((state) => state.report)
   const loading = useShortTermScanStore((state) => state.loading)
   const error = useShortTermScanStore((state) => state.error)
   const scanMessage = useShortTermScanStore((state) => state.scanMessage)
   const activeJobId = useShortTermScanStore((state) => state.activeJobId)
-  const refreshScheduledSnapshot = useShortTermScanStore((state) => state.refreshScheduledSnapshot)
   const runManualScan = useShortTermScanStore((state) => state.runManualScan)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   const [validationSummaries, setValidationSummaries] = useState<ShortTermValidationSummary[]>([])
   const [validationState, setValidationState] = useState<ShortTermValidationViewState>('IDLE')
   const validationRequests = useRef(new Map<string, Promise<ShortTermValidationSummary[]>>())
-
-  useEffect(() => {
-    void refreshScheduledSnapshot()
-    const timer = window.setInterval(() => void refreshScheduledSnapshot(), SCHEDULED_SCAN_POLL_MS)
-    return () => window.clearInterval(timer)
-  }, [refreshScheduledSnapshot])
 
   useEffect(() => {
     if (selectedSymbol && !report?.candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
@@ -105,8 +93,6 @@ export function ShortTermPage() {
       (candidate) => candidate.symbol
     )
   }, [report, selectedSymbol])
-
-  const diagnostics = useMemo(() => shortTermDiagnostics(report), [report])
 
   useEffect(() => {
     saveShortTermViewPreferences(viewPreferences)
@@ -154,10 +140,6 @@ export function ShortTermPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      {origin === 'SCHEDULED' && scheduledSnapshot && isScheduledScanRunning(scheduledSnapshot) ? (
-        <ScheduledScanPulse snapshot={scheduledSnapshot} />
-      ) : null}
-
       <Card
         title={
           <span className="inline-flex items-center gap-2">
@@ -170,7 +152,7 @@ export function ShortTermPage() {
             <Button
               variant="primary"
               icon={<RefreshCw className="h-4 w-4" />}
-              loading={origin === 'MANUAL' && loading}
+              loading={loading}
               onClick={() => {
                 setSelectedSymbol(null)
                 void runManualScan(toApiParams({ ...draft }))
@@ -180,7 +162,7 @@ export function ShortTermPage() {
             </Button>
             <Button
               variant="secondary"
-              disabled={origin === 'MANUAL' && loading}
+              disabled={loading}
               onClick={() => {
                 setSelectedSymbol(null)
                 void runManualScan(toApiParams({ ...draft }))
@@ -258,9 +240,6 @@ export function ShortTermPage() {
             {viewPreferences.marketSentimentVisible ? (
               <MarketSentimentSummaryCard report={report} />
             ) : null}
-            {viewPreferences.snapshotVisible ? (
-              <ScanSnapshotSummaryCard report={report} diagnostics={diagnostics} />
-            ) : null}
             {viewPreferences.hotDirectionsVisible ? (
               <HotDirectionsCard directions={report.hotDirections} />
             ) : null}
@@ -268,12 +247,6 @@ export function ShortTermPage() {
               <MarketFundDirectionCard direction={report.marketFundDirection} />
             ) : null}
           </div>
-
-          <ShortTermLeaderRiskCard risk={report.leaderRisk} />
-
-          {viewPreferences.methodologyVisible ? (
-            <MethodologyCard methodology={report.methodology} />
-          ) : null}
 
           <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧候选</span>} flush>
             {report.candidates.length ? (
@@ -317,56 +290,13 @@ export function ShortTermPage() {
   )
 }
 
-export function ScheduledScanPulse({ snapshot }: { snapshot: ShortTermScheduledSnapshot }) {
-  return (
-    <section
-      className="overflow-hidden rounded-lg border border-sky-200 bg-sky-50/70 px-4 py-3 text-sky-900"
-      data-testid="scheduled-scan-pulse"
-      aria-live="polite"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="relative flex h-9 w-9 items-center justify-center rounded-full border border-sky-300 bg-white">
-            <span className="absolute h-9 w-9 animate-ping rounded-full bg-sky-200 opacity-40" />
-            <RefreshCw className="relative h-4 w-4 animate-spin" aria-hidden="true" />
-          </span>
-          <div>
-            <p className="text-sm font-semibold">尾盘自动扫描正在执行</p>
-            <p className="mt-0.5 text-xs leading-relaxed text-sky-700">
-              页面正在跟随后台计划任务刷新，完成后会自动切换到最新候选。
-            </p>
-          </div>
-        </div>
-        <div className="text-right text-xs text-sky-700">
-          <p className="font-mono">{snapshot.tradeDate}</p>
-          <p>{snapshot.message || '后台扫描中'}</p>
-        </div>
-      </div>
-      <div className="mt-3 h-1 overflow-hidden rounded-full bg-sky-100">
-        <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-500" />
-      </div>
-    </section>
-  )
-}
-
-function isScheduledScanRunning(snapshot: ShortTermScheduledSnapshot) {
-  return (snapshot.status === 'RUNNING' || snapshot.status === 'FINAL_PENDING')
-    && !isWaitingScheduledSnapshot(snapshot)
-}
-
-function isWaitingScheduledSnapshot(snapshot: ShortTermScheduledSnapshot) {
-  return snapshot.status === 'RUNNING' && snapshot.message.trim().startsWith('等待 ')
-}
-
 const resultViewOptions: Array<{
   key: keyof ShortTermViewPreferences
   label: string
   description: string
 }> = [
-  { key: 'methodologyVisible', label: '方法', description: '策略口径' },
   { key: 'marketSentimentVisible', label: '市场情绪', description: '今日宽度' },
   { key: 'fundFlowVisible', label: '今日资金去向', description: '行业流向' },
-  { key: 'snapshotVisible', label: '扫描快照', description: '覆盖与结果' },
   { key: 'hotDirectionsVisible', label: '热门方向', description: '方向热度' }
 ]
 
@@ -413,18 +343,6 @@ function ResultViewControls({
   )
 }
 
-function MethodologyCard({ methodology }: { methodology: string[] }) {
-  return (
-    <Card title="方法">
-      <div className="grid grid-cols-1 gap-2 text-sm leading-relaxed text-ink-600 sm:grid-cols-2">
-        {methodology.map((item) => (
-          <p key={item} className="rounded-lg border border-line-soft bg-line-soft/30 px-3 py-2">{item}</p>
-        ))}
-      </div>
-    </Card>
-  )
-}
-
 function MarketSentimentSummaryCard({ report }: { report: ShortTermReport }) {
   const sentiment = report.marketSentiment
   return (
@@ -451,54 +369,6 @@ function MarketSentimentSummaryCard({ report }: { report: ShortTermReport }) {
           </div>
         </div>
         <p className="line-clamp-2 text-xs leading-relaxed text-ink-500">{sentiment.explanation}</p>
-      </div>
-    </Card>
-  )
-}
-
-function ScanSnapshotSummaryCard({
-  report,
-  diagnostics
-}: {
-  report: ShortTermReport
-  diagnostics: ReturnType<typeof shortTermDiagnostics>
-}) {
-  return (
-    <Card className="min-h-full border-sky-100 bg-gradient-to-br from-white to-sky-50/50">
-      <div className="flex h-full flex-col justify-between gap-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="eyebrow mb-1 text-sky-600">SCAN SNAPSHOT</div>
-            <h3 className="text-base font-semibold text-ink-900">扫描快照</h3>
-          </div>
-          <Tag tone={report.ruleSet?.allowChiNext ? 'brand' : 'neutral'}>
-            创业板{report.ruleSet?.allowChiNext ? '纳入' : '剔除'}
-          </Tag>
-        </div>
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
-          <div>
-            <p className="text-xs text-ink-400">候选数</p>
-            <p className="tabular text-3xl font-semibold text-ink-900">{report.candidateCount}</p>
-          </div>
-          <div className="flex flex-1 flex-wrap gap-2 text-xs">
-            <InlineMetric label="全市场样本" value={report.universeCount} />
-            <InlineMetric label="K线复核" value={`${report.klineReviewedCount}/${report.reviewedCount}`} />
-            <InlineMetric label="尾盘确认" value={diagnostics.tailConfirmedCount} />
-            <InlineMetric label="强加仓" value={`${diagnostics.addCount}/${report.candidateCount}`} />
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          <Tag tone="neutral">{report.tradingSession.phaseLabel}</Tag>
-          <Tag tone="neutral">{report.tradingSession.decisionTimeLabel}</Tag>
-          <Tag tone="neutral">{formatDateTime(report.generatedAt)}</Tag>
-        </div>
-        {report.tradingSession.warnings.length ? (
-          <p className="border-l-2 border-amber-300 pl-3 text-xs leading-relaxed text-amber-700">
-            {report.tradingSession.warnings[0]}
-          </p>
-        ) : (
-          <p className="text-xs leading-relaxed text-ink-500">{report.quoteNote}</p>
-        )}
       </div>
     </Card>
   )
@@ -653,16 +523,6 @@ function orderByRankingScoreDesc(candidates: ShortTermCandidate[]): ShortTermCan
       return rightScore - leftScore || left.index - right.index
     })
     .map((entry, position) => ({ ...entry.candidate, rank: position + 1 }))
-}
-
-function shortTermDiagnostics(report: ShortTermReport | null) {  const candidates = report?.candidates ?? []
-  return {
-    addCount: candidates.filter((candidate) => candidate.todayAdvice.action === 'ADD').length,
-    lightTrialCount: candidates.filter((candidate) => candidate.todayAdvice.action === 'LIGHT_TRIAL').length,
-    nextWatchCount: candidates.filter((candidate) => candidate.todayAdvice.action === 'NEXT_WATCH').length,
-    pullbackAdviceCount: candidates.filter((candidate) => candidate.todayAdvice.action === 'WAIT_PULLBACK').length,
-    tailConfirmedCount: candidates.filter((candidate) => candidate.tailSignal.status === 'CONFIRMED').length,
-  }
 }
 
 function CandidateRow({

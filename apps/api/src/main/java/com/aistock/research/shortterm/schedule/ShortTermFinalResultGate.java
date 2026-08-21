@@ -10,7 +10,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -24,7 +23,7 @@ public class ShortTermFinalResultGate {
     // 手动扫描的执行者知晓当前时点，时点类检查只降级为缓存预览提示，不阻断结果展示；
     // 覆盖率/完整性类检查仍保持阻断。
     private static final Set<String> MANUAL_TIMING_REASONS = Set.of(
-            "FINAL_DEADLINE_EXPIRED",
+            "DECISION_DATE_MISMATCH",
             "CUTOFF_MISSING",
             "CUTOFF_WRONG_DATE",
             "CUTOFF_AFTER_DECISION",
@@ -55,7 +54,7 @@ public class ShortTermFinalResultGate {
             );
         }
         Optional<Failure> failure = validate(
-                tradeDate, report, decisionCompletedAt, decisionCompletedAt, false, true, false);
+                tradeDate, report, decisionCompletedAt, decisionCompletedAt, true, false);
         if (failure.isPresent()) {
             Failure blocked = failure.orElseThrow();
             if (MANUAL_TIMING_REASONS.contains(blocked.reason())) {
@@ -81,35 +80,6 @@ public class ShortTermFinalResultGate {
         );
     }
 
-    public Result evaluateScheduled(
-            LocalDate tradeDate,
-            ShortTermReport report,
-            Instant decisionCompletedAt,
-            Instant freshnessCheckedAt
-    ) {
-        return evaluate(tradeDate, report, decisionCompletedAt, freshnessCheckedAt, true);
-    }
-
-    private Result evaluate(
-            LocalDate tradeDate,
-            ShortTermReport report,
-            Instant decisionCompletedAt,
-            Instant freshnessCheckedAt,
-            boolean enforceScheduledDeadline
-    ) {
-        Optional<Failure> failure = validate(
-                tradeDate, report, decisionCompletedAt, freshnessCheckedAt, enforceScheduledDeadline, false, true);
-        if (failure.isPresent()) {
-            Failure blocked = failure.orElseThrow();
-            return blocked(blocked.reason(), blocked.message());
-        }
-        return classify(
-                report,
-                "全部执行闸门通过，今日无合格候选",
-                "14:49:40 前买入确认已就绪"
-        );
-    }
-
     private Result classify(ShortTermReport report, String noTradeMessage, String readyMessage) {
         ShortTermSnapshotStatus status = report.candidates() == null || report.candidates().isEmpty()
                 ? ShortTermSnapshotStatus.NO_TRADE
@@ -125,19 +95,16 @@ public class ShortTermFinalResultGate {
             ShortTermReport report,
             Instant decisionCompletedAt,
             Instant freshnessCheckedAt,
-            boolean enforceScheduledDeadline,
             boolean allowNonTradingFetchFreshness,
             boolean enforceFreshness
     ) {
         if (tradeDate == null || decisionCompletedAt == null
-                || !marketDate(decisionCompletedAt).equals(tradeDate)
-                || (enforceScheduledDeadline
-                && marketTime(decisionCompletedAt).isAfter(settings.finalDeadline()))) {
+                || !marketDate(decisionCompletedAt).equals(tradeDate)) {
             return Optional.of(new Failure(
-                    "FINAL_DEADLINE_EXPIRED", "尾盘终选已超过完成截止时间"));
+                    "DECISION_DATE_MISMATCH", "扫描完成时间不属于当前交易日"));
         }
         if (report == null) {
-            return Optional.of(new Failure("FINAL_REPORT_MISSING", "尾盘终选报告缺失"));
+            return Optional.of(new Failure("REPORT_MISSING", "扫描报告缺失"));
         }
         ShortTermCoverageSnapshot coverage = report.coverage();
         if (coverage == null || coverage.coverageRatio() == null
@@ -159,13 +126,13 @@ public class ShortTermFinalResultGate {
         }
         Instant cutoff = report.dataCutoffAt();
         if (cutoff == null) {
-            return Optional.of(new Failure("CUTOFF_MISSING", "尾盘行情截止时间缺失"));
+            return Optional.of(new Failure("CUTOFF_MISSING", "行情截止时间缺失"));
         }
         if (!marketDate(cutoff).equals(tradeDate)) {
-            return Optional.of(new Failure("CUTOFF_WRONG_DATE", "尾盘行情不是当日数据"));
+            return Optional.of(new Failure("CUTOFF_WRONG_DATE", "行情不是当日数据"));
         }
         if (cutoff.isAfter(decisionCompletedAt)) {
-            return Optional.of(new Failure("CUTOFF_AFTER_DECISION", "尾盘行情时间晚于决策时刻"));
+            return Optional.of(new Failure("CUTOFF_AFTER_DECISION", "行情时间晚于扫描完成时刻"));
         }
         Instant freshnessReference = cutoff;
         if (allowNonTradingFetchFreshness
@@ -179,7 +146,7 @@ public class ShortTermFinalResultGate {
                 || freshnessReference.isAfter(freshnessCheckedAt)
                 || Duration.between(freshnessReference, freshnessCheckedAt)
                 .compareTo(settings.freshness()) > 0)) {
-            return Optional.of(new Failure("QUOTE_STALE", "尾盘行情已经过期"));
+            return Optional.of(new Failure("QUOTE_STALE", "行情已经过期"));
         }
         return Optional.empty();
     }
@@ -223,10 +190,6 @@ public class ShortTermFinalResultGate {
 
     private LocalDate marketDate(Instant instant) {
         return LocalDateTime.ofInstant(instant, TradingClockService.CHINA_MARKET_ZONE).toLocalDate();
-    }
-
-    private LocalTime marketTime(Instant instant) {
-        return LocalDateTime.ofInstant(instant, TradingClockService.CHINA_MARKET_ZONE).toLocalTime();
     }
 
     private Result blocked(String reason, String message) {

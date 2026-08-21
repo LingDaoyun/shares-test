@@ -26,8 +26,6 @@ server:
 research:
   short-term:
     scan-job-timeout: PT15M
-    schedule:
-      enabled: false
     validation:
       enabled: true
       outcome-cron: "0 30 16 * * MON-FRI"

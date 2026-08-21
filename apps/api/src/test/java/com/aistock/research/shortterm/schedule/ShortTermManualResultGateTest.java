@@ -11,7 +11,6 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,7 +27,6 @@ class ShortTermManualResultGateTest {
     @BeforeEach
     void setUp() {
         ShortTermAutomationSettings settings = mock(ShortTermAutomationSettings.class);
-        when(settings.finalDeadline()).thenReturn(LocalTime.parse("14:49:40"));
         when(settings.freshness()).thenReturn(Duration.ofMinutes(3));
         TradingClockService tradingClock = mock(TradingClockService.class);
         when(tradingClock.currentMarketDate()).thenReturn(TRADE_DATE);
@@ -94,55 +92,6 @@ class ShortTermManualResultGateTest {
     }
 
     @Test
-    void allowsScheduledResultOneSecondBeforeFinalDeadline() {
-        Instant decisionAt = Instant.parse("2026-07-23T06:49:39Z");
-
-        ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
-                TRADE_DATE,
-                report(
-                        Instant.parse("2026-07-23T06:49:00Z"), true,
-                        new BigDecimal("0.99"), true, List.of()),
-                decisionAt,
-                decisionAt
-        );
-
-        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.NO_TRADE);
-    }
-
-    @Test
-    void allowsScheduledResultAtExactFinalDeadline() {
-        Instant decisionAt = Instant.parse("2026-07-23T06:49:40Z");
-
-        ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
-                TRADE_DATE,
-                report(
-                        Instant.parse("2026-07-23T06:49:00Z"), true,
-                        new BigDecimal("0.99"), true, List.of()),
-                decisionAt,
-                decisionAt
-        );
-
-        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.NO_TRADE);
-    }
-
-    @Test
-    void blocksRunStartedBeforeButPersistedOneSecondAfterFinalDeadline() {
-        Instant decisionAt = Instant.parse("2026-07-23T06:49:41Z");
-
-        ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
-                TRADE_DATE,
-                report(
-                        Instant.parse("2026-07-23T06:49:00Z"), true,
-                        new BigDecimal("0.99"), true, List.of()),
-                decisionAt,
-                decisionAt
-        );
-
-        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
-        assertThat(result.blockedReasons()).containsExactly("FINAL_DEADLINE_EXPIRED");
-    }
-
-    @Test
     void downgradesWrongTradeDateToPreviewInsteadOfBlockingManualScan() {
         ShortTermFinalResultGate.Result result = gate.evaluateManual(
                 report(
@@ -154,7 +103,7 @@ class ShortTermManualResultGateTest {
         assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.CACHE_PREVIEW);
         assertThat(result.blockedReasons()).containsExactly("CUTOFF_WRONG_DATE");
         assertThat(result.message())
-                .isEqualTo("手动分析已完成，已生成策略候选；尾盘行情不是当日数据，结果仅供研究，不作为今日买点");
+                .isEqualTo("手动分析已完成，已生成策略候选；行情不是当日数据，结果仅供研究，不作为今日买点");
     }
 
     @Test
@@ -168,7 +117,7 @@ class ShortTermManualResultGateTest {
         assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.CACHE_PREVIEW);
         assertThat(result.blockedReasons()).containsExactly("CUTOFF_WRONG_DATE");
         assertThat(result.message())
-                .isEqualTo("手动分析已完成，当前无合格候选；尾盘行情不是当日数据，结果仅供研究，不作为今日买点");
+                .isEqualTo("手动分析已完成，当前无合格候选；行情不是当日数据，结果仅供研究，不作为今日买点");
     }
 
     @Test
@@ -263,21 +212,6 @@ class ShortTermManualResultGateTest {
     }
 
     @Test
-    void blocksScheduledResultWhenQuotesAreStale() {
-        Instant decisionAt = Instant.parse("2026-07-23T06:49:00Z");
-        ShortTermFinalResultGate.Result result = gate.evaluateScheduled(
-                TRADE_DATE,
-                report(
-                        Instant.parse("2026-07-23T06:45:00Z"), true,
-                        new BigDecimal("0.99"), true, List.of()),
-                decisionAt,
-                decisionAt);
-
-        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
-        assertThat(result.blockedReasons()).containsExactly("QUOTE_STALE");
-    }
-
-    @Test
     void allowsFreshlyFetchedAfterHoursSnapshotWhenMarketTimestampHasStopped() {
         Instant cutoff = Instant.parse("2026-07-23T08:12:02Z");
         Instant fetchedAt = Instant.parse("2026-07-23T10:03:17Z");
@@ -324,7 +258,6 @@ class ShortTermManualResultGateTest {
         Instant completedAt = Instant.parse("2026-08-01T02:10:20Z");
 
         ShortTermAutomationSettings settings = mock(ShortTermAutomationSettings.class);
-        when(settings.finalDeadline()).thenReturn(LocalTime.parse("14:49:40"));
         when(settings.freshness()).thenReturn(Duration.ofMinutes(3));
         TradingClockService tradingClock = mock(TradingClockService.class);
         when(tradingClock.currentMarketDate()).thenReturn(closedDate);

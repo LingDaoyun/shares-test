@@ -318,33 +318,7 @@ CREATE INDEX IF NOT EXISTS idx_v2_ledger_symbol_provenance_time
 CREATE INDEX IF NOT EXISTS idx_v2_ledger_strategy_time
   ON v2_recommendation_ledger(strategy_code, strategy_version, decision_at);
 
-CREATE TABLE IF NOT EXISTS short_term_scheduled_snapshot (
-  snapshot_key VARCHAR(160) PRIMARY KEY,
-  trade_date DATE NOT NULL,
-  stage VARCHAR(32) NOT NULL,
-  status VARCHAR(32) NOT NULL,
-  parameter_fingerprint VARCHAR(64) NOT NULL,
-  parameters_json TEXT NOT NULL,
-  report_json TEXT,
-  report_payload_hash VARCHAR(64),
-  payload_committed_by_at TIMESTAMP WITH TIME ZONE,
-  data_cutoff_at TIMESTAMP WITH TIME ZONE,
-  started_at TIMESTAMP WITH TIME ZONE NOT NULL,
-  completed_at TIMESTAMP WITH TIME ZONE,
-  attempt_count INTEGER NOT NULL,
-  message VARCHAR(1000) NOT NULL,
-  blocked_reason VARCHAR(2000),
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL
-);
-
-ALTER TABLE short_term_scheduled_snapshot
-  ADD COLUMN IF NOT EXISTS report_payload_hash VARCHAR(64);
-
-ALTER TABLE short_term_scheduled_snapshot
-  ADD COLUMN IF NOT EXISTS payload_committed_by_at TIMESTAMP WITH TIME ZONE;
-
-CREATE INDEX IF NOT EXISTS idx_short_term_snapshot_latest
-  ON short_term_scheduled_snapshot(trade_date, updated_at, snapshot_key);
+DROP TABLE IF EXISTS short_term_scheduled_snapshot;
 
 CREATE TABLE IF NOT EXISTS short_term_signal_observation (
   observation_id VARCHAR(64) PRIMARY KEY,
@@ -427,18 +401,4 @@ CREATE TABLE IF NOT EXISTS runtime_config_section (
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS short_term_leader_snapshot (
-  snapshot_id VARCHAR(64) PRIMARY KEY,
-  rule_version VARCHAR(80) NOT NULL,
-  trade_date DATE NOT NULL,
-  captured_at TIMESTAMP WITH TIME ZONE NOT NULL,
-  snapshot_json TEXT NOT NULL,
-  risk_json TEXT,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL
-);
-
-ALTER TABLE short_term_leader_snapshot
-  ADD COLUMN IF NOT EXISTS risk_json TEXT;
-
-CREATE INDEX IF NOT EXISTS idx_short_term_leader_snapshot_baseline
-  ON short_term_leader_snapshot(rule_version, trade_date, captured_at, snapshot_id);
+DROP TABLE IF EXISTS short_term_leader_snapshot;
