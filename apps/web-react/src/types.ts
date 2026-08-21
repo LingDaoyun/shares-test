@@ -951,6 +951,41 @@ export interface ShortTermCrossSectionContext {
   dataGaps: string[]
 }
 
+export type ShortTermLeaderRiskStatus = 'WARNING' | 'CLEAR' | 'BASELINE_BUILDING' | 'UNAVAILABLE'
+export type ShortTermLeaderRiskBaseline = 'PREVIOUS_SCAN' | 'PREVIOUS_TRADING_DAY' | 'INITIAL'
+export type ShortTermLeaderRiskTrack = 'WEIGHT' | 'THEME'
+
+export interface ShortTermLeaderRiskSignal {
+  track: ShortTermLeaderRiskTrack
+  symbol: string
+  name: string
+  direction: string | null
+  currentChangePercent: number | null
+  baselineChangePercent: number | null
+  changeDeltaPercentPoints: number | null
+  currentAmountRank: number | null
+  baselineAmountRank: number | null
+  amountSharePercent: number | null
+  totalMarketValue: number | null
+  reason: string
+}
+
+export interface ShortTermLeaderRisk {
+  ruleVersion: string
+  status: ShortTermLeaderRiskStatus
+  baselineType: ShortTermLeaderRiskBaseline
+  baselineAt: string | null
+  signals: ShortTermLeaderRiskSignal[]
+  dominantCandidateIndustry: string | null
+  candidateConcentrationPercent: number | null
+  directionConflict: boolean
+  summary: string
+  evidence: string
+  dataGaps: string[]
+  advisoryOnly: boolean
+  evaluatedAt: string | null
+}
+
 export interface ShortTermReport {
   scope: string
   universeCount: number
@@ -975,6 +1010,7 @@ export interface ShortTermReport {
   technicalReviewCoverage?: ShortTermTechnicalReviewCoverage | null
   crossSectionContext?: ShortTermCrossSectionContext | null
   marketRegime?: ShortTermMarketRegime | null
+  leaderRisk?: ShortTermLeaderRisk | null
 }
 
 export interface ShortTermValidationCohortRequest {

@@ -10,6 +10,7 @@ import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOv
 import { Loader } from '../components/ui/Loader'
 import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
 import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
+import { ShortTermLeaderRiskCard } from '../components/shortterm/ShortTermLeaderRiskCard'
 import {
   hasClosedShortTermScoreSnapshot,
   ShortTermSignalEvidencePanel
@@ -267,6 +268,8 @@ export function ShortTermPage() {
               <MarketFundDirectionCard direction={report.marketFundDirection} />
             ) : null}
           </div>
+
+          <ShortTermLeaderRiskCard risk={report.leaderRisk} />
 
           {viewPreferences.methodologyVisible ? (
             <MethodologyCard methodology={report.methodology} />
