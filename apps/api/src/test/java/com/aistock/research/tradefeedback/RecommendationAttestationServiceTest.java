@@ -183,7 +183,8 @@ class RecommendationAttestationServiceTest {
                 NOW,
                 technicalCoverage,
                 crossSectionContext,
-                marketRegime
+                marketRegime,
+                List.of()
         );
 
         ShortTermReport attested = service.attest(report);

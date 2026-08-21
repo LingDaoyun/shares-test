@@ -58,7 +58,8 @@ class RecommendationControllerAttestationTest {
         ShortTermController controller = new ShortTermController(
                 service,
                 jobs,
-                attestations
+                attestations,
+                mock(com.aistock.research.shortterm.ShortTermLimitUpBoardService.class)
         );
 
         assertThat(controller.report(null, null, null, null,null, null, null, null, null, null)).isSameAs(report);
