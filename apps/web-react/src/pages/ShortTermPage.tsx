@@ -25,7 +25,7 @@ import { formatThreeDayVolumeComparison } from '../lib/shortTermVolume'
 import { loadShortTermViewPreferences, saveShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import type { ShortTermViewPreferences } from '../lib/shortTermViewPreferences'
 import { useShortTermScanStore } from '../store/shortTermScanStore'
-import type { ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermSupportReversalSignal, ShortTermTailSignal, ShortTermValidationBatchRequest, ShortTermValidationSummary, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
+import type { ShortTermCandidate, ShortTermGoldenCrossSnapshot, ShortTermGreenLongLowerShadowCandidate, ShortTermHotDirection, ShortTermIndustryFundDirection, ShortTermMarketFundDirection, ShortTermReport, ShortTermSupportReversalSignal, ShortTermTailSignal, ShortTermValidationBatchRequest, ShortTermValidationSummary, ShortTermWeightProfile, TradingAdvice, V2StrategyBundleParams } from '../types'
 
 interface DraftParams {
   limit: number
@@ -265,6 +265,10 @@ export function ShortTermPage() {
               <div className="p-5"><Loader text="暂无候选" /></div>
             )}
           </Card>
+
+          <GreenLongLowerShadowCard
+            candidates={report.greenLongLowerShadowCandidates ?? []}
+          />
 
           <DetailOverlay
             open={selected !== null}
@@ -607,6 +611,80 @@ function CandidateRow({
         <Tag tone={tailTone(candidate.tailSignal.status)}>{candidate.tailSignal.statusLabel}</Tag>
       </div>
     </button>
+  )
+}
+
+function GreenLongLowerShadowCard({
+  candidates
+}: {
+  candidates: ShortTermGreenLongLowerShadowCandidate[]
+}) {
+  return (
+    <Card
+      title={(
+        <span className="inline-flex items-center gap-2">
+          <CandlestickChart className="h-4 w-4 text-emerald-600" />
+          绿K长下影优先
+        </span>
+      )}
+      extra={<Tag tone={candidates.length ? 'success' : 'neutral'}>{candidates.length} 只</Tag>}
+      flush
+    >
+      <div className="border-b border-line-soft bg-emerald-50/50 px-5 py-3 text-xs leading-relaxed text-emerald-800">
+        与右侧候选共用本次扫描；仅按绿K小实体和长下影形态独立排序，不代表已经形成买入动作。
+      </div>
+      {candidates.length ? (
+        <div className="divide-y divide-line-soft">
+          {candidates.map((candidate) => (
+            <div
+              key={candidate.symbol}
+              className="grid grid-cols-1 gap-3 px-5 py-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto]"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="tabular text-xs font-semibold text-ink-400">#{candidate.rank}</span>
+                  <h3 className="truncate text-base font-semibold text-ink-900">{candidate.name}</h3>
+                  <span className="font-mono text-xs text-ink-400">{candidate.symbol}</span>
+                  <Tag tone="success">下影 {formatNumber(candidate.lowerShadowPercent)}%</Tag>
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                  {candidate.market ?? 'A股'} · {candidate.industry ?? '行业待补'} · 实体不超过 15%
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
+                <Metric label="每股" value={formatPerSharePrice(candidate.latestPrice)} compact />
+                <Metric
+                  label="涨跌幅"
+                  value={<span className={changeClass(candidate.changePercent)}>{formatSignedPercent(candidate.changePercent)}</span>}
+                  compact
+                />
+                <Metric label="下影线占比" value={`${formatNumber(candidate.lowerShadowPercent)}%`} compact />
+                <Metric label="实体占比" value={`${formatNumber(candidate.bodyPercent)}%`} compact />
+                <Metric
+                  label="开 / 高 / 低"
+                  value={`${formatPrice(candidate.openPrice)} / ${formatPrice(candidate.highPrice)} / ${formatPrice(candidate.lowPrice)}`}
+                  compact
+                />
+                <Metric label="成交额" value={formatAmount(candidate.amount)} compact />
+                <Metric label="换手率" value={`${formatNumber(candidate.turnoverRate)}%`} compact />
+                <Metric label="行情时点" value={formatDateTime(candidate.quoteFreshness.marketTimestamp)} compact />
+              </div>
+
+              <div className="flex items-center md:justify-end">
+                <Tag tone={candidate.provisional ? 'warning' : 'success'}>
+                  {candidate.provisional ? '盘中暂定' : '正式日K'}
+                </Tag>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="px-5 py-6 text-sm text-ink-500">
+          本次扫描未发现实体不超过 15%、下影线占比达到 50% 的绿K
+        </p>
+      )}
+    </Card>
   )
 }
 

@@ -37,7 +37,7 @@ public class EastMoneyClient {
 
     private static final Logger logger = LoggerFactory.getLogger(EastMoneyClient.class);
     private static final Charset GB18030 = Charset.forName("GB18030");
-    private static final String QUOTE_FIELDS = "f2,f3,f5,f6,f8,f9,f12,f13,f14,f20,f23,f60,f100,f115,f124";
+    private static final String QUOTE_FIELDS = "f2,f3,f5,f6,f8,f9,f12,f13,f14,f15,f16,f17,f20,f23,f60,f100,f115,f124";
     private static final ZoneId CHINA_MARKET_ZONE = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter TENCENT_QUOTE_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final String FUND_FLOW_FIELDS = "f12,f13,f14,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f124";
@@ -1439,7 +1439,10 @@ public class EastMoneyClient {
                 fetchedAt,
                 tradeDate(marketTimestamp),
                 marketTimestamp,
-                positiveOrNull(decimal(item, "f20"))
+                positiveOrNull(decimal(item, "f20")),
+                positiveOrNull(scaled(item, "f17", 2)),
+                positiveOrNull(scaled(item, "f15", 2)),
+                positiveOrNull(scaled(item, "f16", 2))
         ));
     }
 
@@ -1480,7 +1483,11 @@ public class EastMoneyClient {
                 quoteUrl(symbol),
                 fetchedAt,
                 tradeDate(marketTimestamp),
-                marketTimestamp
+                marketTimestamp,
+                null,
+                positiveOrNull(decimal(fields[5])),
+                positiveOrNull(decimal(fields[33])),
+                positiveOrNull(decimal(fields[34]))
         ));
     }
 

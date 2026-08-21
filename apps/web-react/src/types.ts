@@ -896,6 +896,25 @@ export interface QuoteFreshnessSnapshot {
   reason: string
 }
 
+export interface ShortTermGreenLongLowerShadowCandidate {
+  rank: number
+  symbol: string
+  name: string
+  market: string | null
+  industry: string | null
+  latestPrice: number | null
+  changePercent: number | null
+  openPrice: number | null
+  highPrice: number | null
+  lowPrice: number | null
+  bodyPercent: number
+  lowerShadowPercent: number
+  amount: number | null
+  turnoverRate: number | null
+  quoteFreshness: QuoteFreshnessSnapshot
+  provisional: boolean
+}
+
 export interface ShortTermCandidate {
   rank: number
   symbol: string
@@ -975,6 +994,7 @@ export interface ShortTermReport {
   technicalReviewCoverage?: ShortTermTechnicalReviewCoverage | null
   crossSectionContext?: ShortTermCrossSectionContext | null
   marketRegime?: ShortTermMarketRegime | null
+  greenLongLowerShadowCandidates?: ShortTermGreenLongLowerShadowCandidate[]
 }
 
 export interface ShortTermValidationCohortRequest {
