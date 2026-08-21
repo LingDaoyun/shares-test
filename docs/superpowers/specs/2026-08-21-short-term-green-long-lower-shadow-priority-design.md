@@ -42,8 +42,12 @@ dayRange = high - low
 lowerShadowPercent =
   (min(open, latestPrice) - low) / dayRange * 100
 
+bodyPercent =
+  abs(latestPrice - open) / dayRange * 100
+
 matched = greenCandle
   and dayRange > 0
+  and bodyPercent <= 15
   and lowerShadowPercent >= 50
 ```
 
@@ -51,9 +55,12 @@ Because a matched candle is green, `min(open, latestPrice)` is normally the
 latest price. The general formula is retained so the calculation remains
 auditable.
 
+The `15%` body ceiling keeps the result close to the requested small-body
+green-candle shape while allowing more practical intraday variation than a
+strict `10%` ceiling.
+
 The independent shape does **not** require:
 
-- a maximum body percentage;
 - an upper-shadow limit;
 - touching or reclaiming MA5, MA10, MA20, or the previous 20-day high;
 - a particular daily percentage-change interval;
@@ -99,7 +106,7 @@ to understand the match without pretending it passed the full candidate model:
 - symbol, name, market, and industry;
 - latest price and daily change percentage;
 - open, high, and low;
-- lower-shadow percentage;
+- body percentage and lower-shadow percentage;
 - traded amount and turnover rate;
 - quote market timestamp and freshness state.
 
@@ -125,7 +132,8 @@ Each compact row shows:
 - independent lane rank;
 - stock name and symbol;
 - latest price and daily change;
-- lower-shadow percentage as the primary value;
+- lower-shadow percentage as the primary value and body percentage as the
+  shape constraint;
 - open/high/low and traded amount as supporting evidence;
 - `盘中暂定` or `正式日K` according to the scan timestamp.
 
@@ -153,10 +161,11 @@ other verification unless the user explicitly requests it again.
 
 Acceptance cases for the user to check after implementation are:
 
-- a green candle at exactly `50.00%` lower shadow appears;
+- a green candle with a `15.00%` body and exactly `50.00%` lower shadow appears;
 - a green candle below `50.00%` does not appear;
+- a green candle whose body exceeds `15.00%` does not appear;
 - a red candle with the same lower shadow does not appear;
-- body size, upper-shadow size, and support reclaim do not affect membership;
+- upper-shadow size and support reclaim do not affect membership;
 - the dedicated lane is directly below `右侧候选` and comes from the same scan;
 - longer lower shadows appear before shorter qualifying lower shadows;
 - the existing main candidate ranks and actions do not change.
