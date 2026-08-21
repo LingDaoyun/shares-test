@@ -141,6 +141,7 @@ export function ShortTermPage() {
 
   return (
     <div className="flex flex-col gap-4">
+      <LimitUpBoardPanel />
       <Card
         title={
           <span className="inline-flex items-center gap-2">
@@ -221,8 +222,6 @@ export function ShortTermPage() {
           </p>
         </div>
       </Card>
-
-      <LimitUpBoardPanel />
 
       {error && <Card className="border-red-200 bg-red-50 text-sm text-red-700">{error}</Card>}
       {loading && !report ? (
