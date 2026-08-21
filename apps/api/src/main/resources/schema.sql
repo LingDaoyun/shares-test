@@ -433,8 +433,12 @@ CREATE TABLE IF NOT EXISTS short_term_leader_snapshot (
   trade_date DATE NOT NULL,
   captured_at TIMESTAMP WITH TIME ZONE NOT NULL,
   snapshot_json TEXT NOT NULL,
+  risk_json TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
+
+ALTER TABLE short_term_leader_snapshot
+  ADD COLUMN IF NOT EXISTS risk_json TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_short_term_leader_snapshot_baseline
   ON short_term_leader_snapshot(rule_version, trade_date, captured_at, snapshot_id);

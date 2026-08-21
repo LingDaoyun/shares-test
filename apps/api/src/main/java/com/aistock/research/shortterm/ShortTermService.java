@@ -339,6 +339,41 @@ public class ShortTermService {
         return buildReport(request == null ? ShortTermScanRequest.empty() : request, Set.of(), false);
     }
 
+    public ShortTermLeaderRisk captureLeaderRiskCheckpoint() {
+        AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(FULL_MARKET_QUOTE_REQUEST);
+        LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
+        List<EastMoneyQuote> marketQuotes = uniqueMarketQuotes(quoteSnapshot.quotes());
+        List<EastMoneyQuote> pointInTimeCoverageQuotes = marketQuotes.stream()
+                .filter(quote -> quoteAvailableAtDecision(quote, decisionAt, false))
+                .toList();
+        List<EastMoneyQuote> marketContextUniverse = pointInTimeCoverageQuotes.stream()
+                .filter(this::isAshareContextQuote)
+                .filter(this::hasUsablePrice)
+                .toList();
+        ShortTermCoverageSnapshot coverage = coverageSnapshot(
+                quoteSnapshot,
+                marketQuotes,
+                marketContextUniverse,
+                decisionAt,
+                true,
+                false
+        );
+        Instant capturedAt = dataCutoffAt(pointInTimeCoverageQuotes, List.of());
+        if (capturedAt == null) {
+            capturedAt = quoteSnapshot.fetchedAt() == null
+                    ? decisionAt.atZone(SHANGHAI).toInstant()
+                    : quoteSnapshot.fetchedAt();
+        }
+        return leaderRiskModule.captureCheckpoint(new ShortTermLeaderRiskInput(
+                decisionAt.toLocalDate(),
+                capturedAt,
+                coverage,
+                marketContextUniverse,
+                resolveHotDirections(marketContextUniverse),
+                List.of()
+        ));
+    }
+
     public ShortTermReport finalReport(ShortTermScanRequest request, Set<String> preselectedSymbols) {
         if (preselectedSymbols == null || preselectedSymbols.isEmpty()) {
             throw new IllegalArgumentException("当日预选股票为空，不能执行尾盘终选");

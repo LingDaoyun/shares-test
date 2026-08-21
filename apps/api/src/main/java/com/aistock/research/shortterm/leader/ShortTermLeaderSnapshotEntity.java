@@ -28,6 +28,9 @@ public class ShortTermLeaderSnapshotEntity {
     @Column(name = "snapshot_json", nullable = false, columnDefinition = "TEXT")
     private String snapshotJson;
 
+    @Column(name = "risk_json", columnDefinition = "TEXT")
+    private String riskJson;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -40,6 +43,7 @@ public class ShortTermLeaderSnapshotEntity {
             LocalDate tradeDate,
             Instant capturedAt,
             String snapshotJson,
+            String riskJson,
             Instant createdAt
     ) {
         this.snapshotId = snapshotId;
@@ -47,7 +51,19 @@ public class ShortTermLeaderSnapshotEntity {
         this.tradeDate = tradeDate;
         this.capturedAt = capturedAt;
         this.snapshotJson = snapshotJson;
+        this.riskJson = riskJson;
         this.createdAt = createdAt;
+    }
+
+    public ShortTermLeaderSnapshotEntity(
+            String snapshotId,
+            String ruleVersion,
+            LocalDate tradeDate,
+            Instant capturedAt,
+            String snapshotJson,
+            Instant createdAt
+    ) {
+        this(snapshotId, ruleVersion, tradeDate, capturedAt, snapshotJson, null, createdAt);
     }
 
     public String getSnapshotId() {
@@ -68,6 +84,10 @@ public class ShortTermLeaderSnapshotEntity {
 
     public String getSnapshotJson() {
         return snapshotJson;
+    }
+
+    public String getRiskJson() {
+        return riskJson;
     }
 
     public Instant getCreatedAt() {

@@ -20,7 +20,7 @@ public record ShortTermLeaderRisk(
         Instant evaluatedAt
 ) {
 
-    private static final String CURRENT_RULE_VERSION = "short-term-leader-risk-v1-sensitive";
+    private static final String CURRENT_RULE_VERSION = "short-term-leader-risk-v2-scheduled-day";
 
     public ShortTermLeaderRisk {
         ruleVersion = text(ruleVersion);

@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 public interface ShortTermLeaderSnapshotRepository
@@ -20,5 +21,12 @@ public interface ShortTermLeaderSnapshotRepository
     findFirstByRuleVersionAndTradeDateLessThanOrderByTradeDateDescCapturedAtDescSnapshotIdDesc(
             String ruleVersion,
             LocalDate tradeDate
+    );
+
+    List<ShortTermLeaderSnapshotEntity>
+    findByRuleVersionAndTradeDateAndCapturedAtLessThanOrderByCapturedAtAscSnapshotIdAsc(
+            String ruleVersion,
+            LocalDate tradeDate,
+            Instant capturedAt
     );
 }

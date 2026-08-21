@@ -968,6 +968,8 @@ export interface ShortTermLeaderRiskSignal {
   amountSharePercent: number | null
   totalMarketValue: number | null
   reason: string
+  detectedAt?: string | null
+  movementState?: 'DETECTED' | 'ONGOING' | 'RECEDED'
 }
 
 export interface ShortTermLeaderRisk {

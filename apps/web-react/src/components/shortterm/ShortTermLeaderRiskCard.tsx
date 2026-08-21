@@ -16,9 +16,9 @@ interface ShortTermLeaderRiskCardProps {
 }
 
 const baselineLabels: Record<ShortTermLeaderRiskBaseline, string> = {
-  PREVIOUS_SCAN: '盘中上次扫描',
-  PREVIOUS_TRADING_DAY: '上一交易日',
-  INITIAL: '基线建立中'
+  PREVIOUS_SCAN: '当天最近后台观察点',
+  PREVIOUS_TRADING_DAY: '上一交易日尾盘观察点',
+  INITIAL: '尚无后台观察点'
 }
 
 const trackLabels: Record<ShortTermLeaderRiskTrack, string> = {
@@ -34,28 +34,28 @@ const statusPresentation: Record<ShortTermLeaderRiskStatus, {
   icon: ReactNode
 }> = {
   WARNING: {
-    label: '异动警示',
+    label: '发现资金切换风险',
     tone: 'warning',
     cardClass: 'border-amber-200 bg-amber-50/60',
     eyebrowClass: 'text-amber-700',
     icon: <AlertTriangle className="h-4 w-4 text-amber-600" aria-hidden="true" />
   },
   BASELINE_BUILDING: {
-    label: '基线建立中',
+    label: '等待后台观察',
     tone: 'sky',
     cardClass: 'border-sky-200 bg-sky-50/60',
     eyebrowClass: 'text-sky-700',
     icon: <CircleDashed className="h-4 w-4 text-sky-600" aria-hidden="true" />
   },
   CLEAR: {
-    label: '当前平稳',
+    label: '暂未发现明显异动',
     tone: 'success',
     cardClass: 'border-emerald-200 bg-emerald-50/40',
     eyebrowClass: 'text-emerald-700',
     icon: <CheckCircle2 className="h-4 w-4 text-emerald-600" aria-hidden="true" />
   },
   UNAVAILABLE: {
-    label: '暂不可用',
+    label: '本次无法判断',
     tone: 'neutral',
     cardClass: 'border-line-soft bg-line-soft/30',
     eyebrowClass: 'text-ink-500',
@@ -67,6 +67,12 @@ export function ShortTermLeaderRiskCard({ risk }: ShortTermLeaderRiskCardProps) 
   if (!risk) return null
 
   const presentation = statusPresentation[risk.status]
+  const hasRecededSignals = risk.signals.some((signal) => signal.movementState === 'RECEDED')
+  const statusLabel = risk.status === 'CLEAR' && hasRecededSignals
+    ? '今日异动已回落'
+    : presentation.label
+  const waitingForCheckpoint = risk.status === 'BASELINE_BUILDING'
+  const unavailable = risk.status === 'UNAVAILABLE'
 
   return (
     <div aria-live={risk.status === 'WARNING' ? 'polite' : undefined}>
@@ -75,30 +81,36 @@ export function ShortTermLeaderRiskCard({ risk }: ShortTermLeaderRiskCardProps) 
         title={(
           <span className="inline-flex items-center gap-2">
             {presentation.icon}
-            龙头异动风险
+            龙头资金切换提醒
           </span>
         )}
-        extra={<Tag tone={presentation.tone}>{presentation.label}</Tag>}
+        extra={<Tag tone={presentation.tone}>{statusLabel}</Tag>}
       >
-        <div className={`eyebrow ${presentation.eyebrowClass}`}>LEADER ROTATION WATCH</div>
-        <p className="mt-2 text-sm font-semibold leading-relaxed text-ink-800">{risk.summary}</p>
+        <p className={`text-sm font-semibold leading-relaxed text-ink-800 ${presentation.eyebrowClass}`}>
+          {risk.summary}
+        </p>
         {risk.evidence ? (
-          <p className="mt-1 text-xs leading-relaxed text-ink-600">依据：{risk.evidence}</p>
+          <p className="mt-1 text-xs leading-relaxed text-ink-600">判断依据：{risk.evidence}</p>
         ) : null}
+
+        <p className="mt-3 rounded-lg bg-white/70 px-3 py-2 text-xs leading-relaxed text-ink-600">
+          后台每天在 09:50、11:30、14:40 自动观察，你无需重复点击扫描。
+          {waitingForCheckpoint ? ' 当前尚无可比较的后台观察点，这不代表没有风险。' : ''}
+        </p>
 
         <div className="mt-4 grid gap-x-6 gap-y-3 border-y border-line-soft py-3 text-xs md:grid-cols-2 xl:grid-cols-4">
           <RiskFact
-            label="对比基线"
+            label="最近对比点"
             value={baselineSummary(risk.baselineType, risk.baselineAt)}
           />
           <RiskFact
             label="候选结构"
-            value={risk.status === 'UNAVAILABLE'
+            value={unavailable
               ? '暂无法评估'
               : `候选集中：${candidateConcentration(risk.dominantCandidateIndustry, risk.candidateConcentrationPercent)}`}
           />
           <RiskFact
-            label="方向关系"
+            label="与候选方向的关系"
             value={directionRelationship(risk.status, risk.directionConflict)}
             valueClass={isEvaluatedStatus(risk.status) && risk.directionConflict ? 'text-amber-800' : 'text-ink-700'}
           />
@@ -107,7 +119,7 @@ export function ShortTermLeaderRiskCard({ risk }: ShortTermLeaderRiskCardProps) 
 
         {risk.signals.length ? (
           <div className="mt-4">
-            <div className="text-xs font-semibold text-ink-700">异动信号</div>
+            <div className="text-xs font-semibold text-ink-700">今日龙头变化</div>
             <div className="mt-1 divide-y divide-line-soft border-y border-line-soft">
               {risk.signals.map((signal, index) => (
                 <LeaderRiskSignalRow
@@ -148,17 +160,22 @@ function LeaderRiskSignalRow({ signal }: { signal: ShortTermLeaderRiskSignal }) 
   ].filter((item): item is string => item !== null)
 
   const rankFact = amountRankSummary(signal.currentAmountRank, signal.baselineAmountRank)
+  const movement = movementPresentation(signal.movementState)
 
   return (
     <div className="py-3 first:pt-2 last:pb-2">
       <div className="flex flex-wrap items-center gap-2">
         <Tag tone={signal.track === 'WEIGHT' ? 'brand' : 'sky'}>{trackLabels[signal.track]}</Tag>
+        <Tag tone={movement.tone}>{movement.label}</Tag>
         <span className="text-sm font-semibold text-ink-800">{signal.name}</span>
         <span className="font-mono text-xs text-ink-500">{signal.symbol}</span>
         {signal.direction ? <Tag tone="neutral">{signal.direction}</Tag> : null}
       </div>
 
       <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-ink-600">
+        {signal.detectedAt ? (
+          <span className="tabular">发现时间 {formatDateTime(signal.detectedAt)}</span>
+        ) : null}
         {changeFacts.map((fact) => <span key={fact} className="tabular">{fact}</span>)}
         {rankFact ? <span className="tabular">{rankFact}</span> : null}
         {signal.amountSharePercent !== null ? (
@@ -205,7 +222,7 @@ function candidateConcentration(industry: string | null, concentrationPercent: n
 
 function directionRelationship(status: ShortTermLeaderRiskStatus, directionConflict: boolean) {
   if (status === 'UNAVAILABLE') return '暂无法评估'
-  if (status === 'BASELINE_BUILDING') return '待下一次可靠扫描确认'
+  if (status === 'BASELINE_BUILDING') return '等待下一个后台观察点'
   return directionConflict ? '候选方向与异动方向冲突' : '未发现候选方向冲突'
 }
 
@@ -224,4 +241,10 @@ function amountRankSummary(currentRank: number | null, baselineRank: number | nu
 
 function formatPercentPoints(value: number) {
   return formatSignedPercent(value).replace('%', ' 个百分点')
+}
+
+function movementPresentation(state: ShortTermLeaderRiskSignal['movementState']) {
+  if (state === 'ONGOING') return { label: '仍在强化', tone: 'warning' as const }
+  if (state === 'RECEDED') return { label: '已经回落', tone: 'neutral' as const }
+  return { label: '本次发现', tone: 'sky' as const }
 }

@@ -4,6 +4,7 @@ import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import com.aistock.research.shortterm.ShortTermCoverageSnapshot;
 import com.aistock.research.shortterm.ShortTermHotDirection;
 import com.aistock.research.shortterm.leader.ShortTermLeaderRisk.BaselineType;
+import com.aistock.research.shortterm.leader.ShortTermLeaderRiskSignal.MovementState;
 import com.aistock.research.shortterm.leader.ShortTermLeaderSnapshot.DirectionObservation;
 import com.aistock.research.shortterm.leader.ShortTermLeaderSnapshot.LeaderObservation;
 import com.aistock.research.shortterm.leader.ShortTermLeaderSnapshot.WeightObservation;
@@ -26,7 +27,7 @@ import java.util.stream.Collectors;
 @Service
 public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModule {
 
-    static final String RULE_VERSION = "short-term-leader-risk-v1-sensitive";
+    static final String RULE_VERSION = "short-term-leader-risk-v2-scheduled-day";
     private static final BigDecimal WEIGHT_MARKET_CAP_COHORT = new BigDecimal("0.05");
     private static final BigDecimal WEIGHT_ACTIVE_AMOUNT_COHORT = new BigDecimal("0.10");
     private static final BigDecimal WEIGHT_MIN_RISE = new BigDecimal("2.00");
@@ -52,12 +53,28 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
     public ShortTermLeaderRisk evaluate(ShortTermLeaderRiskInput input) {
         if (!reliable(input)) return unavailableCoverage(input);
         ShortTermLeaderSnapshot current = snapshot(input);
-        Baseline baseline = baseline(current);
-        ShortTermLeaderRisk risk = baseline.snapshot() == null
-                ? baselineBuilding(current, input.candidateIndustries())
-                : compare(current, baseline, input.candidateIndustries());
-        snapshotStore.save(current);
+        ShortTermLeaderRisk currentRisk = currentRisk(current, input.candidateIndustries(), false);
+        return aggregateIntraday(current, input.candidateIndustries(), currentRisk);
+    }
+
+    @Override
+    public ShortTermLeaderRisk captureCheckpoint(ShortTermLeaderRiskInput input) {
+        if (!reliable(input)) return unavailableCoverage(input);
+        ShortTermLeaderSnapshot current = snapshot(input);
+        ShortTermLeaderRisk risk = currentRisk(current, List.of(), true);
+        snapshotStore.saveCheckpoint(current, risk);
         return risk;
+    }
+
+    private ShortTermLeaderRisk currentRisk(
+            ShortTermLeaderSnapshot current,
+            List<String> candidateIndustries,
+            boolean checkpointCapture
+    ) {
+        Baseline baseline = baseline(current);
+        return baseline.snapshot() == null
+                ? baselineBuilding(current, candidateIndustries, checkpointCapture)
+                : compare(current, baseline, candidateIndustries);
     }
 
     private boolean reliable(ShortTermLeaderRiskInput input) {
@@ -261,7 +278,8 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
 
     private ShortTermLeaderRisk baselineBuilding(
             ShortTermLeaderSnapshot current,
-            List<String> candidateIndustries
+            List<String> candidateIndustries,
+            boolean checkpointCapture
     ) {
         CandidateConcentration concentration = candidateConcentration(candidateIndustries);
         return new ShortTermLeaderRisk(
@@ -273,8 +291,12 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
                 concentration.industry(),
                 concentration.percent(),
                 false,
-                "首次可靠快照已建立，当前强势、基线建立中。",
-                "已保存本次全市场成交额排名、占比和龙头观察池，下一次可靠扫描开始差分。",
+                checkpointCapture
+                        ? "首个后台观察点已保存，暂时还不能判断龙头异动。"
+                        : "后台基线尚未建立，本次暂不能判断异动，不代表没有风险。",
+                checkpointCapture
+                        ? "下一次后台观察将从本次全市场排名开始比较。"
+                        : "后台会在09:50、11:30、14:40自动建立观察点，无需重复点击扫描。",
                 dataGaps(current, null),
                 true,
                 current.capturedAt()
@@ -289,6 +311,10 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
         List<ShortTermLeaderRiskSignal> signals = new ArrayList<>();
         signals.addAll(weightSignals(current, baseline.snapshot()));
         signals.addAll(themeSignals(current, baseline.snapshot()));
+        signals = signals.stream()
+                .map(signal -> withMovement(
+                        signal, current.capturedAt(), MovementState.DETECTED, signal.reason()))
+                .toList();
         List<ShortTermLeaderRiskSignal> strongest = signals.stream()
                 .sorted(signalComparator())
                 .limit(MAX_SIGNALS)
@@ -304,11 +330,11 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
                 : ShortTermLeaderRisk.Status.WARNING;
         String summary;
         if (strongest.isEmpty()) {
-            summary = "未检测到达到阈值的龙头增强。";
+            summary = "暂未发现明显龙头异动。";
         } else if (directionConflict) {
-            summary = "候选方向集中且与新异动方向不同，需防范资金切换。";
+            summary = "发现资金切换风险：候选方向与新异动龙头不同。";
         } else {
-            summary = "检测到" + strongest.size() + "条龙头增强信号，提示潜在资金切换风险。";
+            summary = "发现" + strongest.size() + "条龙头强化信号，需留意资金切换。";
         }
         return new ShortTermLeaderRisk(
                 RULE_VERSION,
@@ -320,11 +346,205 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
                 concentration.percent(),
                 directionConflict,
                 summary,
-                "仅比较快照内涨幅、全市场成交额排名和成交额占比；不直接比较跨时点累计成交额。",
+                "比较后台观察点之间的涨幅、全市场成交额排名和占比，不直接比较跨时点累计成交额。",
                 dataGaps(current, baseline.snapshot()),
                 true,
                 current.capturedAt()
         );
+    }
+
+    private ShortTermLeaderRisk aggregateIntraday(
+            ShortTermLeaderSnapshot current,
+            List<String> candidateIndustries,
+            ShortTermLeaderRisk currentRisk
+    ) {
+        List<ShortTermLeaderCheckpoint> checkpoints = snapshotStore.sameDayCheckpointsBefore(
+                RULE_VERSION, current.tradeDate(), current.capturedAt());
+        if (checkpoints.isEmpty()) {
+            return currentRisk;
+        }
+
+        Map<String, ShortTermLeaderRiskSignal> merged = new LinkedHashMap<>();
+        for (ShortTermLeaderCheckpoint checkpoint : checkpoints) {
+            if (checkpoint == null || checkpoint.snapshot() == null
+                    || checkpoint.risk() == null
+                    || checkpoint.risk().status() != ShortTermLeaderRisk.Status.WARNING) {
+                continue;
+            }
+            for (ShortTermLeaderRiskSignal signal : checkpoint.risk().signals()) {
+                Instant detectedAt = signal.detectedAt() == null
+                        ? checkpoint.snapshot().capturedAt()
+                        : signal.detectedAt();
+                ShortTermLeaderRiskSignal refreshed = refreshHistoricalSignal(
+                        current, signal, detectedAt);
+                merged.putIfAbsent(signalKey(signal), refreshed);
+            }
+        }
+
+        for (ShortTermLeaderRiskSignal signal : currentRisk.signals()) {
+            String key = signalKey(signal);
+            ShortTermLeaderRiskSignal previous = merged.get(key);
+            Instant detectedAt = previous == null || previous.detectedAt() == null
+                    ? current.capturedAt()
+                    : previous.detectedAt();
+            MovementState movementState = previous == null
+                    ? MovementState.DETECTED
+                    : MovementState.ONGOING;
+            merged.put(key, withMovement(signal, detectedAt, movementState, signal.reason()));
+        }
+
+        if (merged.isEmpty()) {
+            return currentRisk;
+        }
+
+        List<ShortTermLeaderRiskSignal> allSignals = List.copyOf(merged.values());
+        List<ShortTermLeaderRiskSignal> activeSignals = allSignals.stream()
+                .filter(signal -> signal.movementState() != MovementState.RECEDED)
+                .toList();
+        List<ShortTermLeaderRiskSignal> strongest = allSignals.stream()
+                .sorted(Comparator.comparingInt(this::movementPriority)
+                        .thenComparing(signalComparator()))
+                .limit(MAX_SIGNALS)
+                .toList();
+
+        CandidateConcentration concentration = candidateConcentration(candidateIndustries);
+        boolean directionConflict = concentration.percent().compareTo(CONCENTRATED_CANDIDATE_PERCENT) >= 0
+                && !activeSignals.isEmpty()
+                && activeSignals.stream().allMatch(signal -> !signal.direction().isBlank()
+                && !sameDirection(concentration.industry(), signal.direction()));
+        boolean activeRisk = !activeSignals.isEmpty();
+        String summary;
+        if (!activeRisk) {
+            summary = "今日曾出现龙头异动，目前已经回落，暂未发现新的强化。";
+        } else if (directionConflict) {
+            summary = "发现资金切换风险：今日异动龙头仍在强化，且与当前候选方向不同。";
+        } else if (activeSignals.stream().anyMatch(
+                signal -> signal.movementState() == MovementState.DETECTED)) {
+            summary = "发现新的龙头强化信号，需留意资金切换。";
+        } else {
+            summary = "今日早些时候发现的龙头异动仍在强化。";
+        }
+
+        return new ShortTermLeaderRisk(
+                RULE_VERSION,
+                activeRisk ? ShortTermLeaderRisk.Status.WARNING : ShortTermLeaderRisk.Status.CLEAR,
+                currentRisk.baselineType(),
+                currentRisk.baselineAt(),
+                strongest,
+                concentration.industry(),
+                concentration.percent(),
+                directionConflict,
+                summary,
+                "后台在09:50、11:30、14:40保存观察点；本次合并当天已出现的信号并判断当前是否仍然强势。",
+                currentRisk.dataGaps(),
+                true,
+                current.capturedAt()
+        );
+    }
+
+    private ShortTermLeaderRiskSignal refreshHistoricalSignal(
+            ShortTermLeaderSnapshot current,
+            ShortTermLeaderRiskSignal signal,
+            Instant detectedAt
+    ) {
+        if (signal.track() == ShortTermLeaderRiskSignal.Track.WEIGHT) {
+            WeightObservation observation = current.weights().stream()
+                    .filter(value -> value.symbol().equals(signal.symbol()))
+                    .findFirst()
+                    .orElse(null);
+            int activeRankLimit = fractionCohortSize(
+                    current.quoteCount(), WEIGHT_ACTIVE_AMOUNT_COHORT, 20);
+            boolean active = observation != null
+                    && atLeast(observation.changePercent(), WEIGHT_MIN_RISE)
+                    && observation.amountRank() != null
+                    && observation.amountRank() <= activeRankLimit;
+            if (!active) {
+                return withMovement(signal, detectedAt, MovementState.RECEDED, signal.reason());
+            }
+            return new ShortTermLeaderRiskSignal(
+                    signal.track(),
+                    observation.symbol(),
+                    observation.name(),
+                    observation.industry(),
+                    observation.changePercent(),
+                    signal.baselineChangePercent(),
+                    difference(observation.changePercent(), signal.baselineChangePercent()),
+                    observation.amountRank(),
+                    signal.baselineAmountRank(),
+                    observation.amountSharePercent(),
+                    observation.totalMarketValue(),
+                    signal.reason(),
+                    detectedAt,
+                    MovementState.ONGOING
+            );
+        }
+
+        DirectionObservation direction = current.directions().stream()
+                .filter(value -> sameDirection(value.label(), signal.direction()))
+                .findFirst()
+                .orElse(null);
+        LeaderObservation leader = findLeader(direction, signal.symbol());
+        int activeRankLimit = fractionCohortSize(
+                current.quoteCount(), THEME_ACTIVE_AMOUNT_COHORT, 30);
+        boolean active = leader != null
+                && atLeast(leader.changePercent(), THEME_MIN_RISE)
+                && leader.amountRank() != null
+                && leader.amountRank() <= activeRankLimit;
+        if (!active) {
+            return withMovement(signal, detectedAt, MovementState.RECEDED, signal.reason());
+        }
+        return new ShortTermLeaderRiskSignal(
+                signal.track(),
+                leader.symbol(),
+                leader.name(),
+                direction.label(),
+                leader.changePercent(),
+                signal.baselineChangePercent(),
+                difference(leader.changePercent(), signal.baselineChangePercent()),
+                leader.amountRank(),
+                signal.baselineAmountRank(),
+                leader.amountSharePercent(),
+                leader.totalMarketValue(),
+                signal.reason(),
+                detectedAt,
+                MovementState.ONGOING
+        );
+    }
+
+    private ShortTermLeaderRiskSignal withMovement(
+            ShortTermLeaderRiskSignal signal,
+            Instant detectedAt,
+            MovementState movementState,
+            String reason
+    ) {
+        return new ShortTermLeaderRiskSignal(
+                signal.track(),
+                signal.symbol(),
+                signal.name(),
+                signal.direction(),
+                signal.currentChangePercent(),
+                signal.baselineChangePercent(),
+                signal.changeDeltaPercentPoints(),
+                signal.currentAmountRank(),
+                signal.baselineAmountRank(),
+                signal.amountSharePercent(),
+                signal.totalMarketValue(),
+                reason,
+                detectedAt,
+                movementState
+        );
+    }
+
+    private String signalKey(ShortTermLeaderRiskSignal signal) {
+        return signal.track() + "|" + signal.symbol() + "|" + normalizeDirection(signal.direction());
+    }
+
+    private int movementPriority(ShortTermLeaderRiskSignal signal) {
+        return switch (signal.movementState()) {
+            case DETECTED -> 0;
+            case ONGOING -> 1;
+            case RECEDED -> 2;
+        };
     }
 
     private List<ShortTermLeaderRiskSignal> weightSignals(

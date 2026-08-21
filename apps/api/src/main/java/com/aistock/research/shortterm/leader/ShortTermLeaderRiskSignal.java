@@ -1,6 +1,7 @@
 package com.aistock.research.shortterm.leader;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Objects;
 
 public record ShortTermLeaderRiskSignal(
@@ -15,7 +16,9 @@ public record ShortTermLeaderRiskSignal(
         Integer baselineAmountRank,
         BigDecimal amountSharePercent,
         BigDecimal totalMarketValue,
-        String reason
+        String reason,
+        Instant detectedAt,
+        MovementState movementState
 ) {
 
     public ShortTermLeaderRiskSignal {
@@ -26,6 +29,28 @@ public record ShortTermLeaderRiskSignal(
         currentChangePercent = currentChangePercent == null ? BigDecimal.ZERO : currentChangePercent;
         amountSharePercent = amountSharePercent == null ? BigDecimal.ZERO : amountSharePercent;
         reason = text(reason);
+        movementState = movementState == null ? MovementState.DETECTED : movementState;
+    }
+
+    public ShortTermLeaderRiskSignal(
+            Track track,
+            String symbol,
+            String name,
+            String direction,
+            BigDecimal currentChangePercent,
+            BigDecimal baselineChangePercent,
+            BigDecimal changeDeltaPercentPoints,
+            Integer currentAmountRank,
+            Integer baselineAmountRank,
+            BigDecimal amountSharePercent,
+            BigDecimal totalMarketValue,
+            String reason
+    ) {
+        this(
+                track, symbol, name, direction, currentChangePercent, baselineChangePercent,
+                changeDeltaPercentPoints, currentAmountRank, baselineAmountRank,
+                amountSharePercent, totalMarketValue, reason, null, MovementState.DETECTED
+        );
     }
 
     private static String text(String value) {
@@ -33,4 +58,6 @@ public record ShortTermLeaderRiskSignal(
     }
 
     public enum Track { WEIGHT, THEME }
+
+    public enum MovementState { DETECTED, ONGOING, RECEDED }
 }
