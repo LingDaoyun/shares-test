@@ -9,6 +9,7 @@ import org.springframework.web.client.RestClient;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -346,6 +347,83 @@ class EastMoneyClientTest {
         assertThat(electronics.marketTimestamp()).isEqualTo(Instant.parse("2026-08-07T06:12:45Z"));
         assertThat(electronics.tradeDate()).isEqualTo(LocalDate.parse("2026-08-07"));
         assertThat(electronics.sourceUrl()).isEqualTo("https://push2delay.eastmoney.com/api/qt/clist/get");
+    }
+
+    @Test
+    void shouldParseLimitUpPoolEntriesFromTopicPoolPayload() throws Exception {
+        String payload = "{\"rc\":0,\"data\":{\"tc\":2,\"pool\":["
+                + "{\"c\":\"000017\",\"m\":0,\"n\":\"深中华A\",\"p\":7110,\"zdp\":10.06,\"amount\":294182288,"
+                + "\"ltsz\":3134244071.61,\"tshare\":4900104838.08,\"hs\":9.43,\"lbc\":2,\"fbt\":92500,"
+                + "\"lbt\":93909,\"fund\":39809601,\"zbc\":1,\"hybk\":\"饰品\",\"zttj\":{\"days\":2,\"ct\":2}},"
+                + "{\"c\":\"002209\",\"m\":0,\"n\":\"达 意 隆\",\"p\":13160,\"zdp\":10.03,\"amount\":206290574,"
+                + "\"hs\":9.93,\"lbc\":1,\"fbt\":92500,\"lbt\":94236,\"fund\":23922248,\"zbc\":1,"
+                + "\"hybk\":\"专用设备\",\"zttj\":{\"days\":1,\"ct\":1}}"
+                + "]}}";
+
+        List<EastMoneyLimitUpPoolEntry> entries = client.readLimitUpPoolEntries(
+                objectMapper.readTree(payload).path("data").path("pool"));
+
+        assertThat(entries).hasSize(2);
+        EastMoneyLimitUpPoolEntry first = entries.get(0);
+        assertThat(first.symbol()).isEqualTo("000017");
+        assertThat(first.name()).isEqualTo("深中华A");
+        assertThat(first.industry()).isEqualTo("饰品");
+        assertThat(first.latestPrice()).isEqualByComparingTo(new BigDecimal("7.11"));
+        assertThat(first.changePercent()).isEqualByComparingTo(new BigDecimal("10.06"));
+        assertThat(first.amount()).isEqualByComparingTo(new BigDecimal("294182288"));
+        assertThat(first.turnoverRate()).isEqualByComparingTo(new BigDecimal("9.43"));
+        assertThat(first.consecutiveBoards()).isEqualTo(2);
+        assertThat(first.statDays()).isEqualTo(2);
+        assertThat(first.statBoards()).isEqualTo(2);
+        assertThat(first.firstSealTime()).isEqualTo(LocalTime.of(9, 25, 0));
+        assertThat(first.lastSealTime()).isEqualTo(LocalTime.of(9, 39, 9));
+        assertThat(first.sealBreakCount()).isEqualTo(1);
+        assertThat(first.sealFunds()).isEqualByComparingTo(new BigDecimal("39809601"));
+    }
+
+    @Test
+    void shouldParseBrokenBoardAndLimitDownPoolEntries() throws Exception {
+        String brokenPayload = "{\"rc\":0,\"data\":{\"tc\":1,\"pool\":["
+                + "{\"c\":\"600250\",\"m\":1,\"n\":\"南京商旅\",\"p\":9150,\"ztp\":10160,\"zdp\":-0.97,"
+                + "\"amount\":528110016,\"hs\":17.43,\"fbt\":93030,\"zbc\":1,\"zf\":11.25,"
+                + "\"zttj\":{\"days\":2,\"ct\":1},\"hybk\":\"旅游及景\"}"
+                + "]}}";
+        String limitDownPayload = "{\"rc\":0,\"data\":{\"tc\":1,\"pool\":["
+                + "{\"c\":\"603102\",\"m\":1,\"n\":\"百合股份\",\"p\":39720,\"zdp\":-9.99,\"amount\":284086912,"
+                + "\"fund\":4202376,\"lbt\":150000,\"days\":1,\"oc\":13,\"hybk\":\"食品加工\"}"
+                + "]}}";
+
+        List<EastMoneyBrokenBoardPoolEntry> broken = client.readBrokenBoardPoolEntries(
+                objectMapper.readTree(brokenPayload).path("data").path("pool"));
+        List<EastMoneyLimitDownPoolEntry> limitDown = client.readLimitDownPoolEntries(
+                objectMapper.readTree(limitDownPayload).path("data").path("pool"));
+
+        assertThat(broken).singleElement().satisfies(entry -> {
+            assertThat(entry.symbol()).isEqualTo("600250");
+            assertThat(entry.industry()).isEqualTo("旅游及景");
+            assertThat(entry.latestPrice()).isEqualByComparingTo(new BigDecimal("9.15"));
+            assertThat(entry.limitUpPrice()).isEqualByComparingTo(new BigDecimal("10.16"));
+            assertThat(entry.changePercent()).isEqualByComparingTo(new BigDecimal("-0.97"));
+            assertThat(entry.firstSealTime()).isEqualTo(LocalTime.of(9, 30, 30));
+            assertThat(entry.sealBreakCount()).isEqualTo(1);
+        });
+        assertThat(limitDown).singleElement().satisfies(entry -> {
+            assertThat(entry.symbol()).isEqualTo("603102");
+            assertThat(entry.industry()).isEqualTo("食品加工");
+            assertThat(entry.changePercent()).isEqualByComparingTo(new BigDecimal("-9.99"));
+            assertThat(entry.sealFunds()).isEqualByComparingTo(new BigDecimal("4202376"));
+            assertThat(entry.lastSealTime()).isEqualTo(LocalTime.of(15, 0, 0));
+            assertThat(entry.openCount()).isEqualTo(13);
+        });
+    }
+
+    @Test
+    void shouldBuildLimitPoolUrlWithTradeDateAndSort() {
+        assertThat(client.limitPoolUrl("getTopicZTPool", LocalDate.of(2026, 8, 21), "fbt:asc"))
+                .contains("getTopicZTPool")
+                .contains("dpt=wz.ztzt")
+                .contains("sort=fbt%3Aasc")
+                .contains("date=20260821");
     }
 
     @Test

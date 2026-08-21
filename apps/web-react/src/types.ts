@@ -1095,6 +1095,59 @@ export interface ShortTermHotDirection {
   evidence: string
 }
 
+export interface ShortTermLimitUpStock {
+  symbol: string
+  name: string
+  industry: string | null
+  latestPrice: number | null
+  changePercent: number | null
+  amount: number | null
+  turnoverRate: number | null
+  consecutiveBoards: number
+  statDays: number
+  statBoards: number
+  sealFunds: number | null
+  firstSealTime: string | null
+  lastSealTime: string | null
+  sealBreakCount: number
+}
+
+export interface ShortTermLimitUpIndustryStat {
+  industry: string
+  limitUpCount: number
+  maxConsecutiveBoards: number
+  totalAmount: number | null
+  leaders: string[]
+}
+
+export interface ShortTermLimitUpSentiment {
+  limitUpCount: number
+  brokenCount: number | null
+  limitDownCount: number | null
+  sealBreakRatioPercent: number | null
+  maxConsecutiveBoards: number
+  boards2PlusCount: number
+  boards3PlusCount: number
+  sealedBeforeTenCount: number
+  sealedMorningCount: number
+  sealedAfternoonCount: number
+  sealedTailCount: number
+  earlySealSharePercent: number | null
+  tone: string
+  explanation: string
+}
+
+export interface ShortTermLimitUpBoardSnapshot {
+  tradeDate: string
+  fetchedAt: string
+  available: boolean
+  unavailableReason: string | null
+  stocks: ShortTermLimitUpStock[]
+  industryStats: ShortTermLimitUpIndustryStat[]
+  sentiment: ShortTermLimitUpSentiment | null
+  dataGaps: string[]
+}
+
 export interface ShortTermRiskExclusion {
   symbol: string
   name: string

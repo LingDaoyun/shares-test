@@ -16,6 +16,7 @@ import type {
   RecommendationEvidenceBundle,
   ShortTermReport,
   ShortTermScanJobStatus,
+  ShortTermLimitUpBoardSnapshot,
   ShortTermValidationBatchRequest,
   ShortTermValidationSummary,
   RuleDefinition,
@@ -135,6 +136,14 @@ export function startShortTermScanJob(params: ShortTermParams = {}) {
 
 export function fetchShortTermScanJob(jobId: string) {
   return http.get<ShortTermScanJobStatus>(`/short-term/scan-jobs/${jobId}`).then((res) => res.data)
+}
+
+export function fetchShortTermLimitUpBoard(date?: string) {
+  return http
+    .get<ShortTermLimitUpBoardSnapshot>('/short-term/limit-up-board', {
+      params: date ? { date } : undefined
+    })
+    .then((res) => res.data)
 }
 
 export function fetchShortTermValidationSummaries(request: ShortTermValidationBatchRequest) {

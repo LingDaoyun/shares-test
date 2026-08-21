@@ -16,6 +16,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -513,6 +514,156 @@ public class EastMoneyClient {
             readIndustryFundFlow(item, fetchedAt, sourceUrl).ifPresent(snapshots::add);
         }
         return List.copyOf(snapshots);
+    }
+
+    public List<EastMoneyLimitUpPoolEntry> fetchLimitUpPool(LocalDate date) {
+        String url = limitPoolUrl("getTopicZTPool", date, "fbt:asc");
+        try {
+            JsonNode pool = objectMapper.readTree(fetchBodyWithCurl(url, null, "https://quote.eastmoney.com/"))
+                    .path("data")
+                    .path("pool");
+            return readLimitUpPoolEntries(pool);
+        } catch (Exception exception) {
+            throw new IllegalStateException("东方财富涨停池数据获取失败", exception);
+        }
+    }
+
+    public List<EastMoneyBrokenBoardPoolEntry> fetchBrokenBoardPool(LocalDate date) {
+        String url = limitPoolUrl("getTopicZBPool", date, "fbt:asc");
+        try {
+            JsonNode pool = objectMapper.readTree(fetchBodyWithCurl(url, null, "https://quote.eastmoney.com/"))
+                    .path("data")
+                    .path("pool");
+            return readBrokenBoardPoolEntries(pool);
+        } catch (Exception exception) {
+            throw new IllegalStateException("东方财富炸板池数据获取失败", exception);
+        }
+    }
+
+    public List<EastMoneyLimitDownPoolEntry> fetchLimitDownPool(LocalDate date) {
+        String url = limitPoolUrl("getTopicDTPool", date, "fund:asc");
+        try {
+            JsonNode pool = objectMapper.readTree(fetchBodyWithCurl(url, null, "https://quote.eastmoney.com/"))
+                    .path("data")
+                    .path("pool");
+            return readLimitDownPoolEntries(pool);
+        } catch (Exception exception) {
+            throw new IllegalStateException("东方财富跌停池数据获取失败", exception);
+        }
+    }
+
+    String limitPoolUrl(String topic, LocalDate date, String sort) {
+        LocalDate safeDate = date == null ? LocalDate.now(CHINA_MARKET_ZONE) : date;
+        return "https://push2ex.eastmoney.com/" + topic
+                + "?ut=7eea3edcaed734bea9cbfc24409ed989"
+                + "&dpt=wz.ztzt"
+                + "&Pageindex=0"
+                + "&pagesize=10000"
+                + "&sort=" + encodeQueryValue(sort)
+                + "&date=" + safeDate.format(DateTimeFormatter.BASIC_ISO_DATE);
+    }
+
+    List<EastMoneyLimitUpPoolEntry> readLimitUpPoolEntries(JsonNode pool) {
+        List<EastMoneyLimitUpPoolEntry> entries = new ArrayList<>();
+        for (JsonNode item : poolItems(pool)) {
+            String symbol = text(item, "c");
+            String name = text(item, "n");
+            if (symbol == null || symbol.isBlank() || name == null) {
+                continue;
+            }
+            JsonNode stat = item.path("zttj");
+            entries.add(new EastMoneyLimitUpPoolEntry(
+                    symbol,
+                    name,
+                    text(item, "hybk"),
+                    scaledThousandth(item, "p"),
+                    decimal(item, "zdp"),
+                    decimal(item, "amount"),
+                    decimal(item, "hs"),
+                    decimal(item, "ltsz"),
+                    Math.max(0, integer(item, "lbc")),
+                    stat.path("days").asInt(0),
+                    stat.path("ct").asInt(0),
+                    decimal(item, "fund"),
+                    sealTime(item, "fbt"),
+                    sealTime(item, "lbt"),
+                    Math.max(0, integer(item, "zbc"))
+            ));
+        }
+        return List.copyOf(entries);
+    }
+
+    List<EastMoneyBrokenBoardPoolEntry> readBrokenBoardPoolEntries(JsonNode pool) {
+        List<EastMoneyBrokenBoardPoolEntry> entries = new ArrayList<>();
+        for (JsonNode item : poolItems(pool)) {
+            String symbol = text(item, "c");
+            String name = text(item, "n");
+            if (symbol == null || symbol.isBlank() || name == null) {
+                continue;
+            }
+            entries.add(new EastMoneyBrokenBoardPoolEntry(
+                    symbol,
+                    name,
+                    text(item, "hybk"),
+                    scaledThousandth(item, "p"),
+                    scaledThousandth(item, "ztp"),
+                    decimal(item, "zdp"),
+                    decimal(item, "amount"),
+                    sealTime(item, "fbt"),
+                    Math.max(0, integer(item, "zbc"))
+            ));
+        }
+        return List.copyOf(entries);
+    }
+
+    List<EastMoneyLimitDownPoolEntry> readLimitDownPoolEntries(JsonNode pool) {
+        List<EastMoneyLimitDownPoolEntry> entries = new ArrayList<>();
+        for (JsonNode item : poolItems(pool)) {
+            String symbol = text(item, "c");
+            String name = text(item, "n");
+            if (symbol == null || symbol.isBlank() || name == null) {
+                continue;
+            }
+            entries.add(new EastMoneyLimitDownPoolEntry(
+                    symbol,
+                    name,
+                    text(item, "hybk"),
+                    scaledThousandth(item, "p"),
+                    decimal(item, "zdp"),
+                    decimal(item, "amount"),
+                    decimal(item, "fund"),
+                    sealTime(item, "lbt"),
+                    Math.max(0, integer(item, "oc"))
+            ));
+        }
+        return List.copyOf(entries);
+    }
+
+    private Iterable<JsonNode> poolItems(JsonNode pool) {
+        if (pool == null || !pool.isArray()) {
+            return List.of();
+        }
+        return pool;
+    }
+
+    private BigDecimal scaledThousandth(JsonNode node, String field) {
+        BigDecimal raw = decimal(node, field);
+        if (raw == null) {
+            return null;
+        }
+        return raw.divide(new BigDecimal("1000"), 3, RoundingMode.HALF_UP).stripTrailingZeros();
+    }
+
+    private LocalTime sealTime(JsonNode node, String field) {
+        int raw = integer(node, field);
+        if (raw <= 0) {
+            return null;
+        }
+        try {
+            return LocalTime.of(raw / 10000, (raw / 100) % 100, raw % 100);
+        } catch (DateTimeException exception) {
+            return null;
+        }
     }
 
     public List<EastMoneyFundFlowPoint> fetchFundFlowMinutes(String symbol, int limit) {

@@ -145,6 +145,7 @@ public class ShortTermService {
     private final ShortTermAutomationSettings automationSettings;
     private final ShortTermChipAnalysisService chipAnalysisService;
     private final ShortTermChipSettings chipSettings;
+    private final ShortTermLimitUpBoardService limitUpBoardService;
     private final ShortTermMomentumQualityEvaluator momentumQualityEvaluator = new ShortTermMomentumQualityEvaluator();
     private final ShortTermSupportReversalEvaluator supportReversalEvaluator = new ShortTermSupportReversalEvaluator();
     private final ShortTermCoreSignalScorer coreSignalScorer = new ShortTermCoreSignalScorer();
@@ -238,7 +239,8 @@ public class ShortTermService {
             ShortTermTradePlanService tradePlanService,
             ShortTermAutomationSettings automationSettings,
             ShortTermChipAnalysisService chipAnalysisService,
-            ShortTermChipSettings chipSettings
+            ShortTermChipSettings chipSettings,
+            ShortTermLimitUpBoardService limitUpBoardService
     ) {
         this.eastMoneyClient = eastMoneyClient;
         this.evidenceCompletenessService = evidenceCompletenessService;
@@ -249,6 +251,32 @@ public class ShortTermService {
         this.automationSettings = automationSettings;
         this.chipAnalysisService = chipAnalysisService;
         this.chipSettings = chipSettings;
+        this.limitUpBoardService = limitUpBoardService;
+    }
+
+    public ShortTermService(
+            EastMoneyClient eastMoneyClient,
+            EvidenceCompletenessService evidenceCompletenessService,
+            TradingClockService tradingClockService,
+            QuoteFreshnessService quoteFreshnessService,
+            ShortTermTechnicalSignalEvaluator technicalSignalEvaluator,
+            ShortTermTradePlanService tradePlanService,
+            ShortTermAutomationSettings automationSettings,
+            ShortTermChipAnalysisService chipAnalysisService,
+            ShortTermChipSettings chipSettings
+    ) {
+        this(
+                eastMoneyClient,
+                evidenceCompletenessService,
+                tradingClockService,
+                quoteFreshnessService,
+                technicalSignalEvaluator,
+                tradePlanService,
+                automationSettings,
+                chipAnalysisService,
+                chipSettings,
+                null
+        );
     }
 
     public ShortTermReport report(
@@ -358,11 +386,13 @@ public class ShortTermService {
         List<EastMoneyQuote> preFilteredQuotes = quoteUniverse.stream()
                 .filter(quote -> passesQuotePreFilter(quote, ruleSet, unstableIndustrySymbols))
                 .toList();
-        ShortTermMarketSentiment marketSentiment = marketSentiment(marketContextUniverse, coverage);
+        ShortTermLimitUpSentiment limitUpPulse = currentLimitUpPulse();
+        ShortTermMarketSentiment marketSentiment = marketSentiment(marketContextUniverse, coverage, limitUpPulse);
         ShortTermMarketRegime marketRegime = marketRegimeClassifier.classify(
                 marketContextUniverse,
                 coverage,
-                marketSentiment
+                marketSentiment,
+                limitUpPulse
         );
         ShortTermMarketFundDirection marketFundDirection = marketFundDirection(marketContextUniverse);
         List<ShortTermHotDirection> hotDirections = resolveHotDirections(marketContextUniverse);
@@ -1364,9 +1394,24 @@ public class ShortTermService {
                 || revenueAndProfitDeteriorating;
     }
 
+    private ShortTermLimitUpSentiment currentLimitUpPulse() {
+        if (limitUpBoardService == null) {
+            return null;
+        }
+        return limitUpBoardService.currentPulse().orElse(null);
+    }
+
     private ShortTermMarketSentiment marketSentiment(
             List<EastMoneyQuote> quotes,
             ShortTermCoverageSnapshot coverage
+    ) {
+        return marketSentiment(quotes, coverage, null);
+    }
+
+    private ShortTermMarketSentiment marketSentiment(
+            List<EastMoneyQuote> quotes,
+            ShortTermCoverageSnapshot coverage,
+            ShortTermLimitUpSentiment limitUpPulse
     ) {
         if (!coverage.executionReliable()) {
             return new ShortTermMarketSentiment(
@@ -1385,13 +1430,21 @@ public class ShortTermService {
         int declining = 0;
         int limitUpLike = 0;
         int limitDownLike = 0;
+        boolean poolLimitUp = limitUpPulse != null;
+        boolean poolLimitDown = limitUpPulse != null && limitUpPulse.limitDownCount() != null;
         for (EastMoneyQuote quote : quotes) {
             BigDecimal change = quote.changePercent();
             if (change == null) continue;
             if (change.compareTo(BigDecimal.ZERO) > 0) advancing++;
             if (change.compareTo(BigDecimal.ZERO) < 0) declining++;
-            if (AsharePriceLimitRule.isLimitUpLike(quote.symbol(), change)) limitUpLike++;
-            if (AsharePriceLimitRule.isLimitDownLike(quote.symbol(), change)) limitDownLike++;
+            if (!poolLimitUp && AsharePriceLimitRule.isLimitUpLike(quote.symbol(), change)) limitUpLike++;
+            if (!poolLimitDown && AsharePriceLimitRule.isLimitDownLike(quote.symbol(), change)) limitDownLike++;
+        }
+        if (poolLimitUp) {
+            limitUpLike = limitUpPulse.limitUpCount();
+        }
+        if (poolLimitDown) {
+            limitDownLike = limitUpPulse.limitDownCount();
         }
         int total = advancing + declining;
         BigDecimal breadth = total == 0 ? BigDecimal.ZERO
@@ -1430,6 +1483,9 @@ public class ShortTermService {
                 + "，平均涨幅 " + hotCluster.averageChangePercent() + "%"
                 + "，成交额 " + moneyInYi(hotCluster.totalAmount()) + "；这种环境只允许围绕热点方向轻仓试错。"
                 : "基于全市场涨跌广度、涨停近似数和跌停近似数；情绪状态只用于仓位和加仓闸门，不单独产生买点。";
+        if (limitUpPulse != null) {
+            explanation = explanation + " 涨停/跌停家数取自东方财富涨停池实测，替代涨跌幅近似。";
+        }
         return new ShortTermMarketSentiment(phase, score.setScale(2, RoundingMode.HALF_UP), advancing, declining,
                 limitUpLike, limitDownLike, breadth,
                 explanation);

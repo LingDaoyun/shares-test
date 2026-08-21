@@ -8,6 +8,7 @@ import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOverlay'
 import { Loader } from '../components/ui/Loader'
+import { LimitUpBoardPanel } from '../components/shortterm/LimitUpBoardPanel'
 import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
 import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
 import {
@@ -220,6 +221,8 @@ export function ShortTermPage() {
           </p>
         </div>
       </Card>
+
+      <LimitUpBoardPanel />
 
       {error && <Card className="border-red-200 bg-red-50 text-sm text-red-700">{error}</Card>}
       {loading && !report ? (

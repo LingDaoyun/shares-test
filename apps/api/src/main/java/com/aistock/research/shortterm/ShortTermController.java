@@ -1,6 +1,7 @@
 package com.aistock.research.shortterm;
 
 import com.aistock.research.tradefeedback.RecommendationAttestationService;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 @RestController
 @RequestMapping("/api/short-term")
@@ -18,15 +20,25 @@ public class ShortTermController {
     private final ShortTermService shortTermService;
     private final ShortTermScanJobService scanJobService;
     private final RecommendationAttestationService attestationService;
+    private final ShortTermLimitUpBoardService limitUpBoardService;
 
     public ShortTermController(
             ShortTermService shortTermService,
             ShortTermScanJobService scanJobService,
-            RecommendationAttestationService attestationService
+            RecommendationAttestationService attestationService,
+            ShortTermLimitUpBoardService limitUpBoardService
     ) {
         this.shortTermService = shortTermService;
         this.scanJobService = scanJobService;
         this.attestationService = attestationService;
+        this.limitUpBoardService = limitUpBoardService;
+    }
+
+    @GetMapping("/limit-up-board")
+    public ShortTermLimitUpBoardSnapshot limitUpBoard(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+    ) {
+        return limitUpBoardService.snapshot(date);
     }
 
     @GetMapping("/report")

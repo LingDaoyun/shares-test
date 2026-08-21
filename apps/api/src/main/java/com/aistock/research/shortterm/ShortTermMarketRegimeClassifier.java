@@ -20,6 +20,19 @@ public class ShortTermMarketRegimeClassifier {
             ShortTermCoverageSnapshot coverage,
             ShortTermMarketSentiment sentiment
     ) {
+        return classify(source, coverage, sentiment, null);
+    }
+
+    /**
+     * limitUpPulse 非空时用真实涨停池计数替代涨跌幅近似，其余判定口径不变；
+     * 为空时行为与三参版本完全一致。
+     */
+    public ShortTermMarketRegime classify(
+            List<EastMoneyQuote> source,
+            ShortTermCoverageSnapshot coverage,
+            ShortTermMarketSentiment sentiment,
+            ShortTermLimitUpSentiment limitUpPulse
+    ) {
         if (coverage == null || !coverage.executionReliable() || coverage.coverageRatio() == null
                 || coverage.coverageRatio().compareTo(MIN_EXECUTABLE_COVERAGE) < 0) {
             return ShortTermMarketRegime.unavailable("全市场有效行情覆盖未通过95%，不推断市场状态");
@@ -41,12 +54,16 @@ public class ShortTermMarketRegimeClassifier {
                 .sorted(Comparator.naturalOrder())
                 .toList();
         long advancing = changes.stream().filter(value -> value.signum() > 0).count();
-        int limitUp = (int) quotes.stream()
-                .filter(quote -> AsharePriceLimitRule.isLimitUpLike(quote.symbol(), quote.changePercent()))
-                .count();
-        int limitDown = (int) quotes.stream()
-                .filter(quote -> AsharePriceLimitRule.isLimitDownLike(quote.symbol(), quote.changePercent()))
-                .count();
+        int limitUp = limitUpPulse != null
+                ? limitUpPulse.limitUpCount()
+                : (int) quotes.stream()
+                        .filter(quote -> AsharePriceLimitRule.isLimitUpLike(quote.symbol(), quote.changePercent()))
+                        .count();
+        int limitDown = limitUpPulse != null && limitUpPulse.limitDownCount() != null
+                ? limitUpPulse.limitDownCount()
+                : (int) quotes.stream()
+                        .filter(quote -> AsharePriceLimitRule.isLimitDownLike(quote.symbol(), quote.changePercent()))
+                        .count();
         BigDecimal breadth = percent(BigDecimal.valueOf(advancing), BigDecimal.valueOf(quotes.size()));
         BigDecimal median = median(changes);
         BigDecimal averageAbsolute = changes.stream()
@@ -113,6 +130,12 @@ public class ShortTermMarketRegimeClassifier {
         if (advancingTurnoverShare == null) {
             dataGaps.add("全市场成交额缺失，不能确认上涨侧资金参与度");
         }
+        if (limitUpPulse != null && limitUpPulse.brokenCount() == null) {
+            dataGaps.add("涨停池炸板数据缺失，炸板率未知");
+        }
+        if (limitUpPulse != null) {
+            explanation = explanation + " " + limitUpPoolEvidence(limitUpPulse);
+        }
         return new ShortTermMarketRegime(
                 state,
                 label,
@@ -127,6 +150,25 @@ public class ShortTermMarketRegimeClassifier {
                 explanation,
                 dataGaps
         );
+    }
+
+    private String limitUpPoolEvidence(ShortTermLimitUpSentiment pulse) {
+        StringBuilder text = new StringBuilder("涨停池实测：涨停 ")
+                .append(pulse.limitUpCount())
+                .append(" 家");
+        if (pulse.brokenCount() != null) {
+            text.append("、炸板 ").append(pulse.brokenCount()).append(" 家");
+            if (pulse.sealBreakRatioPercent() != null) {
+                text.append("（炸板率 ").append(pulse.sealBreakRatioPercent()).append("%）");
+            }
+        }
+        if (pulse.limitDownCount() != null) {
+            text.append("、跌停 ").append(pulse.limitDownCount()).append(" 家");
+        }
+        text.append("、最高 ")
+                .append(pulse.maxConsecutiveBoards())
+                .append(" 连板（东方财富涨停池，替代涨跌幅近似）。");
+        return text.toString();
     }
 
     private BigDecimal median(List<BigDecimal> values) {

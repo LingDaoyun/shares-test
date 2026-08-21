@@ -98,6 +98,56 @@ class ShortTermMarketRegimeClassifierTest {
         assertThat(regime.dataGaps()).anyMatch(gap -> gap.contains("涨跌幅样本覆盖"));
     }
 
+    @Test
+    void limitUpPoolPulseReplacesApproximateCountsAndEnrichesExplanation() {
+        List<EastMoneyQuote> quotes = market(70, "1.50", 30, "-0.20");
+        ShortTermLimitUpSentiment pulse = new ShortTermLimitUpSentiment(
+                80, 18, 13, new BigDecimal("18.37"), 5, 12, 4,
+                40, 20, 12, 8, new BigDecimal("50.00"), "情绪偏暖", "测试"
+        );
+
+        ShortTermMarketRegime regime = classifier.classify(
+                quotes, reliableCoverage(), sentiment("发酵", 70), pulse
+        );
+
+        assertThat(regime.limitUpRatioPercent()).isEqualByComparingTo(new BigDecimal("80.00"));
+        assertThat(regime.limitDownRatioPercent()).isEqualByComparingTo(new BigDecimal("13.00"));
+        assertThat(regime.explanation())
+                .contains("涨停池实测")
+                .contains("涨停 80 家")
+                .contains("炸板率 18.37%")
+                .contains("最高 5 连板");
+    }
+
+    @Test
+    void brokenPoolGapIsExposedWhenPulseLacksBrokenCount() {
+        List<EastMoneyQuote> quotes = market(70, "1.50", 30, "-0.20");
+        ShortTermLimitUpSentiment pulse = new ShortTermLimitUpSentiment(
+                80, null, null, null, 5, 12, 4,
+                40, 20, 12, 8, new BigDecimal("50.00"), "中性震荡", "测试"
+        );
+
+        ShortTermMarketRegime regime = classifier.classify(
+                quotes, reliableCoverage(), sentiment("发酵", 70), pulse
+        );
+
+        assertThat(regime.dataGaps()).anyMatch(gap -> gap.contains("炸板数据缺失"));
+    }
+
+    @Test
+    void nullPulseKeepsApproximateBehaviorUnchanged() {
+        List<EastMoneyQuote> quotes = market(70, "1.50", 30, "-0.20");
+
+        ShortTermMarketRegime withNullPulse = classifier.classify(
+                quotes, reliableCoverage(), sentiment("发酵", 70), null
+        );
+        ShortTermMarketRegime legacy = classifier.classify(
+                quotes, reliableCoverage(), sentiment("发酵", 70)
+        );
+
+        assertThat(withNullPulse).isEqualTo(legacy);
+    }
+
     private List<EastMoneyQuote> market(int positiveCount, String positive, int negativeCount, String negative) {
         return IntStream.range(0, positiveCount + negativeCount)
                 .mapToObj(index -> quote(
