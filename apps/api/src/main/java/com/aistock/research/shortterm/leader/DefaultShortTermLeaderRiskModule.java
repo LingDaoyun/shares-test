@@ -197,6 +197,7 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
                     text(direction.label()),
                     scale(direction.heatScore()),
                     index + 1,
+                    topLeaderResolved(direction, quoteBySymbol),
                     leaders
             ));
         }
@@ -233,6 +234,17 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
             }
         }
         return List.copyOf(leaders.values());
+    }
+
+    private boolean topLeaderResolved(
+            ShortTermHotDirection direction,
+            Map<String, EastMoneyQuote> quoteBySymbol
+    ) {
+        if (direction.leaders() == null || direction.leaders().isEmpty()) {
+            return false;
+        }
+        Matcher matcher = LEADER_SYMBOL.matcher(text(direction.leaders().get(0)));
+        return matcher.find() && quoteBySymbol.containsKey(matcher.group(1));
     }
 
     private Baseline baseline(ShortTermLeaderSnapshot current) {
@@ -380,6 +392,8 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
             String previousTopSymbol = firstLeaderSymbol(previousDirection);
             String currentTopSymbol = firstLeaderSymbol(direction);
             boolean leaderChanged = previousDirection != null
+                    && previousDirection.topLeaderResolved()
+                    && direction.topLeaderResolved()
                     && !previousTopSymbol.isBlank()
                     && !currentTopSymbol.isBlank()
                     && !currentTopSymbol.equals(previousTopSymbol);
@@ -474,17 +488,17 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
             gaps.add("热门方向缺失，题材龙头轨道不可用");
         }
         if (hasUnresolvedDirectionLeader(current)) {
-            gaps.add("当前热门方向龙头证据未解析，相关方向无法确认龙头变化");
+            gaps.add("当前热门方向首位龙头未解析，龙头证据不足，相关方向无法确认龙头变化");
         }
         if (baseline != null && hasUnresolvedDirectionLeader(baseline)) {
-            gaps.add("基准热门方向龙头证据未解析，相关方向无法确认龙头更替");
+            gaps.add("基准热门方向首位龙头未解析，龙头证据不足，相关方向无法确认龙头更替");
         }
         return List.copyOf(gaps);
     }
 
     private boolean hasUnresolvedDirectionLeader(ShortTermLeaderSnapshot snapshot) {
         return snapshot.directions().stream()
-                .anyMatch(direction -> direction.leaders().isEmpty());
+                .anyMatch(direction -> !direction.topLeaderResolved());
     }
 
     private LeaderObservation findLeader(DirectionObservation direction, String symbol) {

@@ -156,10 +156,46 @@ class DefaultShortTermLeaderRiskModuleTest {
                 List.of()
         ));
 
+        assertThat(risk.signals()).extracting(ShortTermLeaderRiskSignal::track)
+                .doesNotContain(ShortTermLeaderRiskSignal.Track.THEME);
+        assertThat(risk.status()).isEqualTo(ShortTermLeaderRisk.Status.CLEAR);
+        assertThat(risk.dataGaps()).anyMatch(gap -> gap.contains("基准热门方向首位龙头未解析"));
+    }
+
+    @Test
+    void partiallyResolvedBaselineDoesNotPromoteSecondLeaderOrManufactureReplacement() {
+        InMemorySnapshotStore store = new InMemorySnapshotStore();
+        ShortTermLeaderRiskModule module = new DefaultShortTermLeaderRiskModule(store);
+        List<String> unchangedEncodedLeaders = List.of(
+                "首位龙头(399999)",
+                "人工智能龙头(300001)"
+        );
+        module.evaluate(input(
+                BASELINE_DATE,
+                BASELINE_AT,
+                unchangedResolvedLeaderQuotes(BASELINE_DATE, BASELINE_AT),
+                List.of(direction(
+                        "THEME:AI", "人工智能", "100.00", "4.50", "4800",
+                        unchangedEncodedLeaders
+                )),
+                List.of()
+        ));
+
+        ShortTermLeaderRisk risk = module.evaluate(input(
+                CURRENT_DATE,
+                CURRENT_AT,
+                quotesWithResolvedTopLeader(),
+                List.of(direction(
+                        "THEME:AI", "人工智能", "100.00", "4.50", "4800",
+                        unchangedEncodedLeaders
+                )),
+                List.of()
+        ));
+
         assertThat(risk.status()).isEqualTo(ShortTermLeaderRisk.Status.CLEAR);
         assertThat(risk.signals()).extracting(ShortTermLeaderRiskSignal::track)
                 .doesNotContain(ShortTermLeaderRiskSignal.Track.THEME);
-        assertThat(risk.dataGaps()).anyMatch(gap -> gap.contains("基准热门方向龙头证据未解析"));
+        assertThat(risk.dataGaps()).anyMatch(gap -> gap.contains("基准热门方向首位龙头未解析"));
     }
 
     private ShortTermLeaderRiskInput input(
@@ -192,6 +228,18 @@ class DefaultShortTermLeaderRiskModuleTest {
 
     private List<EastMoneyQuote> unchangedResolvedLeaderQuotes(LocalDate tradeDate, Instant capturedAt) {
         return market("0.50", "4.50", "5.20", "120", "4800", "5000", tradeDate, capturedAt);
+    }
+
+    private List<EastMoneyQuote> quotesWithResolvedTopLeader() {
+        List<EastMoneyQuote> quotes = new ArrayList<>(
+                unchangedResolvedLeaderQuotes(CURRENT_DATE, CURRENT_AT)
+        );
+        quotes.remove(quotes.size() - 1);
+        quotes.add(quote(
+                "399999", "首位龙头", "软件服务", "4.50", "4900",
+                "90000000000", CURRENT_DATE, CURRENT_AT
+        ));
+        return List.copyOf(quotes);
     }
 
     private List<EastMoneyQuote> multiThemeQuotes(boolean current) {

@@ -44,6 +44,7 @@ public record ShortTermLeaderSnapshot(
             String label,
             BigDecimal heatScore,
             int rank,
+            boolean topLeaderResolved,
             List<LeaderObservation> leaders
     ) {
 
