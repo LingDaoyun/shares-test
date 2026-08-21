@@ -261,7 +261,7 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
                 false,
                 "首次可靠快照已建立，当前强势、基线建立中。",
                 "已保存本次全市场成交额排名、占比和龙头观察池，下一次可靠扫描开始差分。",
-                dataGaps(current),
+                dataGaps(current, null),
                 true,
                 current.capturedAt()
         );
@@ -282,8 +282,8 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
 
         CandidateConcentration concentration = candidateConcentration(candidateIndustries);
         boolean directionConflict = concentration.percent().compareTo(CONCENTRATED_CANDIDATE_PERCENT) >= 0
-                && !strongest.isEmpty()
-                && strongest.stream().allMatch(signal -> !signal.direction().isBlank()
+                && !signals.isEmpty()
+                && signals.stream().allMatch(signal -> !signal.direction().isBlank()
                 && !sameDirection(concentration.industry(), signal.direction()));
         ShortTermLeaderRisk.Status status = strongest.isEmpty()
                 ? ShortTermLeaderRisk.Status.CLEAR
@@ -307,7 +307,7 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
                 directionConflict,
                 summary,
                 "仅比较快照内涨幅、全市场成交额排名和成交额占比；不直接比较跨时点累计成交额。",
-                dataGaps(current),
+                dataGaps(current, baseline.snapshot()),
                 true,
                 current.capturedAt()
         );
@@ -380,6 +380,7 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
             String previousTopSymbol = firstLeaderSymbol(previousDirection);
             String currentTopSymbol = firstLeaderSymbol(direction);
             boolean leaderChanged = previousDirection != null
+                    && !previousTopSymbol.isBlank()
                     && !currentTopSymbol.isBlank()
                     && !currentTopSymbol.equals(previousTopSymbol);
             for (LeaderObservation leader : direction.leaders()) {
@@ -461,7 +462,10 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
         );
     }
 
-    private List<String> dataGaps(ShortTermLeaderSnapshot current) {
+    private List<String> dataGaps(
+            ShortTermLeaderSnapshot current,
+            ShortTermLeaderSnapshot baseline
+    ) {
         List<String> gaps = new ArrayList<>();
         if (current.weights().isEmpty()) {
             gaps.add("总市值字段缺失，权重龙头轨道不可用");
@@ -469,7 +473,18 @@ public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModu
         if (current.directions().isEmpty()) {
             gaps.add("热门方向缺失，题材龙头轨道不可用");
         }
+        if (hasUnresolvedDirectionLeader(current)) {
+            gaps.add("当前热门方向龙头证据未解析，相关方向无法确认龙头变化");
+        }
+        if (baseline != null && hasUnresolvedDirectionLeader(baseline)) {
+            gaps.add("基准热门方向龙头证据未解析，相关方向无法确认龙头更替");
+        }
         return List.copyOf(gaps);
+    }
+
+    private boolean hasUnresolvedDirectionLeader(ShortTermLeaderSnapshot snapshot) {
+        return snapshot.directions().stream()
+                .anyMatch(direction -> direction.leaders().isEmpty());
     }
 
     private LeaderObservation findLeader(DirectionObservation direction, String symbol) {

@@ -111,6 +111,57 @@ class DefaultShortTermLeaderRiskModuleTest {
         assertThat(store.saved).isEmpty();
     }
 
+    @Test
+    void directionConflictUsesAllDetectedSignalsBeforeDisplayCap() {
+        InMemorySnapshotStore store = new InMemorySnapshotStore();
+        ShortTermLeaderRiskModule module = new DefaultShortTermLeaderRiskModule(store);
+        module.evaluate(input(
+                BASELINE_DATE, BASELINE_AT, multiThemeQuotes(false), multiThemeDirections(), List.of()
+        ));
+
+        ShortTermLeaderRisk risk = module.evaluate(input(
+                CURRENT_DATE, CURRENT_AT, multiThemeQuotes(true), multiThemeDirections(),
+                List.of("化学制药", "化学制药", "化学制药")
+        ));
+
+        assertThat(risk.signals()).hasSize(3);
+        assertThat(risk.signals()).extracting(ShortTermLeaderRiskSignal::direction)
+                .doesNotContain("化学制药");
+        assertThat(risk.directionConflict()).isFalse();
+    }
+
+    @Test
+    void unresolvedBaselineLeaderDoesNotBecomeReplacementSignalAndIsReportedAsGap() {
+        InMemorySnapshotStore store = new InMemorySnapshotStore();
+        ShortTermLeaderRiskModule module = new DefaultShortTermLeaderRiskModule(store);
+        module.evaluate(input(
+                BASELINE_DATE,
+                BASELINE_AT,
+                unchangedResolvedLeaderQuotes(BASELINE_DATE, BASELINE_AT),
+                List.of(direction(
+                        "THEME:AI", "人工智能", "100.00", "4.50", "4800",
+                        List.of("无法解析龙头(399999)")
+                )),
+                List.of()
+        ));
+
+        ShortTermLeaderRisk risk = module.evaluate(input(
+                CURRENT_DATE,
+                CURRENT_AT,
+                unchangedResolvedLeaderQuotes(CURRENT_DATE, CURRENT_AT),
+                List.of(direction(
+                        "THEME:AI", "人工智能", "100.00", "4.50", "4800",
+                        List.of("人工智能龙头(300001)")
+                )),
+                List.of()
+        ));
+
+        assertThat(risk.status()).isEqualTo(ShortTermLeaderRisk.Status.CLEAR);
+        assertThat(risk.signals()).extracting(ShortTermLeaderRiskSignal::track)
+                .doesNotContain(ShortTermLeaderRiskSignal.Track.THEME);
+        assertThat(risk.dataGaps()).anyMatch(gap -> gap.contains("基准热门方向龙头证据未解析"));
+    }
+
     private ShortTermLeaderRiskInput input(
             LocalDate tradeDate,
             Instant capturedAt,
@@ -137,6 +188,54 @@ class DefaultShortTermLeaderRiskModuleTest {
     private List<EastMoneyQuote> acceleratedAgainQuotes() {
         Instant capturedAt = Instant.parse("2026-08-21T02:15:00Z");
         return market("4.40", "7.50", "5.40", "5500", "5200", "4900", CURRENT_DATE, capturedAt);
+    }
+
+    private List<EastMoneyQuote> unchangedResolvedLeaderQuotes(LocalDate tradeDate, Instant capturedAt) {
+        return market("0.50", "4.50", "5.20", "120", "4800", "5000", tradeDate, capturedAt);
+    }
+
+    private List<EastMoneyQuote> multiThemeQuotes(boolean current) {
+        LocalDate tradeDate = current ? CURRENT_DATE : BASELINE_DATE;
+        Instant capturedAt = current ? CURRENT_AT : BASELINE_AT;
+        List<EastMoneyQuote> quotes = new ArrayList<>();
+        quotes.add(quote("600001", "权重银行", "银行", "0.20", "100",
+                "1000000000000", tradeDate, capturedAt));
+        quotes.add(quote("601000", "大市值样本", "综合", "0.20", "200",
+                "900000000000", tradeDate, capturedAt));
+        quotes.add(quote("300001", "人工智能龙头", "软件服务", current ? "9.00" : "4.00", "6000",
+                "100000000000", tradeDate, capturedAt));
+        quotes.add(quote("601001", "算力龙头", "计算机设备", current ? "8.00" : "4.00", "5800",
+                "90000000000", tradeDate, capturedAt));
+        quotes.add(quote("601002", "机器人龙头", "自动化设备", current ? "7.00" : "4.00", "5600",
+                "80000000000", tradeDate, capturedAt));
+        quotes.add(quote("600003", "医药龙头", "化学制药", current ? "6.00" : "4.00", "5400",
+                "70000000000", tradeDate, capturedAt));
+        for (int index = 0; index < 34; index++) {
+            quotes.add(quote(
+                    String.format("602%03d", index),
+                    "多信号样本" + index,
+                    "基础行业",
+                    "0.20",
+                    Integer.toString(3000 - index * 50),
+                    Long.toString(60000000000L - index * 1000000000L),
+                    tradeDate,
+                    capturedAt
+            ));
+        }
+        return List.copyOf(quotes);
+    }
+
+    private List<ShortTermHotDirection> multiThemeDirections() {
+        return List.of(
+                direction("THEME:AI", "人工智能", "100.00", "9.00", "6000",
+                        List.of("人工智能龙头(300001)")),
+                direction("THEME:COMPUTE", "算力", "95.00", "8.00", "5800",
+                        List.of("算力龙头(601001)")),
+                direction("THEME:ROBOT", "机器人", "90.00", "7.00", "5600",
+                        List.of("机器人龙头(601002)")),
+                direction("INDUSTRY:化学制药", "化学制药", "85.00", "6.00", "5400",
+                        List.of("医药龙头(600003)"))
+        );
     }
 
     private List<EastMoneyQuote> market(
