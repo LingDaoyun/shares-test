@@ -426,3 +426,15 @@ CREATE TABLE IF NOT EXISTS runtime_config_section (
   revision BIGINT NOT NULL,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS short_term_leader_snapshot (
+  snapshot_id VARCHAR(64) PRIMARY KEY,
+  rule_version VARCHAR(80) NOT NULL,
+  trade_date DATE NOT NULL,
+  captured_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_short_term_leader_snapshot_baseline
+  ON short_term_leader_snapshot(rule_version, trade_date, captured_at, snapshot_id);
