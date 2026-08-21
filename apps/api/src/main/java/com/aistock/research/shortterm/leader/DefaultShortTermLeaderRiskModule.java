@@ -7,6 +7,7 @@ import com.aistock.research.shortterm.leader.ShortTermLeaderRisk.BaselineType;
 import com.aistock.research.shortterm.leader.ShortTermLeaderSnapshot.DirectionObservation;
 import com.aistock.research.shortterm.leader.ShortTermLeaderSnapshot.LeaderObservation;
 import com.aistock.research.shortterm.leader.ShortTermLeaderSnapshot.WeightObservation;
+import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -22,6 +23,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+@Service
 public class DefaultShortTermLeaderRiskModule implements ShortTermLeaderRiskModule {
 
     static final String RULE_VERSION = "short-term-leader-risk-v1-sensitive";

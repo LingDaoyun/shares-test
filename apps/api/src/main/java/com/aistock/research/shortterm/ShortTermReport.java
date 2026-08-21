@@ -1,5 +1,6 @@
 package com.aistock.research.shortterm;
 
+import com.aistock.research.shortterm.leader.ShortTermLeaderRisk;
 import com.aistock.research.trading.TradingSessionSnapshot;
 
 import java.time.Instant;
@@ -29,7 +30,8 @@ public record ShortTermReport(
         Instant generatedAt,
         ShortTermTechnicalReviewCoverage technicalReviewCoverage,
         ShortTermCrossSectionContext crossSectionContext,
-        ShortTermMarketRegime marketRegime
+        ShortTermMarketRegime marketRegime,
+        ShortTermLeaderRisk leaderRisk
 ) {
     public ShortTermReport {
         methodology = methodology == null ? List.of() : List.copyOf(methodology);
@@ -51,6 +53,44 @@ public record ShortTermReport(
         marketRegime = marketRegime == null
                 ? ShortTermMarketRegime.unavailable("历史报告未包含市场状态快照")
                 : marketRegime;
+        leaderRisk = leaderRisk == null
+                ? ShortTermLeaderRisk.unavailable("历史报告未包含龙头异动风险快照")
+                : leaderRisk;
+    }
+
+    public ShortTermReport(
+            String scope,
+            int universeCount,
+            int reviewedCount,
+            int klineReviewedCount,
+            int candidateCount,
+            String quoteNote,
+            TradingSessionSnapshot tradingSession,
+            List<String> methodology,
+            ShortTermRuleSet ruleSet,
+            ShortTermWeightProfile weightProfile,
+            List<ShortTermCandidate> candidates,
+            List<ShortTermHotDirection> hotDirections,
+            ShortTermMarketSentiment marketSentiment,
+            ShortTermMarketFundDirection marketFundDirection,
+            List<ShortTermRiskExclusion> exclusions,
+            Map<String, String> tradeCaptureTokens,
+            ShortTermCoverageSnapshot coverage,
+            List<String> reviewedSymbols,
+            Instant dataCutoffAt,
+            Instant generatedAt,
+            ShortTermTechnicalReviewCoverage technicalReviewCoverage,
+            ShortTermCrossSectionContext crossSectionContext,
+            ShortTermMarketRegime marketRegime
+    ) {
+        this(
+                scope, universeCount, reviewedCount, klineReviewedCount, candidateCount,
+                quoteNote, tradingSession, methodology, ruleSet, weightProfile, candidates,
+                hotDirections, marketSentiment, marketFundDirection, exclusions, tradeCaptureTokens,
+                coverage, reviewedSymbols, dataCutoffAt, generatedAt,
+                technicalReviewCoverage, crossSectionContext, marketRegime,
+                ShortTermLeaderRisk.unavailable("历史报告未包含龙头异动风险快照")
+        );
     }
 
     public ShortTermReport(
