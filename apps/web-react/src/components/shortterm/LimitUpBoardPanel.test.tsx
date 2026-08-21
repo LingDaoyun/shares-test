@@ -74,6 +74,15 @@ const snapshot: ShortTermLimitUpBoardSnapshot = {
     tone: '情绪冰点',
     explanation: '涨停 2 家，炸板 1 家（炸板率 33.33%），最高 2 连板。'
   },
+  marketTurnover: {
+    tradeDate: '2026-08-21',
+    todayVolumeHands: 990849782,
+    previousVolumeHands: 1103204190,
+    volumeChangePercent: -10.18,
+    todayAmountYuan: 1879264405345,
+    label: '显著缩量',
+    explanation: '上证指数+深证综指成交量 2026-08-21 合计 990849782 手，前一日 1103204190 手。'
+  },
   dataGaps: []
 }
 
@@ -95,6 +104,7 @@ describe('LimitUpBoardEntry', () => {
     expect(html).toContain('炸板率')
     expect(html).toContain('33.33%')
     expect(html).toContain('最高 2 连板')
+    expect(html).toContain('量能 显著缩量 -10.18%')
     expect(html).toContain('2026-08-21')
     expect(html).toContain('查看看板')
     expect(html).not.toContain('行业聚合')
@@ -112,6 +122,7 @@ describe('LimitUpBoardEntry', () => {
           stocks: [],
           industryStats: [],
           sentiment: null,
+          marketTurnover: null,
           dataGaps: []
         }}
         loading={false}
@@ -155,6 +166,10 @@ describe('LimitUpBoardDetail', () => {
     expect(html).toContain('共 2 只涨停')
     expect(html).toContain('10 点前封板占比')
     expect(html).toContain('100.00%')
+    expect(html).toContain('量能对比(量)')
+    expect(html).toContain('显著缩量 -10.18%')
+    expect(html).toContain('今日两市成交额')
+    expect(html).toContain('18792.64 亿')
     expect(html).toContain('行业聚合')
     expect(html).toContain('深中华A')
     expect(html).toContain('09:25')
@@ -173,6 +188,7 @@ describe('LimitUpBoardDetail', () => {
           stocks: [],
           industryStats: [],
           sentiment: null,
+          marketTurnover: null,
           dataGaps: []
         }}
         loading={false}

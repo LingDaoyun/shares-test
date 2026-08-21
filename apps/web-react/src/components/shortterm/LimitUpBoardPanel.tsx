@@ -6,8 +6,8 @@ import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { Spinner } from '../ui/Loader'
 import { Tag } from '../ui/Badge'
-import { formatAmount, formatDateTime, formatPercent } from '../../lib/format'
-import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment } from '../../types'
+import { formatAmount, formatDateTime, formatPercent, formatSignedPercent } from '../../lib/format'
+import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment, ShortTermMarketTurnover } from '../../types'
 
 const toneLabel: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'neutral'> = {
   接力退潮: 'danger',
@@ -15,6 +15,14 @@ const toneLabel: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'ne
   情绪强势: 'success',
   情绪偏暖: 'brand',
   中性震荡: 'neutral'
+}
+
+const turnoverTone: Record<string, 'success' | 'warning' | 'neutral'> = {
+  显著增量: 'success',
+  温和增量: 'success',
+  平量: 'neutral',
+  温和缩量: 'warning',
+  显著缩量: 'warning'
 }
 
 export function LimitUpBoardPanel() {
@@ -108,8 +116,10 @@ export function LimitUpBoardEntry({ snapshot, loading, error, onRefresh, onOpen 
             <Tag tone={toneLabel[sentiment.tone] ?? 'neutral'}>{sentiment.tone}</Tag>
             <span className="truncate">
               涨停 {sentiment.limitUpCount} 家
+              {snapshot?.marketTurnover
+                ? ` · 量能 ${snapshot.marketTurnover.label} ${formatSignedPercent(snapshot.marketTurnover.volumeChangePercent)}`
+                : ''}
               {sentiment.brokenCount === null ? '' : ` · 炸板率 ${formatPercent(sentiment.sealBreakRatioPercent)}`}
-              {sentiment.limitDownCount === null ? '' : ` · 跌停 ${sentiment.limitDownCount} 家`}
               {` · 最高 ${sentiment.maxConsecutiveBoards} 连板 · ${snapshot?.tradeDate ?? ''}`}
             </span>
           </span>
@@ -170,11 +180,17 @@ export function LimitUpBoardDetail({ snapshot, loading, error, onRefresh }: Limi
               刷新
             </Button>
           </div>
-          <SentimentSummary sentiment={snapshot.sentiment} stockCount={snapshot.stocks.length} />
+          <SentimentSummary
+            sentiment={snapshot.sentiment}
+            turnover={snapshot.marketTurnover}
+            stockCount={snapshot.stocks.length}
+          />
           <IndustryBoard snapshot={snapshot} />
           <LimitUpTable snapshot={snapshot} />
           <p className="text-[11px] leading-relaxed text-ink-400">
-            {snapshot.sentiment.explanation}盘中数据为快照口径，涨停与炸板数量随行情变化，不代表收盘结论。
+            {snapshot.sentiment.explanation}
+            {snapshot.marketTurnover ? ` ${snapshot.marketTurnover.explanation}` : ''}
+            盘中数据为快照口径，涨停与炸板数量随行情变化，不代表收盘结论。
           </p>
           {snapshot.dataGaps.length ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
@@ -187,12 +203,25 @@ export function LimitUpBoardDetail({ snapshot, loading, error, onRefresh }: Limi
   )
 }
 
-function SentimentSummary({ sentiment, stockCount }: { sentiment: ShortTermLimitUpSentiment; stockCount: number }) {
+function SentimentSummary({
+  sentiment,
+  turnover,
+  stockCount
+}: {
+  sentiment: ShortTermLimitUpSentiment
+  turnover: ShortTermMarketTurnover | null
+  stockCount: number
+}) {
   const tone = toneLabel[sentiment.tone] ?? 'neutral'
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <Tag tone={tone}>{sentiment.tone}</Tag>
+        {turnover ? (
+          <Tag tone={turnoverTone[turnover.label] ?? 'neutral'}>
+            量能 {turnover.label} {formatSignedPercent(turnover.volumeChangePercent)}
+          </Tag>
+        ) : null}
         <span className="text-xs text-ink-400">共 {stockCount} 只涨停</span>
       </div>
       <dl className="grid grid-cols-2 border-t border-line-soft text-xs md:grid-cols-4">
@@ -207,6 +236,11 @@ function SentimentSummary({ sentiment, stockCount }: { sentiment: ShortTermLimit
         <Metric label="3 板以上" value={`${sentiment.boards3PlusCount} 家`} />
         <Metric label="10 点前封板占比" value={formatPercent(sentiment.earlySealSharePercent)} />
         <Metric label="尾盘封板" value={`${sentiment.sealedTailCount} 家`} />
+        <Metric
+          label="量能对比(量)"
+          value={turnover ? `${turnover.label} ${formatSignedPercent(turnover.volumeChangePercent)}` : '待补充'}
+        />
+        <Metric label="今日两市成交额" value={turnover?.todayAmountYuan ? formatAmount(turnover.todayAmountYuan) : '待补充'} />
       </dl>
       <div className="grid grid-cols-4 gap-1 text-center text-[11px] text-ink-500">
         <SealBucket label="10点前" count={sentiment.sealedBeforeTenCount} total={sentiment.limitUpCount} />

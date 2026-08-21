@@ -2,6 +2,7 @@ package com.aistock.research.shortterm;
 
 import com.aistock.research.integration.eastmoney.EastMoneyBrokenBoardPoolEntry;
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
+import com.aistock.research.integration.eastmoney.EastMoneyIndexVolumeBar;
 import com.aistock.research.integration.eastmoney.EastMoneyLimitDownPoolEntry;
 import com.aistock.research.integration.eastmoney.EastMoneyLimitUpPoolEntry;
 import org.slf4j.Logger;
@@ -116,7 +117,129 @@ public class ShortTermLimitUpBoardService {
             logger.warn("跌停池获取失败：{}", rootMessage(exception));
             dataGaps.add("跌停池获取失败，跌停家数缺失：" + rootMessage(exception));
         }
-        return buildSnapshot(tradeDate, fetchedAt, limitUpEntries, brokenEntries, limitDownEntries, dataGaps);
+        ShortTermMarketTurnover marketTurnover = null;
+        try {
+            marketTurnover = fetchMarketTurnover(tradeDate);
+        } catch (Exception exception) {
+            logger.warn("大盘量能对比获取失败：{}", rootMessage(exception));
+            dataGaps.add("大盘量能对比获取失败：" + rootMessage(exception));
+        }
+        return buildSnapshot(tradeDate, fetchedAt, limitUpEntries, brokenEntries, limitDownEntries, marketTurnover, dataGaps);
+    }
+
+    private ShortTermMarketTurnover fetchMarketTurnover(LocalDate tradeDate) {
+        List<EastMoneyIndexVolumeBar> shanghaiBars = eastMoneyClient.fetchIndexDailyVolumeBars("sh000001", 2);
+        List<EastMoneyIndexVolumeBar> shenzhenBars = eastMoneyClient.fetchIndexDailyVolumeBars("sz399106", 2);
+        BigDecimal todayAmountYuan = null;
+        try {
+            todayAmountYuan = eastMoneyClient.fetchShSzIndexTodayAmount();
+        } catch (Exception exception) {
+            logger.warn("指数今日成交额获取失败，仅展示量能对比：{}", rootMessage(exception));
+        }
+        return marketTurnover(tradeDate, shanghaiBars, shenzhenBars, todayAmountYuan);
+    }
+
+    /**
+     * 两市指数各自取目标日的量与前一根的量合计，做增量/缩量对比；
+     * 目标日取两市最新根中较早的一天，保证两侧行情日期对齐。
+     */
+    static ShortTermMarketTurnover marketTurnover(
+            LocalDate tradeDate,
+            List<EastMoneyIndexVolumeBar> shanghaiBars,
+            List<EastMoneyIndexVolumeBar> shenzhenBars,
+            BigDecimal todayAmountYuan
+    ) {
+        LocalDate effectiveDate = latestAlignedDate(shanghaiBars, shenzhenBars);
+        BigDecimal shanghaiToday = volumeOn(shanghaiBars, effectiveDate);
+        BigDecimal shenzhenToday = volumeOn(shenzhenBars, effectiveDate);
+        BigDecimal shanghaiPrevious = volumeBefore(shanghaiBars, effectiveDate);
+        BigDecimal shenzhenPrevious = volumeBefore(shenzhenBars, effectiveDate);
+        if (shanghaiToday == null || shenzhenToday == null || shanghaiPrevious == null || shenzhenPrevious == null) {
+            throw new IllegalStateException("指数量能数据不完整，无法对比：" + effectiveDate);
+        }
+        BigDecimal todayVolume = shanghaiToday.add(shenzhenToday);
+        BigDecimal previousVolume = shanghaiPrevious.add(shenzhenPrevious);
+        if (todayVolume.signum() <= 0 || previousVolume.signum() <= 0) {
+            throw new IllegalStateException("指数量能数据不完整，无法对比：" + effectiveDate);
+        }
+        BigDecimal changePercent = todayVolume.subtract(previousVolume)
+                .multiply(BigDecimal.valueOf(100))
+                .divide(previousVolume, 2, RoundingMode.HALF_UP);
+        String label = turnoverLabel(changePercent);
+        StringBuilder explanation = new StringBuilder("上证指数+深证综指成交量 ")
+                .append(effectiveDate)
+                .append(" 合计 ")
+                .append(todayVolume.toBigInteger())
+                .append(" 手，前一日 ")
+                .append(previousVolume.toBigInteger())
+                .append(" 手，变化 ")
+                .append(changePercent.stripTrailingZeros().toPlainString())
+                .append("%（")
+                .append(label)
+                .append("）。口径：按两市成交量（手）对比，±3% 内为平量，±10% 外为显著。");
+        if (todayAmountYuan != null && todayAmountYuan.signum() > 0) {
+            explanation.append("今日两市成交额约 ")
+                    .append(todayAmountYuan.divide(new BigDecimal("100000000"), 0, RoundingMode.HALF_UP)
+                            .toBigInteger())
+                    .append(" 亿（实时快照）。");
+        }
+        return new ShortTermMarketTurnover(
+                effectiveDate,
+                todayVolume,
+                previousVolume,
+                changePercent,
+                todayAmountYuan,
+                label,
+                explanation.toString()
+        );
+    }
+
+    static String turnoverLabel(BigDecimal changePercent) {
+        if (changePercent.compareTo(new BigDecimal("10")) >= 0) {
+            return "显著增量";
+        }
+        if (changePercent.compareTo(new BigDecimal("3")) >= 0) {
+            return "温和增量";
+        }
+        if (changePercent.compareTo(new BigDecimal("-3")) > 0) {
+            return "平量";
+        }
+        if (changePercent.compareTo(new BigDecimal("-10")) > 0) {
+            return "温和缩量";
+        }
+        return "显著缩量";
+    }
+
+    private static LocalDate latestAlignedDate(
+            List<EastMoneyIndexVolumeBar> shanghaiBars,
+            List<EastMoneyIndexVolumeBar> shenzhenBars
+    ) {
+        if (shanghaiBars == null || shanghaiBars.isEmpty() || shenzhenBars == null || shenzhenBars.isEmpty()) {
+            throw new IllegalStateException("指数日K量能数据为空");
+        }
+        LocalDate shanghaiLatest = shanghaiBars.get(shanghaiBars.size() - 1).tradeDate();
+        LocalDate shenzhenLatest = shenzhenBars.get(shenzhenBars.size() - 1).tradeDate();
+        return shanghaiLatest.isBefore(shenzhenLatest) ? shanghaiLatest : shenzhenLatest;
+    }
+
+    /** 返回 null 表示该日没有量能行，调用方视为数据缺口。 */
+    private static BigDecimal volumeOn(List<EastMoneyIndexVolumeBar> bars, LocalDate date) {
+        return bars.stream()
+                .filter(bar -> date.equals(bar.tradeDate()))
+                .map(EastMoneyIndexVolumeBar::volumeHands)
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** 返回 null 表示该日之前没有量能行。 */
+    private static BigDecimal volumeBefore(List<EastMoneyIndexVolumeBar> bars, LocalDate date) {
+        BigDecimal volume = null;
+        for (EastMoneyIndexVolumeBar bar : bars) {
+            if (bar.tradeDate().isBefore(date)) {
+                volume = bar.volumeHands();
+            }
+        }
+        return volume;
     }
 
     ShortTermLimitUpBoardSnapshot buildSnapshot(
@@ -125,6 +248,7 @@ public class ShortTermLimitUpBoardService {
             List<EastMoneyLimitUpPoolEntry> limitUpEntries,
             List<EastMoneyBrokenBoardPoolEntry> brokenEntries,
             List<EastMoneyLimitDownPoolEntry> limitDownEntries,
+            ShortTermMarketTurnover marketTurnover,
             List<String> dataGaps
     ) {
         List<ShortTermLimitUpStock> stocks = limitUpEntries.stream()
@@ -139,6 +263,7 @@ public class ShortTermLimitUpBoardService {
                 stocks,
                 industryStats(limitUpEntries),
                 sentiment(limitUpEntries, brokenEntries.size(), limitDownEntries.size()),
+                marketTurnover,
                 dataGaps
         );
     }

@@ -427,6 +427,25 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void shouldParseIndexVolumeBarsFromTencentDailyRows() throws Exception {
+        JsonNode rows = objectMapper.readTree("""
+                [
+                  ["2026-08-20", "3907.210", "3903.720", "3925.060", "3888.100", "506633954.000"],
+                  ["2026-08-21", "3891.180", "3905.200", "3912.130", "3883.790", "446895868.000"],
+                  ["2026-08-19", "broken-row"]
+                ]
+                """);
+
+        List<EastMoneyIndexVolumeBar> bars = client.readIndexVolumeBars(rows);
+
+        assertThat(bars).hasSize(2);
+        assertThat(bars.get(0).tradeDate()).isEqualTo(LocalDate.parse("2026-08-20"));
+        assertThat(bars.get(0).volumeHands()).isEqualByComparingTo(new BigDecimal("506633954"));
+        assertThat(bars.get(1).tradeDate()).isEqualTo(LocalDate.parse("2026-08-21"));
+        assertThat(bars.get(1).volumeHands()).isEqualByComparingTo(new BigDecimal("446895868"));
+    }
+
+    @Test
     void shouldPreferStablePush2DelayHostAndKeepFallbackQuery() {
         String url = "https://29.push2.eastmoney.com/api/qt/clist/get?pn=1&fs=m:0+t:6,m:1+t:2&fields=f2,f3,f12";
 

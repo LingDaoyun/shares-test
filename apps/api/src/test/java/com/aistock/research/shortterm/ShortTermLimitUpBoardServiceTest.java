@@ -1,6 +1,7 @@
 package com.aistock.research.shortterm;
 
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
+import com.aistock.research.integration.eastmoney.EastMoneyIndexVolumeBar;
 import com.aistock.research.integration.eastmoney.EastMoneyLimitUpPoolEntry;
 import org.junit.jupiter.api.Test;
 
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 class ShortTermLimitUpBoardServiceTest {
@@ -117,6 +119,7 @@ class ShortTermLimitUpBoardServiceTest {
                 ),
                 List.of(),
                 List.of(),
+                null,
                 List.of()
         );
 
@@ -126,6 +129,84 @@ class ShortTermLimitUpBoardServiceTest {
         assertThat(snapshot.sentiment().maxConsecutiveBoards()).isEqualTo(3);
         assertThat(snapshot.sentiment().limitUpCount()).isEqualTo(4);
         assertThat(snapshot.dataGaps()).isEmpty();
+    }
+
+    @Test
+    void marketTurnoverComparesAlignedIndexVolumesAndLabelsPhases() {
+        List<EastMoneyIndexVolumeBar> shanghaiBars = List.of(
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-20"), new BigDecimal("506633954")),
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-21"), new BigDecimal("446895868"))
+        );
+        List<EastMoneyIndexVolumeBar> shenzhenBars = List.of(
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-20"), new BigDecimal("596570236")),
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-21"), new BigDecimal("543953914"))
+        );
+
+        ShortTermMarketTurnover turnover = ShortTermLimitUpBoardService.marketTurnover(
+                TRADE_DATE, shanghaiBars, shenzhenBars, new BigDecimal("1879264405345"));
+
+        assertThat(turnover.tradeDate()).isEqualTo(LocalDate.parse("2026-08-21"));
+        assertThat(turnover.todayVolumeHands()).isEqualByComparingTo(new BigDecimal("990849782"));
+        assertThat(turnover.previousVolumeHands()).isEqualByComparingTo(new BigDecimal("1103204190"));
+        // (990849782 - 1103204190) / 1103204190 ≈ -10.18%
+        assertThat(turnover.volumeChangePercent()).isEqualByComparingTo(new BigDecimal("-10.18"));
+        assertThat(turnover.label()).isEqualTo("显著缩量");
+        assertThat(turnover.todayAmountYuan()).isEqualByComparingTo(new BigDecimal("1879264405345"));
+        assertThat(turnover.explanation())
+                .contains("显著缩量")
+                .contains("18793 亿")
+                .contains("-10.18%");
+    }
+
+    @Test
+    void marketTurnoverAlignsToTheEarlierIndexDate() {
+        List<EastMoneyIndexVolumeBar> shanghaiBars = List.of(
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-19"), new BigDecimal("100")),
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-20"), new BigDecimal("100")),
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-21"), new BigDecimal("120"))
+        );
+        // 深综指数缺 08-21：对齐到 08-20，前一日取两侧 08-19
+        List<EastMoneyIndexVolumeBar> shenzhenBars = List.of(
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-19"), new BigDecimal("100")),
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-20"), new BigDecimal("200"))
+        );
+
+        ShortTermMarketTurnover turnover = ShortTermLimitUpBoardService.marketTurnover(
+                TRADE_DATE, shanghaiBars, shenzhenBars, null);
+
+        assertThat(turnover.tradeDate()).isEqualTo(LocalDate.parse("2026-08-20"));
+        assertThat(turnover.todayVolumeHands()).isEqualByComparingTo(new BigDecimal("300"));
+        assertThat(turnover.previousVolumeHands()).isEqualByComparingTo(new BigDecimal("200"));
+        assertThat(turnover.volumeChangePercent()).isEqualByComparingTo(new BigDecimal("50.00"));
+        assertThat(turnover.label()).isEqualTo("显著增量");
+        assertThat(turnover.todayAmountYuan()).isNull();
+        assertThat(turnover.explanation()).doesNotContain("成交额约");
+    }
+
+    @Test
+    void marketTurnoverRejectsIncompleteIndexHistoryInsteadOfComparingAgainstZero() {
+        List<EastMoneyIndexVolumeBar> shanghaiBars = List.of(
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-20"), new BigDecimal("100")),
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-21"), new BigDecimal("120"))
+        );
+        // 深综只有 08-20 一根，对齐日 08-20 缺前一日
+        List<EastMoneyIndexVolumeBar> shenzhenBars = List.of(
+                new EastMoneyIndexVolumeBar(LocalDate.parse("2026-08-20"), new BigDecimal("200"))
+        );
+
+        assertThatThrownBy(() -> ShortTermLimitUpBoardService.marketTurnover(
+                TRADE_DATE, shanghaiBars, shenzhenBars, null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("量能数据不完整");
+    }
+
+    @Test
+    void turnoverLabelCoversAllPhases() {
+        assertThat(ShortTermLimitUpBoardService.turnoverLabel(new BigDecimal("12"))).isEqualTo("显著增量");
+        assertThat(ShortTermLimitUpBoardService.turnoverLabel(new BigDecimal("5"))).isEqualTo("温和增量");
+        assertThat(ShortTermLimitUpBoardService.turnoverLabel(new BigDecimal("1"))).isEqualTo("平量");
+        assertThat(ShortTermLimitUpBoardService.turnoverLabel(new BigDecimal("-5"))).isEqualTo("温和缩量");
+        assertThat(ShortTermLimitUpBoardService.turnoverLabel(new BigDecimal("-15"))).isEqualTo("显著缩量");
     }
 
     private EastMoneyLimitUpPoolEntry entry(

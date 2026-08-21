@@ -1137,6 +1137,16 @@ export interface ShortTermLimitUpSentiment {
   explanation: string
 }
 
+export interface ShortTermMarketTurnover {
+  tradeDate: string
+  todayVolumeHands: number
+  previousVolumeHands: number
+  volumeChangePercent: number
+  todayAmountYuan: number | null
+  label: string
+  explanation: string
+}
+
 export interface ShortTermLimitUpBoardSnapshot {
   tradeDate: string
   fetchedAt: string
@@ -1145,6 +1155,7 @@ export interface ShortTermLimitUpBoardSnapshot {
   stocks: ShortTermLimitUpStock[]
   industryStats: ShortTermLimitUpIndustryStat[]
   sentiment: ShortTermLimitUpSentiment | null
+  marketTurnover: ShortTermMarketTurnover | null
   dataGaps: string[]
 }
 

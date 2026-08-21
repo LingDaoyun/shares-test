@@ -666,6 +666,80 @@ public class EastMoneyClient {
         }
     }
 
+    /**
+     * 指数日 K 量能条：tencentCode 形如 sh000001（上证指数）/ sz399106（深证综指）。
+     */
+    public List<EastMoneyIndexVolumeBar> fetchIndexDailyVolumeBars(String tencentCode, int days) {
+        int safeDays = Math.max(2, Math.min(days, 30));
+        String url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+                + "?param=" + encodeQueryValue(tencentCode + ",day,,," + safeDays + ",qfq");
+        try {
+            JsonNode rows = objectMapper.readTree(fetchBodyWithCurl(url, null, "https://gu.qq.com/"))
+                    .path("data")
+                    .path(tencentCode);
+            JsonNode dailyRows = rows.path("qfqday");
+            if (!dailyRows.isArray() || dailyRows.isEmpty()) {
+                dailyRows = rows.path("day");
+            }
+            return readIndexVolumeBars(dailyRows);
+        } catch (Exception exception) {
+            throw new IllegalStateException("腾讯指数日K量能数据获取失败：" + tencentCode, exception);
+        }
+    }
+
+    List<EastMoneyIndexVolumeBar> readIndexVolumeBars(JsonNode dailyRows) {
+        if (dailyRows == null || !dailyRows.isArray() || dailyRows.isEmpty()) {
+            return List.of();
+        }
+        List<EastMoneyIndexVolumeBar> bars = new ArrayList<>();
+        for (JsonNode row : dailyRows) {
+            if (row == null || row.size() < 6) {
+                continue;
+            }
+            LocalDate tradeDate;
+            BigDecimal volumeHands;
+            try {
+                tradeDate = LocalDate.parse(row.get(0).asText());
+                volumeHands = decimal(row.get(5).asText());
+            } catch (Exception exception) {
+                continue;
+            }
+            if (tradeDate == null || volumeHands == null || volumeHands.signum() <= 0) {
+                continue;
+            }
+            bars.add(new EastMoneyIndexVolumeBar(tradeDate, volumeHands));
+        }
+        return List.copyOf(bars);
+    }
+
+    /**
+     * 上证指数 + 深证综指的今日成交额（元）合计，来自实时行情快照。
+     */
+    public BigDecimal fetchShSzIndexTodayAmount() {
+        String url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+                + "?fltt=2"
+                + "&secids=" + encodeQueryValue("1.000001,0.399106")
+                + "&fields=f6,f12,f13,f14";
+        try {
+            JsonNode diff = fetchQuoteRoot(url).path("data").path("diff");
+            BigDecimal total = BigDecimal.ZERO;
+            int samples = 0;
+            for (JsonNode item : diffItems(diff)) {
+                BigDecimal amount = decimal(item, "f6");
+                if (amount != null && amount.signum() > 0) {
+                    total = total.add(amount);
+                    samples++;
+                }
+            }
+            if (samples < 2) {
+                throw new IllegalStateException("两市指数成交额样本不足：" + samples);
+            }
+            return total;
+        } catch (Exception exception) {
+            throw new IllegalStateException("东方财富指数成交额获取失败", exception);
+        }
+    }
+
     public List<EastMoneyFundFlowPoint> fetchFundFlowMinutes(String symbol, int limit) {
         String secId = secId(symbol);
         if (secId == null) {
