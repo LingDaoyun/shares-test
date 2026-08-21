@@ -21,8 +21,21 @@ public record EastMoneyQuote(
         String quoteUrl,
         Instant fetchedAt,
         LocalDate tradeDate,
-        Instant marketTimestamp
+        Instant marketTimestamp,
+        BigDecimal totalMarketValue
 ) {
+    public EastMoneyQuote(
+            String symbol, String name, String market, String industry,
+            BigDecimal latestPrice, BigDecimal changePercent, BigDecimal turnoverRate,
+            BigDecimal volume, BigDecimal amount, BigDecimal peRatio, BigDecimal pbRatio,
+            BigDecimal peTtm, String sourceName, String quoteUrl, Instant fetchedAt,
+            LocalDate tradeDate, Instant marketTimestamp
+    ) {
+        this(symbol, name, market, industry, latestPrice, changePercent, turnoverRate,
+                volume, amount, peRatio, pbRatio, peTtm, sourceName, quoteUrl,
+                fetchedAt, tradeDate, marketTimestamp, null);
+    }
+
     public EastMoneyQuote(
             String symbol,
             String name,
@@ -56,6 +69,7 @@ public record EastMoneyQuote(
                 sourceName,
                 quoteUrl,
                 fetchedAt,
+                null,
                 null,
                 null
         );

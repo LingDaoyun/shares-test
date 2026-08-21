@@ -77,6 +77,7 @@ class EastMoneyClientTest {
                 .put("f2", 1000)
                 .put("f3", 20)
                 .put("f6", 900000000)
+                .put("f20", 245600000000L)
                 .put("f124", marketTime.getEpochSecond());
 
         EastMoneyQuote quote = client.readQuote(item, Instant.parse("2026-07-11T07:25:00Z")).orElseThrow();
@@ -84,6 +85,7 @@ class EastMoneyClientTest {
         assertThat(quote.marketTimestamp()).isEqualTo(marketTime);
         assertThat(quote.tradeDate()).isEqualTo(LocalDate.parse("2026-07-11"));
         assertThat(quote.fetchedAt()).isEqualTo(Instant.parse("2026-07-11T07:25:00Z"));
+        assertThat(quote.totalMarketValue()).isEqualByComparingTo("245600000000");
     }
 
     @Test
