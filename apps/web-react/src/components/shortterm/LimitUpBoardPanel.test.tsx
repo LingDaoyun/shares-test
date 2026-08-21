@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ShortTermLimitUpBoardSnapshot } from '../../types'
-import { LimitUpBoardView } from './LimitUpBoardPanel'
+import { LimitUpBoardDetail, LimitUpBoardEntry } from './LimitUpBoardPanel'
 
 const snapshot: ShortTermLimitUpBoardSnapshot = {
   tradeDate: '2026-08-21',
@@ -77,32 +77,99 @@ const snapshot: ShortTermLimitUpBoardSnapshot = {
   dataGaps: []
 }
 
-describe('LimitUpBoardPanel', () => {
-  it('renders sentiment metrics, industry lanes and stock rows for an available snapshot', () => {
+describe('LimitUpBoardEntry', () => {
+  it('renders a one-line summary without the full tables', () => {
     const html = renderToStaticMarkup(
-      <LimitUpBoardView snapshot={snapshot} loading={false} error={null} onRefresh={() => undefined} />
+      <LimitUpBoardEntry
+        snapshot={snapshot}
+        loading={false}
+        error={null}
+        onRefresh={() => undefined}
+        onOpen={() => undefined}
+      />
     )
 
-    expect(html).toContain('涨停看板 · 市场情绪')
+    expect(html).toContain('涨停看板')
     expect(html).toContain('情绪冰点')
-    expect(html).toContain('共 2 只涨停')
+    expect(html).toContain('涨停 2 家')
     expect(html).toContain('炸板率')
     expect(html).toContain('33.33%')
-    expect(html).toContain('最高 2 板')
+    expect(html).toContain('最高 2 连板')
+    expect(html).toContain('2026-08-21')
+    expect(html).toContain('查看看板')
+    expect(html).not.toContain('行业聚合')
+    expect(html).not.toContain('涨停明细')
+  })
+
+  it('renders the unavailable reason inline instead of blocking the page', () => {
+    const html = renderToStaticMarkup(
+      <LimitUpBoardEntry
+        snapshot={{
+          tradeDate: '2026-08-16',
+          fetchedAt: '2026-08-16T01:00:00Z',
+          available: false,
+          unavailableReason: '当日涨停池为空（可能是非交易日、盘前或数据源尚未生成）',
+          stocks: [],
+          industryStats: [],
+          sentiment: null,
+          dataGaps: []
+        }}
+        loading={false}
+        error={null}
+        onRefresh={() => undefined}
+        onOpen={() => undefined}
+      />
+    )
+
+    expect(html).toContain('当日涨停池为空')
+    expect(html).toContain('<button disabled=""')
+  })
+
+  it('surfaces fetch failures inline with a retry entry', () => {
+    const html = renderToStaticMarkup(
+      <LimitUpBoardEntry
+        snapshot={null}
+        loading={false}
+        error="接口超时"
+        onRefresh={() => undefined}
+        onOpen={() => undefined}
+      />
+    )
+
+    expect(html).toContain('获取失败：接口超时')
+    expect(html).toContain('刷新')
+  })
+})
+
+describe('LimitUpBoardDetail', () => {
+  it('renders the full board metrics, industries and stock rows inside the overlay body', () => {
+    const html = renderToStaticMarkup(
+      <LimitUpBoardDetail
+        snapshot={snapshot}
+        loading={false}
+        error={null}
+        onRefresh={() => undefined}
+      />
+    )
+
+    expect(html).toContain('共 2 只涨停')
+    expect(html).toContain('10 点前封板占比')
+    expect(html).toContain('100.00%')
     expect(html).toContain('行业聚合')
     expect(html).toContain('深中华A')
     expect(html).toContain('09:25')
     expect(html).toContain('2天2板')
+    expect(html).toContain('快照口径')
   })
 
-  it('renders the unavailable reason instead of manufacturing sentiment', () => {
+  it('keeps the unavailable reason for a closed overlay body', () => {
     const html = renderToStaticMarkup(
-      <LimitUpBoardView
+      <LimitUpBoardDetail
         snapshot={{
-          tradeDate: '2026-08-22',
-          fetchedAt: '2026-08-22T01:00:00Z',
+          tradeDate: '2026-08-16',
+          fetchedAt: '2026-08-16T01:00:00Z',
           available: false,
-          unavailableReason: '当日涨停池为空（可能是非交易日、盘前或数据源尚未生成）',
+          unavailableReason: '当日涨停池为空',
           stocks: [],
           industryStats: [],
           sentiment: null,
@@ -116,14 +183,5 @@ describe('LimitUpBoardPanel', () => {
 
     expect(html).toContain('当日涨停池为空')
     expect(html).not.toContain('行业聚合')
-  })
-
-  it('surfaces fetch failures without dropping the refresh entry', () => {
-    const html = renderToStaticMarkup(
-      <LimitUpBoardView snapshot={null} loading={false} error="接口超时" onRefresh={() => undefined} />
-    )
-
-    expect(html).toContain('涨停看板获取失败：接口超时')
-    expect(html).toContain('刷新')
   })
 })

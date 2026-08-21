@@ -1,25 +1,27 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Flame, RefreshCw } from 'lucide-react'
 import { fetchShortTermLimitUpBoard } from '../../api/client'
+import { DetailOverlay } from '../ui/DetailOverlay'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
-import { Loader } from '../ui/Loader'
+import { Spinner } from '../ui/Loader'
 import { Tag } from '../ui/Badge'
 import { formatAmount, formatDateTime, formatPercent } from '../../lib/format'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment } from '../../types'
 
-const toneLabel: Record<string, { tone: 'success' | 'brand' | 'warning' | 'danger' | 'neutral'; label: string }> = {
-  接力退潮: { tone: 'danger', label: '接力退潮' },
-  情绪冰点: { tone: 'warning', label: '情绪冰点' },
-  情绪强势: { tone: 'success', label: '情绪强势' },
-  情绪偏暖: { tone: 'brand', label: '情绪偏暖' },
-  中性震荡: { tone: 'neutral', label: '中性震荡' }
+const toneLabel: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'neutral'> = {
+  接力退潮: 'danger',
+  情绪冰点: 'warning',
+  情绪强势: 'success',
+  情绪偏暖: 'brand',
+  中性震荡: 'neutral'
 }
 
 export function LimitUpBoardPanel() {
   const [snapshot, setSnapshot] = useState<ShortTermLimitUpBoardSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [open, setOpen] = useState(false)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -38,55 +40,136 @@ export function LimitUpBoardPanel() {
   }, [refresh])
 
   return (
-    <LimitUpBoardView
-      snapshot={snapshot}
-      loading={loading}
-      error={error}
-      onRefresh={() => void refresh()}
-    />
+    <>
+      <LimitUpBoardEntry
+        snapshot={snapshot}
+        loading={loading}
+        error={error}
+        onRefresh={() => void refresh()}
+        onOpen={() => setOpen(true)}
+      />
+      <DetailOverlay
+        open={open}
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Flame className="h-4 w-4 text-rose-500" />
+            涨停看板 · 市场情绪
+          </span>
+        }
+        subtitle={
+          snapshot
+            ? `${snapshot.tradeDate} · 快照 ${formatDateTime(snapshot.fetchedAt)}（盘中口径随时变化）`
+            : undefined
+        }
+        onClose={() => setOpen(false)}
+      >
+        <LimitUpBoardDetail
+          snapshot={snapshot}
+          loading={loading}
+          error={error}
+          onRefresh={() => void refresh()}
+        />
+      </DetailOverlay>
+    </>
   )
 }
 
-interface LimitUpBoardViewProps {
+interface LimitUpBoardEntryProps {
+  snapshot: ShortTermLimitUpBoardSnapshot | null
+  loading: boolean
+  error: string | null
+  onRefresh: () => void
+  onOpen: () => void
+}
+
+/** 页面内的一行式入口：情绪摘要 + 查看完整看板的按钮。 */
+export function LimitUpBoardEntry({ snapshot, loading, error, onRefresh, onOpen }: LimitUpBoardEntryProps) {
+  const sentiment = snapshot != null && snapshot.available ? snapshot.sentiment : null
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <span className="inline-flex items-center gap-2 text-sm font-semibold text-ink-900">
+          <Flame className="h-4 w-4 shrink-0 text-rose-500" />
+          涨停看板
+        </span>
+        {error ? (
+          <span className="min-w-0 truncate text-xs text-rose-600">获取失败：{error}</span>
+        ) : !snapshot && loading ? (
+          <span className="inline-flex items-center gap-1.5 text-xs text-ink-400">
+            <Spinner className="text-brand-500" />
+            正在拉取涨停池
+          </span>
+        ) : snapshot && !snapshot.available ? (
+          <span className="min-w-0 truncate text-xs text-amber-700">
+            {snapshot.unavailableReason ?? '涨停池数据不可用'}
+          </span>
+        ) : sentiment ? (
+          <span className="inline-flex min-w-0 flex-wrap items-center gap-2 text-xs text-ink-500">
+            <Tag tone={toneLabel[sentiment.tone] ?? 'neutral'}>{sentiment.tone}</Tag>
+            <span className="truncate">
+              涨停 {sentiment.limitUpCount} 家
+              {sentiment.brokenCount === null ? '' : ` · 炸板率 ${formatPercent(sentiment.sealBreakRatioPercent)}`}
+              {sentiment.limitDownCount === null ? '' : ` · 跌停 ${sentiment.limitDownCount} 家`}
+              {` · 最高 ${sentiment.maxConsecutiveBoards} 连板 · ${snapshot?.tradeDate ?? ''}`}
+            </span>
+          </span>
+        ) : null}
+        <span className="ml-auto inline-flex items-center gap-2">
+          <Button
+            variant="secondary"
+            icon={<RefreshCw className="h-4 w-4" />}
+            loading={loading}
+            onClick={onRefresh}
+          >
+            刷新
+          </Button>
+          <Button variant="primary" disabled={!sentiment} onClick={onOpen}>
+            查看看板
+          </Button>
+        </span>
+      </div>
+    </Card>
+  )
+}
+
+interface LimitUpBoardDetailProps {
   snapshot: ShortTermLimitUpBoardSnapshot | null
   loading: boolean
   error: string | null
   onRefresh: () => void
 }
 
-export function LimitUpBoardView({ snapshot, loading, error, onRefresh }: LimitUpBoardViewProps) {
+/** 浮层内的完整看板内容。 */
+export function LimitUpBoardDetail({ snapshot, loading, error, onRefresh }: LimitUpBoardDetailProps) {
   return (
-    <Card
-      title={
-        <span className="inline-flex items-center gap-2">
-          <Flame className="h-4 w-4 text-rose-500" />
-          涨停看板 · 市场情绪
-        </span>
-      }
-      extra={
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-ink-400">
-            {snapshot ? `${snapshot.tradeDate} · 快照 ${formatDateTime(snapshot.fetchedAt)}` : '未加载'}
-          </span>
-          <Button variant="secondary" icon={<RefreshCw className="h-4 w-4" />} loading={loading} onClick={onRefresh}>
-            刷新
-          </Button>
-        </div>
-      }
-    >
+    <div className="flex flex-col gap-4">
       {error ? (
         <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">
           涨停看板获取失败：{error}
         </p>
       ) : null}
-      {!error && !snapshot && loading ? <Loader text="正在拉取涨停池数据" /> : null}
+      {!error && !snapshot ? (
+        <p className="py-6 text-center text-sm text-ink-400">
+          {loading ? '正在拉取涨停池数据…' : '暂无数据，请点击刷新。'}
+        </p>
+      ) : null}
       {!error && snapshot && !snapshot.available ? (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
           {snapshot.unavailableReason ?? '涨停池数据不可用'}
         </p>
       ) : null}
       {!error && snapshot?.available && snapshot.sentiment ? (
-        <div className="flex flex-col gap-4">
+        <>
+          <div className="flex justify-end">
+            <Button
+              variant="secondary"
+              icon={<RefreshCw className="h-4 w-4" />}
+              loading={loading}
+              onClick={onRefresh}
+            >
+              刷新
+            </Button>
+          </div>
           <SentimentSummary sentiment={snapshot.sentiment} stockCount={snapshot.stocks.length} />
           <IndustryBoard snapshot={snapshot} />
           <LimitUpTable snapshot={snapshot} />
@@ -98,18 +181,18 @@ export function LimitUpBoardView({ snapshot, loading, error, onRefresh }: LimitU
               {snapshot.dataGaps.join('；')}
             </div>
           ) : null}
-        </div>
+        </>
       ) : null}
-    </Card>
+    </div>
   )
 }
 
 function SentimentSummary({ sentiment, stockCount }: { sentiment: ShortTermLimitUpSentiment; stockCount: number }) {
-  const tone = toneLabel[sentiment.tone] ?? { tone: 'neutral' as const, label: sentiment.tone }
+  const tone = toneLabel[sentiment.tone] ?? 'neutral'
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Tag tone={tone.tone}>{tone.label}</Tag>
+        <Tag tone={tone}>{sentiment.tone}</Tag>
         <span className="text-xs text-ink-400">共 {stockCount} 只涨停</span>
       </div>
       <dl className="grid grid-cols-2 border-t border-line-soft text-xs md:grid-cols-4">
