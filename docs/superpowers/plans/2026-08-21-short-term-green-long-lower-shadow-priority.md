@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a `绿K长下影优先` result lane below the existing short-term right-side candidates, calculated from the same manual quote scan using a green candle, body percentage at most 15%, and lower-shadow percentage at least 50%.
+**Goal:** Add a `绿十字星长下影优先` result lane below the existing short-term right-side candidates, calculated from the same manual quote scan using a green candle, body percentage at most 10%, and lower-shadow percentage at least 50%.
 
 **Architecture:** Extend the existing full-market quote snapshot with intraday open/high/low values, calculate the independent shape directly from that snapshot inside `ShortTermService`, and add a lightweight result list to `ShortTermReport`. Keep the main candidate model and its ranking unchanged; React renders the new list in a separate card immediately below `右侧候选`.
 
@@ -12,7 +12,7 @@
 
 - Work directly on the existing `main` branch; do not create a worktree.
 - Use the same manual scan and scan-start quote snapshot; do not add a second scan or K-line pass.
-- Match only when `latestPrice < open`, `bodyPercent <= 15`, and `lowerShadowPercent >= 50`.
+- Match only when `latestPrice < open`, `bodyPercent <= 10`, and `lowerShadowPercent >= 50`.
 - Do not restrict upper shadow, moving averages, previous 20-day high, daily change, volume ratio, turnover, trend, or support reclaim.
 - Respect the existing ST/board permission, quote freshness, maximum-price, and minimum-liquidity boundaries.
 - Keep the existing main candidate ranks, actions, scores, and detail workflow unchanged.
@@ -124,7 +124,7 @@ overloads delegate with `List.of()` so legacy construction remains compatible.
 Add constants to `ShortTermService`:
 
 ```java
-private static final BigDecimal MAX_GREEN_CANDLE_BODY_PERCENT = new BigDecimal("15.00");
+private static final BigDecimal MAX_GREEN_CANDLE_BODY_PERCENT = new BigDecimal("10.00");
 private static final BigDecimal MIN_GREEN_CANDLE_LOWER_SHADOW_PERCENT = new BigDecimal("50.00");
 ```
 
@@ -146,7 +146,7 @@ BigDecimal lowerShadowPercent = latestPrice.subtract(lowPrice)
         .divide(range, 2, RoundingMode.HALF_UP);
 ```
 
-6. keeps body `<= 15.00` and lower shadow `>= 50.00`;
+6. keeps body `<= 10.00` and lower shadow `>= 50.00`;
 7. excludes a row only when existing quote freshness blocks it;
 8. sorts by lower shadow descending, amount descending, symbol ascending;
 9. limits using the resolved short-term `limit` and assigns lane ranks from 1;
@@ -207,7 +207,7 @@ Do not add controls, polling, a second loading state, or another scan request.
 
 - [ ] **Step 3: Render concise evidence rows**
 
-The new card title is `绿K长下影优先`. Each row shows lane rank, name, symbol,
+The new card title is `绿十字星长下影优先`. Each row shows lane rank, name, symbol,
 latest price, signed daily change, lower-shadow percentage as the emphasized
 metric, body percentage, open/high/low, traded amount, and a `盘中暂定` or
 `正式日K` tag. It does not render a score, buy action, or invented support claim.
@@ -215,7 +215,7 @@ metric, body percentage, open/high/low, traded amount, and a `盘中暂定` or
 When empty, render:
 
 ```text
-本次扫描未发现实体不超过 15%、下影线占比达到 50% 的绿K
+本次扫描未发现实体不超过 10%、下影线占比达到 50% 的绿十字星
 ```
 
 ### Task 5: Commit the implementation without verification hooks

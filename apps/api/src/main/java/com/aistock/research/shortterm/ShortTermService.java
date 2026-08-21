@@ -62,7 +62,7 @@ public class ShortTermService {
     private static final BigDecimal DEFAULT_MAX_ENTRY_RISE = new BigDecimal("6.50");
     private static final BigDecimal DEFAULT_MAX_DISTANCE_TO_MA20 = new BigDecimal("8.00");
     private static final BigDecimal DEFAULT_MIN_FINANCIAL_SCORE = new BigDecimal("55");
-    private static final BigDecimal MAX_GREEN_CANDLE_BODY_PERCENT = new BigDecimal("15.00");
+    private static final BigDecimal MAX_GREEN_CANDLE_BODY_PERCENT = new BigDecimal("10.00");
     private static final BigDecimal MIN_GREEN_CANDLE_LOWER_SHADOW_PERCENT = new BigDecimal("50.00");
     private static final BigDecimal MIN_RELIABLE_MARKET_COVERAGE = new BigDecimal("0.95");
     private static final BigDecimal MIN_RELIABLE_INDUSTRY_FUND_FLOW_COVERAGE = new BigDecimal("0.70");

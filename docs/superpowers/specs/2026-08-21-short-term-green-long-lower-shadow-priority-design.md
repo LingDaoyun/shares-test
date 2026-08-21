@@ -47,7 +47,7 @@ bodyPercent =
 
 matched = greenCandle
   and dayRange > 0
-  and bodyPercent <= 15
+  and bodyPercent <= 10
   and lowerShadowPercent >= 50
 ```
 
@@ -55,9 +55,8 @@ Because a matched candle is green, `min(open, latestPrice)` is normally the
 latest price. The general formula is retained so the calculation remains
 auditable.
 
-The `15%` body ceiling keeps the result close to the requested small-body
-green-candle shape while allowing more practical intraday variation than a
-strict `10%` ceiling.
+The `10%` body ceiling keeps the result within the system's quantitative
+definition of a standard green doji while still using exact scan-time prices.
 
 The independent shape does **not** require:
 
@@ -80,7 +79,7 @@ It does not depend on a stock surviving the existing golden-cross or
 support-reversal technical path. Therefore a matching stock may appear in the
 dedicated lane even when it is absent from `report.candidates`.
 
-The lane has its own ordering:
+The `绿十字星长下影优先` lane has its own ordering:
 
 1. lower-shadow percentage descending;
 2. traded amount descending;
@@ -92,7 +91,7 @@ This keeps the result compact without adding another threshold control.
 The resulting product-level priority is:
 
 1. existing recent high-volume golden-cross/right-side strong confirmations;
-2. the separate `绿K长下影优先` lane;
+2. the separate `绿十字星长下影优先` lane;
 3. ordinary long-lower-shadow support and other short-term candidates.
 
 The second item is expressed by a dedicated result lane, not by rewriting the
@@ -161,9 +160,9 @@ other verification unless the user explicitly requests it again.
 
 Acceptance cases for the user to check after implementation are:
 
-- a green candle with a `15.00%` body and exactly `50.00%` lower shadow appears;
+- a green candle with a `10.00%` body and exactly `50.00%` lower shadow appears;
 - a green candle below `50.00%` does not appear;
-- a green candle whose body exceeds `15.00%` does not appear;
+- a green candle whose body exceeds `10.00%` does not appear;
 - a red candle with the same lower shadow does not appear;
 - upper-shadow size and support reclaim do not affect membership;
 - the dedicated lane is directly below `右侧候选` and comes from the same scan;

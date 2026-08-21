@@ -624,14 +624,14 @@ function GreenLongLowerShadowCard({
       title={(
         <span className="inline-flex items-center gap-2">
           <CandlestickChart className="h-4 w-4 text-emerald-600" />
-          绿K长下影优先
+          绿十字星长下影优先
         </span>
       )}
       extra={<Tag tone={candidates.length ? 'success' : 'neutral'}>{candidates.length} 只</Tag>}
       flush
     >
       <div className="border-b border-line-soft bg-emerald-50/50 px-5 py-3 text-xs leading-relaxed text-emerald-800">
-        与右侧候选共用本次扫描；仅按绿K小实体和长下影形态独立排序，不代表已经形成买入动作。
+        与右侧候选共用本次扫描；仅按绿十字星小实体和长下影形态独立排序，不代表已经形成买入动作。
       </div>
       {candidates.length ? (
         <div className="divide-y divide-line-soft">
@@ -648,7 +648,7 @@ function GreenLongLowerShadowCard({
                   <Tag tone="success">下影 {formatNumber(candidate.lowerShadowPercent)}%</Tag>
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                  {candidate.market ?? 'A股'} · {candidate.industry ?? '行业待补'} · 实体不超过 15%
+                  {candidate.market ?? 'A股'} · {candidate.industry ?? '行业待补'} · 实体不超过 10%
                 </p>
               </div>
 
@@ -681,7 +681,7 @@ function GreenLongLowerShadowCard({
         </div>
       ) : (
         <p className="px-5 py-6 text-sm text-ink-500">
-          本次扫描未发现实体不超过 15%、下影线占比达到 50% 的绿K
+          本次扫描未发现实体不超过 10%、下影线占比达到 50% 的绿十字星
         </p>
       )}
     </Card>
