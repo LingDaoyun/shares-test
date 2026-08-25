@@ -3,24 +3,16 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  fetchLlmRuntimeConfig,
-  fetchPolicySources,
-  updateLlmRuntimeConfig,
-  updatePolicySources
-} from '../api/client'
+import { fetchPolicySources, updatePolicySources } from '../api/client'
 import { defaultLlmRuntimeConfig, defaultPolicySources } from '../lib/runtimeConfigDefaults'
 import { emptyRuntimeConfig, useAppStore } from '../store/appStore'
 import { toast } from '../components/ui/Toast'
 import { SettingsPage } from './SettingsPage'
 
 vi.mock('../api/client', () => ({
-  fetchLlmConfig: vi.fn(),
   fetchRules: vi.fn(),
   fetchRuntimeConfig: vi.fn(),
   updateRuntimeConfig: vi.fn(),
-  fetchLlmRuntimeConfig: vi.fn(),
-  updateLlmRuntimeConfig: vi.fn(),
   fetchPolicySources: vi.fn(),
   updatePolicySources: vi.fn()
 }))
@@ -29,8 +21,6 @@ vi.mock('../components/ui/Toast', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }
 }))
 
-const mockedFetchLlm = vi.mocked(fetchLlmRuntimeConfig)
-const mockedUpdateLlm = vi.mocked(updateLlmRuntimeConfig)
 const mockedFetchPolicies = vi.mocked(fetchPolicySources)
 const mockedUpdatePolicies = vi.mocked(updatePolicySources)
 
@@ -48,13 +38,11 @@ describe('SettingsPage section actions', () => {
       runtimeConfig: null,
       runtimeConfigForm: {
         ...emptyRuntimeConfig(),
-        llm: { ...defaultLlmRuntimeConfig(), apiKeyConfigured: true, apiKeySource: 'env:DEEPSEEK_API_KEY' },
+        llm: defaultLlmRuntimeConfig(),
         policySources: [{ name: '当前政策源', type: 'html', url: 'https://current.example', weight: 80 }]
       },
       runtimeConfigLoading: false
     })
-    mockedFetchLlm.mockResolvedValue(defaultLlmRuntimeConfig())
-    mockedUpdateLlm.mockResolvedValue(defaultLlmRuntimeConfig())
     mockedFetchPolicies.mockResolvedValue(defaultPolicySources())
     mockedUpdatePolicies.mockImplementation(async (sources) => sources)
     act(() => root.render(<SettingsPage />))
@@ -67,73 +55,41 @@ describe('SettingsPage section actions', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders independent action rows and saves only the selected section', async () => {
-    expect(actionButtons('大模型配置')).toHaveLength(3)
-    expect(actionButtons('政策源配置')).toHaveLength(3)
+  it('no longer renders the unused LLM provider section', () => {
+    expect(host.textContent).not.toContain('大模型配置')
+    expect(host.textContent).not.toContain('API Key')
+    expect(host.textContent).toContain('政策源配置')
+  })
 
-    await click(buttonIn('大模型配置', '保存配置'))
-    expect(mockedUpdateLlm).toHaveBeenCalledTimes(1)
-    expect(mockedUpdatePolicies).not.toHaveBeenCalled()
+  it('saves policy sources with the section actions', async () => {
+    expect(actionButtons('政策源配置')).toHaveLength(3)
 
     await click(buttonIn('政策源配置', '保存配置'))
     expect(mockedUpdatePolicies).toHaveBeenCalledTimes(1)
+    expect(toast.success).toHaveBeenCalledWith('政策源配置已保存并生效')
   })
 
-  it('reloads one section without replacing unsaved edits in the other', async () => {
-    const model = fieldIn('大模型配置', '模型')
-    await change(model, 'unsaved-model')
-
+  it('reloads policy sources from the backend', async () => {
     await click(buttonIn('政策源配置', '重新读取'))
 
-    expect(model.value).toBe('unsaved-model')
     expect(mockedFetchPolicies).toHaveBeenCalledTimes(1)
-    expect(mockedFetchLlm).not.toHaveBeenCalled()
+    expect(host.querySelectorAll('input[placeholder="来源名称"]')).toHaveLength(10)
   })
 
-  it('resets only the selected section without publishing', async () => {
-    const model = fieldIn('大模型配置', '模型')
-    await change(model, 'unsaved-model')
+  it('resets policy sources to defaults without publishing', async () => {
+    const name = policyNameInput()
+    await change(name, '未保存修改')
+
     await click(buttonIn('政策源配置', '重置为默认'))
 
-    expect(section('政策源配置').querySelectorAll('input[placeholder="来源名称"]')).toHaveLength(10)
-    expect(fieldIn('大模型配置', '模型').value).toBe('unsaved-model')
+    expect(host.querySelectorAll('input[placeholder="来源名称"]')).toHaveLength(10)
     expect(mockedUpdatePolicies).not.toHaveBeenCalled()
-    expect(mockedUpdateLlm).not.toHaveBeenCalled()
-  })
-
-  it('keeps policy actions enabled while the LLM section is saving', async () => {
-    mockedUpdateLlm.mockReturnValue(new Promise(() => undefined))
-
-    act(() => buttonIn('大模型配置', '保存配置').click())
-    await act(async () => Promise.resolve())
-
-    expect(buttonIn('大模型配置', '保存配置').disabled).toBe(true)
-    expect(buttonIn('政策源配置', '保存配置').disabled).toBe(false)
-    expect(buttonIn('政策源配置', '重新读取').disabled).toBe(false)
   })
 
   it('shows database metadata and no Nacos identifiers', () => {
-    expect(section('大模型配置').textContent).toContain('数据库配置')
-    expect(section('大模型配置').textContent).toContain('模型修订 0')
     expect(section('政策源配置').textContent).toContain('政策源修订 0')
     expect(host.textContent).not.toContain('Nacos')
     expect(host.textContent).not.toContain('AI_STOCK')
-  })
-
-  it('reports that a saved model is immediately effective', async () => {
-    await click(buttonIn('大模型配置', '保存配置'))
-
-    expect(toast.success).toHaveBeenCalledWith('大模型配置已保存并生效')
-  })
-
-  it('switches provider credentials and endpoint as one safe preset', async () => {
-    const provider = selectIn('大模型配置', 'Provider')
-
-    await changeSelect(provider, 'openai')
-
-    expect(fieldIn('大模型配置', '模型').value).toBe('gpt-5.5')
-    expect(fieldIn('大模型配置', 'Base URL').value).toBe('https://api.openai.com/v1')
-    expect(fieldIn('大模型配置', 'API Key 环境变量名').value).toBe('OPENAI_API_KEY')
   })
 
   function section(title: string) {
@@ -156,20 +112,10 @@ describe('SettingsPage section actions', () => {
     return button
   }
 
-  function fieldIn(title: string, label: string) {
-    const fieldLabel = [...section(title).querySelectorAll<HTMLLabelElement>('label')]
-      .find((element) => element.textContent?.trim() === label)
-    const input = fieldLabel?.parentElement?.querySelector<HTMLInputElement>('input')
-    if (!input) throw new Error(`Field not found: ${title} / ${label}`)
+  function policyNameInput() {
+    const input = section('政策源配置').querySelector<HTMLInputElement>('input[placeholder="来源名称"]')
+    if (!input) throw new Error('Policy name input not found')
     return input
-  }
-
-  function selectIn(title: string, label: string) {
-    const fieldLabel = [...section(title).querySelectorAll<HTMLLabelElement>('label')]
-      .find((element) => element.textContent?.trim() === label)
-    const select = fieldLabel?.parentElement?.querySelector<HTMLSelectElement>('select')
-    if (!select) throw new Error(`Select not found: ${title} / ${label}`)
-    return select
   }
 })
 
@@ -185,15 +131,6 @@ async function change(input: HTMLInputElement, value: string) {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
     setter?.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
-    await Promise.resolve()
-  })
-}
-
-async function changeSelect(select: HTMLSelectElement, value: string) {
-  await act(async () => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
-    setter?.call(select, value)
-    select.dispatchEvent(new Event('change', { bubbles: true }))
     await Promise.resolve()
   })
 }

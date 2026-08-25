@@ -21,19 +21,6 @@ export interface RuleDefinition {
   updatedAt: string
 }
 
-export interface LlmConfigPreview {
-  provider: string
-  model: string
-  baseUrl: string
-  responseFormat: string
-  strictJsonSchema: boolean
-  apiKeyConfigured: boolean
-  apiKeySource: string
-  thinking: string | null
-  maxCompletionTokens: number | null
-  temperature: number | null
-}
-
 export interface PolicySourceConfig {
   name: string
   type: string

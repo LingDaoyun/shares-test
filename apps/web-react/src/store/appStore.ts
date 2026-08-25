@@ -1,14 +1,6 @@
 import { create } from 'zustand'
-import type {
-  LlmConfigPreview,
-  RuleDefinition,
-  RuntimeConfigSnapshot
-} from '../types'
-import {
-  fetchLlmConfig,
-  fetchRules,
-  fetchRuntimeConfig
-} from '../api/client'
+import type { RuleDefinition, RuntimeConfigSnapshot } from '../types'
+import { fetchRules, fetchRuntimeConfig } from '../api/client'
 import { extractErrorMessage } from '../lib/format'
 import { toast } from '../components/ui/Toast'
 import { defaultLlmRuntimeConfig, defaultPolicySources } from '../lib/runtimeConfigDefaults'
@@ -27,17 +19,14 @@ export function emptyRuntimeConfig(): RuntimeConfigSnapshot {
 interface AppState {
   rules: RuleDefinition[]
 
-  llmConfig: LlmConfigPreview | null
   runtimeConfig: RuntimeConfigSnapshot | null
   runtimeConfigForm: RuntimeConfigSnapshot
 
   loading: boolean
-  configLoading: boolean
   runtimeConfigLoading: boolean
   runtimeConfigSaving: boolean
 
   loadAll: () => Promise<void>
-  refreshLlmConfig: () => Promise<void>
   loadRuntimeConfig: () => Promise<void>
   setRuntimeConfigForm: (form: RuntimeConfigSnapshot) => void
 }
@@ -45,12 +34,10 @@ interface AppState {
 export const useAppStore = create<AppState>((set) => ({
   rules: [],
 
-  llmConfig: null,
   runtimeConfig: null,
   runtimeConfigForm: emptyRuntimeConfig(),
 
   loading: false,
-  configLoading: false,
   runtimeConfigLoading: false,
   runtimeConfigSaving: false,
 
@@ -64,18 +51,6 @@ export const useAppStore = create<AppState>((set) => ({
       toast.error(`规则目录加载失败：${extractErrorMessage(e)}`)
     } finally {
       set({ loading: false })
-    }
-  },
-
-  refreshLlmConfig: async () => {
-    set({ configLoading: true })
-    try {
-      const cfg = await fetchLlmConfig()
-      set({ llmConfig: cfg })
-    } catch (e) {
-      toast.error(`模型配置加载失败：${extractErrorMessage(e)}`)
-    } finally {
-      set({ configLoading: false })
     }
   },
 
