@@ -1,6 +1,6 @@
 # 第三方股票市场数据接口对接文档
 
-更新时间：2026-08-11
+更新时间：2026-08-24
 
 本文按当前代码实现梳理工程中直接调用的第三方股票市场数据接口。范围包括行情、K 线、资金流、行业板块、财务指标、公告/定期报告和筹码外部认证；不包括 DeepSeek/OpenAI/Kimi 等大模型接口，也不包括政府政策网站抓取接口。
 
@@ -9,6 +9,7 @@
 | 入口 | 说明 |
 | --- | --- |
 | `apps/api/src/main/java/com/aistock/research/integration/eastmoney/EastMoneyClient.java` | 东方财富与腾讯行情主入口，覆盖行情、K 线、分时、资金流、行业、财报。 |
+| `apps/api/src/main/java/com/aistock/research/integration/yahoo/YahooFinanceClient.java` | Yahoo Finance spark 收盘序列，外围市场看板的日韩行业 ETF。 |
 | `apps/api/src/main/java/com/aistock/research/integration/tushare/TushareChipClient.java` | Tushare 筹码外部认证。 |
 | `apps/api/src/main/java/com/aistock/research/integration/cninfo/CninfoClient.java` | 巨潮资讯公告列表、公告详情链接、附件下载链接。 |
 | `apps/api/src/main/java/com/aistock/research/filing/FilingPdfTextService.java` | 下载巨潮公告 PDF 并抽取正文。 |
@@ -24,6 +25,8 @@
 | `research.live-data.eastmoney-fund-flow-url` | `https://push2.eastmoney.com/api/qt/ulist.np/get` | 东方财富个股实时/批量资金流。 |
 | `research.live-data.eastmoney-fund-flow-minute-url` | `https://push2.eastmoney.com/api/qt/stock/fflow/kline/get` | 东方财富分钟资金流。 |
 | `research.live-data.cninfo-announcement-url` | `https://www.cninfo.com.cn/new/hisAnnouncement/query` | 巨潮公告查询。 |
+| `research.live-data.yahoo-spark-url` | `https://query1.finance.yahoo.com/v8/finance/spark` | Yahoo spark 批量收盘序列（外围看板日韩行业）。 |
+| `research.live-data.yahoo-proxy-url`（环境变量 `YAHOO_PROXY_URL`） | 空 | Yahoo 专用代理，只作用于 Yahoo 请求（国内数据源不受影响）；留空时回退环境变量 `https_proxy`，都不配则直连。容器部署默认 `http://host.docker.internal:7897`（见 docker-compose.yml）。 |
 | `research.live-data.filing-limit` | `12` | 单只股票最多拉取公告数。 |
 | `research.live-data.filing-pdf-parse-limit` | `2` | 单只股票最多解析 PDF 正文数。 |
 | `research.live-data.filing-pdf-max-pages` | `6` | 单份 PDF 最多解析页数，上限 20。 |
@@ -432,7 +435,6 @@ CSV 行字段映射：
 | `jbzl[0].INDUSTRYCSRC1` | `industry` | 证监会行业分类，作为回退。 |
 
 ### 3.14 东方财富年报财务指标
-
 | 项 | 内容 |
 | --- | --- |
 | 调用方法 | `fetchAnnualIndicators`、`fetchAnnualIndicatorHistory` |
@@ -486,6 +488,22 @@ CSV 行字段映射：
 | `ASSIGNDSCRPT` | `dividendPlanDescription` | 分红方案描述。 |
 | `ZXGXL` | `dividendYield` | 股息率，工程按百分比转小数。 |
 | `SECUCODE` | 未落库 | 请求了该字段，但当前 `EastMoneyAnnualIndicator` 未保存。 |
+
+### 3.15 东方财富全球市场行情（全球指数 / 美股 ETF）
+
+| 项 | 内容 |
+| --- | --- |
+| 调用方法 | `EastMoneyClient.fetchGlobalQuotes` |
+| URL | `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&secids=...&fields=f2,f3,f4,f12,f13,f14,f18,f124` |
+| Method | `GET` |
+| 业务用途 | 外围市场看板：美日韩主要指数、全球指数速览条、美股 SPDR 行业 ETF。 |
+
+说明：
+
+- secid 前缀：`100.` 为全球指数（`DJIA`/`SPX`/`NDX`/`N225`/`KS11`/`HSI`/`GDAXI`/`FTSE`/`SX5E`/`FCHI` 等；东财不提供 TOPIX、KOSDAQ）；`107.` 为美交所上市 ETF（SPDR 行业系列 `XLK`/`XLV`/`XLI`/`XLE`/`XLF`/`XLY`/`XLP`/`XLB`/`XLRE`/`XLU`/`XLC`）。
+- 响应 `data.diff` 中 `f12` 只含代码部分（不带 `100.`/`107.` 前缀），服务层按去掉前缀后的代码匹配常量表。
+- `fltt=2` 下 `f2` 最新价、`f3` 涨跌幅（百分数）、`f4` 涨跌额、`f18` 昨收均为小数；`f124` 为行情时间戳（epoch 秒）。
+- 不认识的 secid 会被东财直接忽略，不影响同批其他代码。
 
 ## 4. 腾讯行情接口
 
@@ -727,7 +745,26 @@ CSV 行字段映射：
 | 最大文本长度 | 12000 字符，超过截断。 |
 | 失败处理 | 记录 warn，返回空，不阻断主流程。 |
 
-## 7. 调用方与证据覆盖
+## 7. Yahoo Finance 接口
+
+### 7.1 Yahoo spark 批量收盘序列
+
+| 项 | 内容 |
+| --- | --- |
+| 调用方法 | `YahooFinanceClient.fetchSparkQuotes` |
+| URL | `${research.live-data.yahoo-spark-url}`，默认 `https://query1.finance.yahoo.com/v8/finance/spark?symbols=...&range=5d&interval=1d` |
+| Method | `GET` |
+| 业务用途 | 外围市场看板日韩行业：日本 TOPIX-17 系列 ETF（`1617.T`-`1633.T`）、韩国 KODEX 行业系列（`.KS`），以及 `^KQ11`（KOSDAQ）指数。 |
+
+说明：
+
+- 需要国际网络可达；该客户端使用独立的 `RestClient`，代理只从 `research.live-data.yahoo-proxy-url`（环境变量 `YAHOO_PROXY_URL`）或环境变量 `https_proxy` 读取，避免把全局代理套到国内数据源上。
+- 响应路径 `spark.result[].response[0].indicators.quote[0].close[]`，取最后两个有效收盘计算涨跌幅；`timestamp[]` 提供最后成交时间。
+- `^` 开头的指数代码在拼接 URL 前预编码为 `%5E`。
+- 访问纪律：每请求 ≤20 只代码、请求间隔 ≥600ms、每批 2 次重试（间隔 1.5s）。整体失败抛 `IllegalStateException`，由外围看板按数据缺口降级。
+- 被限流时返回纯文本 `Too Many Requests`，按"非 JSON 内容"识别为失败。
+
+## 8. 调用方与证据覆盖
 
 | 证据/模块 | 使用的数据接口 |
 | --- | --- |
@@ -741,8 +778,9 @@ CSV 行字段映射：
 | 今日市场情绪/资金去向 | 东方财富行业资金流。 |
 | 筹码集中区域和价位 | 本地模型使用历史日 K、成交量、成交额、换手率复算；Tushare `cyq_perf` 只做最近完整交易日外部认证。 |
 | 交易复盘 | 东方财富/腾讯最新价、腾讯/东方财富历史日 K。 |
+| 外围市场看板 | 东方财富全球行情（美日韩指数、全球指数速览、美股 SPDR 行业 ETF）、Yahoo spark（日韩行业 ETF、TOPIX/KOSDAQ）。 |
 
-## 8. 降级、限流与稳定性
+## 9. 降级、限流与稳定性
 
 | 机制 | 当前实现 |
 | --- | --- |
@@ -754,8 +792,9 @@ CSV 行字段映射：
 | 筹码认证 | Tushare 未配置、超时、限流或业务错误时，短线筹码展示降级为本地单源，不阻断扫描。 |
 | 巨潮公告 | 先用证券列表解析 `orgId`，失败后按交易所编码猜测；公告和 PDF 失败均不阻断公司主流程。 |
 | Token 安全 | Tushare Token 只来自环境变量，不能写入仓库、日志、报告或前端响应。 |
+| 外围看板 | 东财全球行情为主数据，失败返回 unavailable 且不进缓存（下次请求立即重试）；Yahoo 日韩行业为辅数据，失败降级为仅指数并记 dataGaps；可用快照缓存 300 秒。 |
 
-## 9. 排查建议
+## 10. 排查建议
 
 | 现象 | 优先检查 |
 | --- | --- |
@@ -765,3 +804,4 @@ CSV 行字段映射：
 | 缺失行业估值对比 | 查行业名称能否匹配到 `BK` 板块；再查行业成分股 `clist/get` 是否返回行情估值字段。 |
 | 筹码显示“未交叉验证” | 查 `research.short-term.chip.tushare.enabled`、`token`、接口权限和 `cyq_perf` 当日/最近完整交易日是否有数据。 |
 | 短线推荐出现下跌股票 | 后端已增加 `NON_POSITIVE_DAILY_CHANGE` 硬过滤；若再次出现，优先确认前端展示是否为旧扫描快照、后端是否已部署最新包、行情源 `changePercent` 是否缺失或缓存未刷新。 |
+| 外围看板日韩行业缺失 | 先确认部署环境能访问 Yahoo（必要时配置 `https_proxy`）；再看响应是否为 429 限流（等待冷却或降低刷新频率）；美股块缺失则查东财 `ulist.np/get` 全球 secid 是否仍返回。 |

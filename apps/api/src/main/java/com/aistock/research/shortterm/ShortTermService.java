@@ -10,6 +10,7 @@ import com.aistock.research.integration.eastmoney.EastMoneyIndustryFundFlowSnaps
 import com.aistock.research.integration.eastmoney.EastMoneyIntradayPoint;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
+import com.aistock.research.integration.eastmoney.EastMoneyStockFundFlowRank;
 import com.aistock.research.quality.EvidenceCompleteness;
 import com.aistock.research.quality.EvidenceCompletenessInput;
 import com.aistock.research.quality.EvidenceCompletenessService;
@@ -62,8 +63,6 @@ public class ShortTermService {
     private static final BigDecimal DEFAULT_MAX_ENTRY_RISE = new BigDecimal("6.50");
     private static final BigDecimal DEFAULT_MAX_DISTANCE_TO_MA20 = new BigDecimal("8.00");
     private static final BigDecimal DEFAULT_MIN_FINANCIAL_SCORE = new BigDecimal("55");
-    private static final BigDecimal MAX_GREEN_CANDLE_BODY_PERCENT = new BigDecimal("10.00");
-    private static final BigDecimal MIN_GREEN_CANDLE_LOWER_SHADOW_PERCENT = new BigDecimal("50.00");
     private static final BigDecimal MIN_RELIABLE_MARKET_COVERAGE = new BigDecimal("0.95");
     private static final BigDecimal MIN_RELIABLE_INDUSTRY_FUND_FLOW_COVERAGE = new BigDecimal("0.70");
     private static final BigDecimal ROE_STRONG = RatioScale.fromPercentPoints("12");
@@ -363,12 +362,6 @@ public class ShortTermService {
         List<EastMoneyQuote> quoteUniverse = marketContextUniverse.stream()
                 .filter(quote -> isTradableCommonShare(quote, ruleSet.allowChiNext()))
                 .toList();
-        List<ShortTermGreenLongLowerShadowCandidate> greenLongLowerShadowCandidates =
-                greenLongLowerShadowCandidates(
-                        quoteUniverse,
-                        ruleSet,
-                        resolveLimit(request.limit())
-                );
         ShortTermCoverageSnapshot coverage = coverageSnapshot(
                 quoteSnapshot,
                 marketQuotes,
@@ -407,8 +400,7 @@ public class ShortTermService {
                     quoteExclusions,
                     pointInTimeCoverageQuotes,
                     preFilteredQuotes.size(),
-                    marketContextUniverse,
-                    greenLongLowerShadowCandidates
+                    marketContextUniverse
             );
         }
         Map<String, ShortTermHotDirection> hotDirectionMap = hotDirections.stream()
@@ -576,8 +568,7 @@ public class ShortTermService {
                 Instant.now(),
                 technicalReviewCoverage,
                 crossSection.context(),
-                marketRegime,
-                greenLongLowerShadowCandidates
+                marketRegime
         );
     }
 
@@ -725,6 +716,84 @@ public class ShortTermService {
         );
     }
 
+    public ShortTermIndustryLeaderSnapshot industryLeaderSnapshot(String code, String name, String flow, int limit) {
+        String safeCode = code == null ? "" : code.trim();
+        if (!safeCode.matches("BK\\d+")) {
+            return ShortTermIndustryLeaderSnapshot.unavailable(
+                    safeCode,
+                    name,
+                    "行业板块代码不合法，必须是 BK 开头的东方财富板块代码。"
+            );
+        }
+        boolean outflow = "OUTFLOW".equalsIgnoreCase(flow);
+        int safeLimit = Math.min(Math.max(limit, 1), 20);
+        try {
+            List<EastMoneyStockFundFlowRank> ranks = eastMoneyClient.fetchBoardStockFundFlowRanks(
+                    safeCode,
+                    safeLimit,
+                    outflow
+            );
+            if (ranks.isEmpty()) {
+                return ShortTermIndustryLeaderSnapshot.unavailable(
+                        safeCode,
+                        name,
+                        "板块 " + safeCode + " 未返回个股资金流数据。"
+                );
+            }
+            List<String> dataGaps = new ArrayList<>();
+            LocalDate tradeDate = ranks.stream()
+                    .map(EastMoneyStockFundFlowRank::tradeDate)
+                    .filter(java.util.Objects::nonNull)
+                    .max(LocalDate::compareTo)
+                    .orElse(null);
+            if (tradeDate == null) {
+                dataGaps.add("个股资金流缺少数据日，无法确认是否为今日快照。");
+            }
+            Instant fetchedAt = ranks.stream()
+                    .map(EastMoneyStockFundFlowRank::fetchedAt)
+                    .filter(java.util.Objects::nonNull)
+                    .max(Instant::compareTo)
+                    .orElse(null);
+            List<ShortTermIndustryLeaderStock> stocks = IntStream.range(0, ranks.size())
+                    .mapToObj(index -> industryLeaderStock(index + 1, ranks.get(index)))
+                    .toList();
+            return new ShortTermIndustryLeaderSnapshot(
+                    safeCode,
+                    name,
+                    outflow ? "OUTFLOW" : "INFLOW",
+                    stocks,
+                    tradeDate,
+                    fetchedAt,
+                    "东方财富板块个股资金流",
+                    dataGaps
+            );
+        } catch (RuntimeException exception) {
+            logger.warn("短线行业龙头股资金流获取失败：{}", safeCode, exception);
+            return ShortTermIndustryLeaderSnapshot.unavailable(
+                    safeCode,
+                    name,
+                    "板块个股资金流获取失败：" + rootMessage(exception)
+            );
+        }
+    }
+
+    private ShortTermIndustryLeaderStock industryLeaderStock(int rank, EastMoneyStockFundFlowRank rankSnapshot) {
+        return new ShortTermIndustryLeaderStock(
+                rank,
+                rankSnapshot.symbol(),
+                rankSnapshot.name(),
+                rankSnapshot.latestPrice(),
+                rankSnapshot.changePercent(),
+                rankSnapshot.mainNetInflow(),
+                rankSnapshot.mainNetInflowRatio(),
+                rankSnapshot.superLargeNetInflow(),
+                rankSnapshot.largeNetInflow(),
+                rankSnapshot.tradeDate(),
+                rankSnapshot.marketTimestamp(),
+                rankSnapshot.sourceUrl()
+        );
+    }
+
     private String marketFundDirectionNote(ShortTermMarketFundDirection direction) {
         if (direction == null || (direction.topInflows().isEmpty() && direction.topOutflows().isEmpty())) {
             return " 今日资金去向：行业资金流暂不可用，页面仅展示个股自身资金流证据。";
@@ -747,8 +816,7 @@ public class ShortTermService {
             List<ShortTermRiskExclusion> quoteExclusions,
             List<EastMoneyQuote> pointInTimeCoverageQuotes,
             int quotePreselectedCount,
-            List<EastMoneyQuote> marketContextUniverse,
-            List<ShortTermGreenLongLowerShadowCandidate> greenLongLowerShadowCandidates
+            List<EastMoneyQuote> marketContextUniverse
     ) {
         ShortTermTechnicalReviewCoverage technicalReviewCoverage = ShortTermTechnicalReviewCoverage.of(
                 quotePreselectedCount,
@@ -792,8 +860,7 @@ public class ShortTermService {
                 Instant.now(),
                 technicalReviewCoverage,
                 crossSectionContext,
-                marketRegime,
-                greenLongLowerShadowCandidates
+                marketRegime
         );
     }
 
@@ -2929,106 +2996,6 @@ public class ShortTermService {
         return preFilterExclusion(quote, ruleSet, unstableIndustrySymbols) == null;
     }
 
-    private List<ShortTermGreenLongLowerShadowCandidate> greenLongLowerShadowCandidates(
-            List<EastMoneyQuote> quotes,
-            ShortTermRuleSet ruleSet,
-            int limit
-    ) {
-        if (quotes == null || quotes.isEmpty() || limit <= 0) {
-            return List.of();
-        }
-        List<GreenLongLowerShadowMatch> matches = quotes.stream()
-                .map(quote -> greenLongLowerShadowMatch(quote, ruleSet))
-                .filter(match -> match != null)
-                .sorted(Comparator
-                        .comparing(
-                                GreenLongLowerShadowMatch::lowerShadowPercent,
-                                Comparator.reverseOrder()
-                        )
-                        .thenComparing(
-                                match -> match.quote().amount(),
-                                Comparator.nullsLast(Comparator.reverseOrder())
-                        )
-                        .thenComparing(
-                                match -> match.quote().symbol(),
-                                Comparator.nullsLast(String::compareTo)
-                        ))
-                .limit(limit)
-                .toList();
-        return IntStream.range(0, matches.size())
-                .mapToObj(index -> {
-                    GreenLongLowerShadowMatch match = matches.get(index);
-                    EastMoneyQuote quote = match.quote();
-                    return new ShortTermGreenLongLowerShadowCandidate(
-                            index + 1,
-                            quote.symbol(),
-                            quote.name(),
-                            quote.market(),
-                            quote.industry(),
-                            quote.latestPrice(),
-                            quote.changePercent(),
-                            quote.openPrice(),
-                            quote.highPrice(),
-                            quote.lowPrice(),
-                            match.bodyPercent(),
-                            match.lowerShadowPercent(),
-                            quote.amount(),
-                            quote.turnoverRate(),
-                            match.quoteFreshness(),
-                            !tradingClockService.isCompletedDailyBar(quote.tradeDate())
-                    );
-                })
-                .toList();
-    }
-
-    private GreenLongLowerShadowMatch greenLongLowerShadowMatch(
-            EastMoneyQuote quote,
-            ShortTermRuleSet ruleSet
-    ) {
-        if (quote == null
-                || quote.latestPrice() == null
-                || quote.openPrice() == null
-                || quote.highPrice() == null
-                || quote.lowPrice() == null) {
-            return null;
-        }
-        BigDecimal latestPrice = quote.latestPrice();
-        BigDecimal openPrice = quote.openPrice();
-        BigDecimal highPrice = quote.highPrice();
-        BigDecimal lowPrice = quote.lowPrice();
-        if (latestPrice.compareTo(BigDecimal.ZERO) <= 0
-                || openPrice.compareTo(BigDecimal.ZERO) <= 0
-                || highPrice.compareTo(BigDecimal.ZERO) <= 0
-                || lowPrice.compareTo(BigDecimal.ZERO) <= 0
-                || latestPrice.compareTo(ruleSet.maxPricePerShare()) > 0
-                || !RecommendationQuality.hasSufficientLiquidity(quote, ruleSet.minAmount())
-                || latestPrice.compareTo(openPrice) >= 0
-                || highPrice.compareTo(lowPrice) <= 0
-                || highPrice.compareTo(openPrice.max(latestPrice)) < 0
-                || lowPrice.compareTo(openPrice.min(latestPrice)) > 0) {
-            return null;
-        }
-        QuoteFreshnessSnapshot quoteFreshness = quoteFreshnessService.evaluate(quote);
-        if (quoteFreshness == null || quoteFreshness.blocksRealtimeDecision()) {
-            return null;
-        }
-        BigDecimal range = highPrice.subtract(lowPrice);
-        BigDecimal bodyPercent = percent(latestPrice.subtract(openPrice).abs(), range)
-                .setScale(2, RoundingMode.HALF_UP);
-        BigDecimal lowerShadowPercent = percent(latestPrice.subtract(lowPrice), range)
-                .setScale(2, RoundingMode.HALF_UP);
-        if (bodyPercent.compareTo(MAX_GREEN_CANDLE_BODY_PERCENT) > 0
-                || lowerShadowPercent.compareTo(MIN_GREEN_CANDLE_LOWER_SHADOW_PERCENT) < 0) {
-            return null;
-        }
-        return new GreenLongLowerShadowMatch(
-                quote,
-                bodyPercent,
-                lowerShadowPercent,
-                quoteFreshness
-        );
-    }
-
     private ShortTermRiskExclusion preFilterExclusion(
             EastMoneyQuote quote,
             ShortTermRuleSet ruleSet,
@@ -3955,14 +3922,6 @@ public class ShortTermService {
             String code,
             String label,
             List<String> keywords
-    ) {
-    }
-
-    private record GreenLongLowerShadowMatch(
-            EastMoneyQuote quote,
-            BigDecimal bodyPercent,
-            BigDecimal lowerShadowPercent,
-            QuoteFreshnessSnapshot quoteFreshness
     ) {
     }
 

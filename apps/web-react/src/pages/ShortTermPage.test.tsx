@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchOvernightBacktest,
+  fetchShortTermIndustryLeaders,
   fetchShortTermScanJob,
   fetchShortTermValidationSummaries,
   startShortTermScanJob
@@ -17,6 +18,7 @@ import { ShortTermPage } from './ShortTermPage'
 
 vi.mock('../api/client', () => ({
   fetchOvernightBacktest: vi.fn(),
+  fetchShortTermIndustryLeaders: vi.fn(),
   fetchShortTermScanJob: vi.fn(),
   fetchShortTermValidationSummaries: vi.fn(),
   startShortTermScanJob: vi.fn(),
@@ -318,6 +320,47 @@ function reportWithCandidates(
   } as unknown as ShortTermReport
 }
 
+function reportWithFundDirection(): ShortTermReport {
+  return {
+    ...reportWithCandidates(['600795']),
+    marketFundDirection: {
+      topInflows: [{
+        code: 'BK1201',
+        name: '电子',
+        mainNetInflow: 25470566400,
+        mainNetInflowRatio: 3.75,
+        superLargeNetInflow: 18464870400,
+        largeNetInflow: 7005696000,
+        advancing: 411,
+        declining: 102,
+        constituentCount: 513,
+        concentrationPercent: 18.4,
+        sourceUrl: 'https://push2delay.eastmoney.com/api/qt/clist/get'
+      }],
+      topOutflows: [{
+        code: 'BK0475',
+        name: '银行',
+        mainNetInflow: -9000000000,
+        mainNetInflowRatio: -2.5,
+        superLargeNetInflow: -6000000000,
+        largeNetInflow: -3000000000,
+        advancing: 4,
+        declining: 28,
+        constituentCount: 32,
+        concentrationPercent: 7.2,
+        sourceUrl: 'https://push2delay.eastmoney.com/api/qt/clist/get'
+      }],
+      coveredIndustryCount: 496,
+      expectedIndustryCount: 496,
+      coverageRatio: 1,
+      tradeDate: '2026-08-07',
+      fetchedAt: '2026-08-07T14:15:00+08:00',
+      sourceName: '东方财富行业资金流',
+      dataGaps: []
+    }
+  } as unknown as ShortTermReport
+}
+
 describe('ShortTermPage manual scan flow', () => {
   it('keeps raw quote acquisition audit fields in the report contract', () => {
     expect(emptyReport.coverage.rawExpectedCount).toBe(5895)
@@ -484,6 +527,97 @@ describe('ShortTermPage manual scan flow', () => {
 
     expect(document.body.textContent).toContain('今日资金去向')
     expect(document.body.textContent).toContain('行业资金流暂不可用')
+  })
+
+  it('opens the industry leader popup with top 10 stocks when a fund direction item is clicked', async () => {
+    vi.mocked(fetchShortTermIndustryLeaders).mockResolvedValue({
+      code: 'BK1201',
+      name: '电子',
+      flowDirection: 'INFLOW',
+      tradeDate: '2026-08-07',
+      fetchedAt: '2026-08-07T14:15:00+08:00',
+      sourceName: '东方财富板块个股资金流',
+      dataGaps: [],
+      stocks: [
+        {
+          rank: 1,
+          symbol: '002475',
+          name: '立讯精密',
+          latestPrice: 41.2,
+          changePercent: 5.6,
+          mainNetInflow: 1200000000,
+          mainNetInflowRatio: 8.4,
+          superLargeNetInflow: 800000000,
+          largeNetInflow: 400000000,
+          tradeDate: '2026-08-07',
+          marketTimestamp: '2026-08-07T14:15:00+08:00',
+          sourceUrl: null
+        },
+        {
+          rank: 2,
+          symbol: '600703',
+          name: '三安光电',
+          latestPrice: 15.8,
+          changePercent: 3.2,
+          mainNetInflow: 600000000,
+          mainNetInflowRatio: 5.1,
+          superLargeNetInflow: 400000000,
+          largeNetInflow: 200000000,
+          tradeDate: '2026-08-07',
+          marketTimestamp: '2026-08-07T14:15:00+08:00',
+          sourceUrl: null
+        }
+      ]
+    })
+    await renderWithManualReport(root, reportWithFundDirection())
+    await toggleResultView('展示今日资金去向')
+
+    const inflowButton = document.querySelector('button[aria-label="查看 电子 板块内主力资金前 10 个股"]') as HTMLButtonElement | null
+    expect(inflowButton).not.toBeNull()
+    await act(async () => {
+      inflowButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+    })
+
+    expect(fetchShortTermIndustryLeaders).toHaveBeenCalledWith('BK1201', { name: '电子', flow: 'INFLOW', limit: 10 })
+    expect(document.body.textContent).toContain('电子 · 龙头股')
+    expect(document.body.textContent).toContain('立讯精密')
+    expect(document.body.textContent).toContain('三安光电')
+    expect(document.body.textContent).toContain('主力净流入前 10')
+
+    const popupCloseButton = document.querySelector('button[aria-label="关闭详情"]') as HTMLButtonElement | null
+    expect(popupCloseButton).not.toBeNull()
+    await act(async () => {
+      popupCloseButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+    })
+    expect(document.body.textContent).not.toContain('电子 · 龙头股')
+
+    const outflowButton = document.querySelector('button[aria-label="查看 银行 板块内主力资金前 10 个股"]') as HTMLButtonElement | null
+    expect(outflowButton).not.toBeNull()
+    await act(async () => {
+      outflowButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+    })
+
+    expect(fetchShortTermIndustryLeaders).toHaveBeenLastCalledWith('BK0475', { name: '银行', flow: 'OUTFLOW', limit: 10 })
+    expect(document.body.textContent).toContain('银行 · 龙头股')
+    expect(document.body.textContent).toContain('主力净流出前 10')
+  })
+
+  it('shows a retry hint when the industry leader popup request fails', async () => {
+    vi.mocked(fetchShortTermIndustryLeaders).mockRejectedValue(new Error('网络异常'))
+    await renderWithManualReport(root, reportWithFundDirection())
+    await toggleResultView('展示今日资金去向')
+
+    const inflowButton = document.querySelector('button[aria-label="查看 电子 板块内主力资金前 10 个股"]') as HTMLButtonElement | null
+    await act(async () => {
+      inflowButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+    })
+
+    expect(document.body.textContent).toContain('板块个股资金流获取失败，请稍后重试。')
+    expect(document.body.textContent).toContain('重试')
   })
 
   it('shows the four core signals and candle-strength evidence in the candidate detail', async () => {

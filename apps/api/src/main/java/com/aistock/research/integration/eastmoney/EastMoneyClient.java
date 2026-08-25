@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 @Component
 public class EastMoneyClient {
@@ -42,10 +43,13 @@ public class EastMoneyClient {
     private static final ZoneId CHINA_MARKET_ZONE = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter TENCENT_QUOTE_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final String FUND_FLOW_FIELDS = "f12,f13,f14,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f124";
+    private static final String GLOBAL_QUOTE_FIELDS = "f2,f3,f4,f12,f13,f14,f18,f124";
     private static final String FUND_FLOW_MINUTE_FIELDS = "f51,f52,f53,f54,f55,f56,f57";
     private static final String FUND_FLOW_DAY_FIELDS = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65";
     private static final String EASTMONEY_FUND_FLOW_DAY_URL = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get";
     private static final String INDUSTRY_FUND_FLOW_FIELDS = "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f104,f105,f124,f152";
+    private static final String BOARD_STOCK_FUND_FLOW_FIELDS = "f12,f14,f2,f3,f62,f184,f66,f72,f124";
+    private static final Pattern BOARD_CODE_PATTERN = Pattern.compile("BK\\d+");
     private static final String INDUSTRY_BOARD_FIELDS = "f12,f14";
     static final String A_SHARE_FILTER = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048";
     private static final String INDUSTRY_BOARD_FILTER = "m:90 t:2 f:!50";
@@ -65,6 +69,7 @@ public class EastMoneyClient {
     );
     private static final long INDUSTRY_BOARD_CACHE_SECONDS = 3600;
     private static final long INDUSTRY_CONSTITUENT_CACHE_SECONDS = 300;
+    private static final long BOARD_STOCK_FUND_FLOW_CACHE_SECONDS = 120;
     private static final String FINANCIAL_COLUMNS = String.join(",",
             "SECURITY_CODE",
             "SECURITY_NAME_ABBR",
@@ -91,6 +96,7 @@ public class EastMoneyClient {
     private final Object industryBoardCacheLock = new Object();
     private final Object eastMoneyRequestLock = new Object();
     private final Map<String, CachedQuotes> industryConstituentCache = new ConcurrentHashMap<>();
+    private final Map<String, CachedBoardStockFundFlows> boardStockFundFlowCache = new ConcurrentHashMap<>();
     private volatile CachedIndustryBoards cachedIndustryBoards = new CachedIndustryBoards(List.of(), Instant.EPOCH);
     private volatile long lastEastMoneyRequestMillis;
 
@@ -328,6 +334,55 @@ public class EastMoneyClient {
         return quotes.stream().limit(limit).toList();
     }
 
+    /**
+     * 批量获取全球市场行情。secid 由调用方直接给定（东财体系：100.=全球指数、107.=美交所 ETF），
+     * 不经过只认 A 股的 {@link #secId(String)}；URL 带 fltt=2，价格与涨跌幅直接是小数。
+     */
+    public List<EastMoneyGlobalQuote> fetchGlobalQuotes(List<String> secids) {
+        if (secids == null || secids.isEmpty()) {
+            return List.of();
+        }
+        Instant fetchedAt = Instant.now();
+        List<EastMoneyGlobalQuote> quotes = new ArrayList<>();
+        Exception lastException = null;
+        for (int start = 0; start < secids.size(); start += 80) {
+            int end = Math.min(start + 80, secids.size());
+            String url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+                    + "?fltt=2&invt=2"
+                    + "&secids=" + String.join(",", secids.subList(start, end))
+                    + "&fields=" + GLOBAL_QUOTE_FIELDS;
+            try {
+                for (JsonNode item : diffItems(fetchQuoteRoot(url).path("data").path("diff"))) {
+                    readGlobalQuote(item, fetchedAt).ifPresent(quotes::add);
+                }
+            } catch (Exception exception) {
+                lastException = exception;
+            }
+        }
+        if (quotes.isEmpty() && lastException != null) {
+            throw new IllegalStateException("东方财富全球行情数据获取失败", lastException);
+        }
+        return quotes;
+    }
+
+    java.util.Optional<EastMoneyGlobalQuote> readGlobalQuote(JsonNode item, Instant fetchedAt) {
+        String code = text(item, "f12");
+        if (code == null || code.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        Instant quoteTime = epochSecond(item, "f124");
+        return java.util.Optional.of(new EastMoneyGlobalQuote(
+                code,
+                text(item, "f14"),
+                decimal(item, "f2"),
+                decimal(item, "f3"),
+                decimal(item, "f4"),
+                decimal(item, "f18"),
+                integer(item, "f13"),
+                quoteTime != null ? quoteTime : fetchedAt
+        ));
+    }
+
     public List<EastMoneyIntradayPoint> fetchIntradayTrends(String symbol) {
         RuntimeException primaryFailure = null;
         try {
@@ -477,6 +532,77 @@ public class EastMoneyClient {
                 + "&fid=f62"
                 + "&fs=" + encodeQueryValue(INDUSTRY_FUND_FLOW_FILTER)
                 + "&fields=" + encodeQueryValue(INDUSTRY_FUND_FLOW_FIELDS);
+    }
+
+    public List<EastMoneyStockFundFlowRank> fetchBoardStockFundFlowRanks(String boardCode, int limit, boolean ascending) {
+        if (boardCode == null || !BOARD_CODE_PATTERN.matcher(boardCode).matches()) {
+            return List.of();
+        }
+        int safeLimit = Math.min(Math.max(limit, 1), 50);
+        String cacheKey = boardCode + ":" + safeLimit + ":" + (ascending ? "asc" : "desc");
+        Instant now = Instant.now();
+        CachedBoardStockFundFlows cached = boardStockFundFlowCache.get(cacheKey);
+        if (cached != null && now.isBefore(cached.expiresAt())) {
+            return cached.ranks();
+        }
+        String url = boardStockFundFlowUrl(boardCode, safeLimit, ascending);
+        try {
+            JsonNode diff = fetchQuoteRoot(url).path("data").path("diff");
+            List<EastMoneyStockFundFlowRank> ranks = readBoardStockFundFlowRanks(diff, Instant.now(), url);
+            boardStockFundFlowCache.put(
+                    cacheKey,
+                    new CachedBoardStockFundFlows(ranks, now.plusSeconds(BOARD_STOCK_FUND_FLOW_CACHE_SECONDS))
+            );
+            return ranks;
+        } catch (Exception exception) {
+            throw new IllegalStateException("东方财富板块个股资金流获取失败：" + boardCode, exception);
+        }
+    }
+
+    String boardStockFundFlowUrl(String boardCode, int limit, boolean ascending) {
+        return "https://push2delay.eastmoney.com/api/qt/clist/get"
+                + "?pn=1"
+                + "&pz=" + limit
+                + "&po=" + (ascending ? "0" : "1")
+                + "&np=1"
+                + "&ut=bd1d9ddb04089700cf9c27f6f7426281"
+                + "&fltt=2"
+                + "&invt=2"
+                + "&fid=f62"
+                + "&fs=" + encodeQueryValue("b:" + boardCode + " f:!50")
+                + "&fields=" + encodeQueryValue(BOARD_STOCK_FUND_FLOW_FIELDS);
+    }
+
+    List<EastMoneyStockFundFlowRank> readBoardStockFundFlowRanks(JsonNode diff, Instant fetchedAt, String sourceUrl) {
+        List<EastMoneyStockFundFlowRank> ranks = new ArrayList<>();
+        for (JsonNode item : diffItems(diff)) {
+            readBoardStockFundFlowRank(item, fetchedAt, sourceUrl).ifPresent(ranks::add);
+        }
+        return List.copyOf(ranks);
+    }
+
+    Optional<EastMoneyStockFundFlowRank> readBoardStockFundFlowRank(JsonNode item, Instant fetchedAt, String sourceUrl) {
+        String symbol = text(item, "f12");
+        String name = text(item, "f14");
+        if (symbol == null || name == null) {
+            return Optional.empty();
+        }
+        Instant marketTimestamp = epochSecond(item, "f124");
+        return Optional.of(new EastMoneyStockFundFlowRank(
+                symbol,
+                name,
+                decimal(item, "f2"),
+                decimal(item, "f3"),
+                decimal(item, "f62"),
+                decimal(item, "f184"),
+                decimal(item, "f66"),
+                decimal(item, "f72"),
+                marketTimestamp,
+                tradeDate(marketTimestamp),
+                "东方财富板块个股资金流",
+                sourceUrl,
+                fetchedAt
+        ));
     }
 
     String fundFlowBatchUrl(List<String> symbols) {
@@ -2221,6 +2347,9 @@ public class EastMoneyClient {
     }
 
     private record CachedQuotes(List<EastMoneyQuote> quotes, Instant expiresAt) {
+    }
+
+    private record CachedBoardStockFundFlows(List<EastMoneyStockFundFlowRank> ranks, Instant expiresAt) {
     }
 
 }

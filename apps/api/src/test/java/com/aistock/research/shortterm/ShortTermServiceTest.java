@@ -8,6 +8,7 @@ import com.aistock.research.integration.eastmoney.EastMoneyIndustryFundFlowSnaps
 import com.aistock.research.integration.eastmoney.EastMoneyIntradayPoint;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
+import com.aistock.research.integration.eastmoney.EastMoneyStockFundFlowRank;
 import com.aistock.research.configuration.ShortTermChipSettings;
 import com.aistock.research.quality.EvidenceCompleteness;
 import com.aistock.research.quality.EvidenceCompletenessService;
@@ -533,6 +534,66 @@ class ShortTermServiceTest {
         ShortTermChipSnapshot snapshot = mock(ShortTermChipSnapshot.class);
         when(snapshot.contributionScore()).thenReturn(new BigDecimal(contribution));
         return snapshot;
+    }
+
+    @Test
+    void industryLeaderSnapshotRanksBoardStocksByFundFlowDirection() {
+        eastMoneyClient.boardStockFundFlowRanks = List.of(
+                new EastMoneyStockFundFlowRank(
+                        "002475", "立讯精密", new BigDecimal("41.2"), new BigDecimal("5.6"),
+                        new BigDecimal("1200000000"), new BigDecimal("8.4"),
+                        new BigDecimal("800000000"), new BigDecimal("400000000"),
+                        Instant.parse("2026-08-07T06:12:45Z"), LocalDate.parse("2026-08-07"),
+                        "东方财富板块个股资金流", "https://push2delay.eastmoney.com/api/qt/clist/get",
+                        Instant.parse("2026-08-07T06:15:00Z")
+                ),
+                new EastMoneyStockFundFlowRank(
+                        "600703", "三安光电", new BigDecimal("15.8"), new BigDecimal("3.2"),
+                        new BigDecimal("600000000"), new BigDecimal("5.1"),
+                        new BigDecimal("400000000"), new BigDecimal("200000000"),
+                        Instant.parse("2026-08-07T06:12:45Z"), LocalDate.parse("2026-08-07"),
+                        "东方财富板块个股资金流", "https://push2delay.eastmoney.com/api/qt/clist/get",
+                        Instant.parse("2026-08-07T06:15:00Z")
+                )
+        );
+
+        ShortTermIndustryLeaderSnapshot snapshot = service.industryLeaderSnapshot("BK1201", "电子", "INFLOW", 10);
+
+        assertThat(snapshot.code()).isEqualTo("BK1201");
+        assertThat(snapshot.flowDirection()).isEqualTo("INFLOW");
+        assertThat(snapshot.stocks()).hasSize(2);
+        assertThat(snapshot.stocks().get(0).rank()).isEqualTo(1);
+        assertThat(snapshot.stocks().get(0).symbol()).isEqualTo("002475");
+        assertThat(snapshot.stocks().get(0).mainNetInflow()).isEqualByComparingTo("1200000000");
+        assertThat(snapshot.stocks().get(1).rank()).isEqualTo(2);
+        assertThat(snapshot.tradeDate()).isEqualTo(LocalDate.parse("2026-08-07"));
+        assertThat(snapshot.dataGaps()).isEmpty();
+        assertThat(eastMoneyClient.requestedBoardCode).isEqualTo("BK1201");
+        assertThat(eastMoneyClient.requestedAscending).isFalse();
+
+        service.industryLeaderSnapshot("BK0475", "银行", "OUTFLOW", 10);
+        assertThat(eastMoneyClient.requestedBoardCode).isEqualTo("BK0475");
+        assertThat(eastMoneyClient.requestedAscending).isTrue();
+    }
+
+    @Test
+    void industryLeaderSnapshotRejectsInvalidBoardCodeWithoutCallingClient() {
+        ShortTermIndustryLeaderSnapshot snapshot = service.industryLeaderSnapshot("600519", "不是板块", "INFLOW", 10);
+
+        assertThat(snapshot.stocks()).isEmpty();
+        assertThat(snapshot.dataGaps()).isNotEmpty();
+        assertThat(eastMoneyClient.requestedBoardCode).isNull();
+    }
+
+    @Test
+    void industryLeaderSnapshotDegradesToUnavailableWhenClientFails() {
+        eastMoneyClient.boardStockFundFlowFailure = new IllegalStateException("接口超时");
+
+        ShortTermIndustryLeaderSnapshot snapshot = service.industryLeaderSnapshot("BK1036", "半导体", "INFLOW", 10);
+
+        assertThat(snapshot.stocks()).isEmpty();
+        assertThat(snapshot.dataGaps()).isNotEmpty();
+        assertThat(snapshot.dataGaps().get(0)).contains("获取失败");
     }
 
     private void assertManualReportIgnoresInvalidQuote(EastMoneyQuote invalidQuote) {
@@ -2601,6 +2662,10 @@ class ShortTermServiceTest {
         private List<EastMoneyIndustryFundFlowSnapshot> industryFundFlows = List.of();
         private RuntimeException industryFundFlowFailure;
         private int industryFundFlowCalls;
+        private List<EastMoneyStockFundFlowRank> boardStockFundFlowRanks = List.of();
+        private RuntimeException boardStockFundFlowFailure;
+        private String requestedBoardCode;
+        private boolean requestedAscending;
         private int fundFlowBatchCalls;
         private int turnoverEnrichmentCalls;
         private List<String> requestedFundFlowSymbols = List.of();
@@ -2699,6 +2764,16 @@ class ShortTermServiceTest {
                 throw industryFundFlowFailure;
             }
             return industryFundFlows;
+        }
+
+        @Override
+        public List<EastMoneyStockFundFlowRank> fetchBoardStockFundFlowRanks(String boardCode, int limit, boolean ascending) {
+            requestedBoardCode = boardCode;
+            requestedAscending = ascending;
+            if (boardStockFundFlowFailure != null) {
+                throw boardStockFundFlowFailure;
+            }
+            return boardStockFundFlowRanks;
         }
     }
 

@@ -1070,7 +1070,7 @@ public class UniversalAshareScreener {
         return new AnnualEvidenceBundle(latestIndicators, historyBySymbol, List.copyOf(dataGaps));
     }
 
-    static int latestCompletedAnnualReportYear(LocalDate asOf) {
+    public static int latestCompletedAnnualReportYear(LocalDate asOf) {
         return asOf.getMonthValue() >= 5 ? asOf.getYear() - 1 : asOf.getYear() - 2;
     }
 

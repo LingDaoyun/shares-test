@@ -13,13 +13,16 @@ import java.math.BigDecimal;
 public class MarketScanController {
 
     private final MarketScanService marketScanService;
+    private final HighDividendBoardService highDividendBoardService;
     private final RecommendationAttestationService attestationService;
 
     public MarketScanController(
             MarketScanService marketScanService,
+            HighDividendBoardService highDividendBoardService,
             RecommendationAttestationService attestationService
     ) {
         this.marketScanService = marketScanService;
+        this.highDividendBoardService = highDividendBoardService;
         this.attestationService = attestationService;
     }
 
@@ -48,5 +51,13 @@ public class MarketScanController {
                 mode,
                 allowChiNext
         ));
+    }
+
+    /** 高股息看板属于客观数据筛选，不携带买卖建议，与涨停看板一致不做存证。 */
+    @GetMapping("/high-dividend-board")
+    public HighDividendBoardSnapshot highDividendBoard(
+            @RequestParam(required = false) BigDecimal minYieldPercent
+    ) {
+        return highDividendBoardService.snapshot(minYieldPercent);
     }
 }

@@ -1,4 +1,4 @@
-export type PageKey = 'market' | 'shortTerm' | 'policy' | 'watchlist' | 'tradeReview' | 'rules' | 'settings'
+export type PageKey = 'market' | 'shortTerm' | 'overseas' | 'policy' | 'watchlist' | 'tradeReview' | 'rules' | 'settings'
 
 export interface PageMeta {
   eyebrow: string
@@ -16,6 +16,11 @@ export const pageMeta: Record<PageKey, PageMeta> = {
     eyebrow: 'SHORT TERM',
     title: '短线右侧',
     description: '用 K 线右侧早期、量能和财报质量共同筛选价值回归候选。'
+  },
+  overseas: {
+    eyebrow: 'GLOBAL MARKETS',
+    title: '外围市场',
+    description: '看美股、日本、韩国的指数与行业涨跌，跟踪隔夜外围情绪对 A 股的传导。'
   },
   policy: {
     eyebrow: 'POLICY INDUSTRY',
@@ -47,6 +52,7 @@ export const pageMeta: Record<PageKey, PageMeta> = {
 export const navItems: { key: PageKey; label: string }[] = [
   { key: 'shortTerm', label: '短线右侧' },
   { key: 'market', label: '长期价投' },
+  { key: 'overseas', label: '外围市场' },
   { key: 'policy', label: '政策解读' },
   { key: 'watchlist', label: '特别关注' },
   { key: 'tradeReview', label: '交易复盘' },
@@ -59,6 +65,7 @@ export const pathToPage: Record<string, PageKey> = {
   market: 'market',
   'short-term': 'shortTerm',
   backtest: 'shortTerm',
+  overseas: 'overseas',
   policy: 'policy',
   watchlist: 'watchlist',
   'trade-review': 'tradeReview',

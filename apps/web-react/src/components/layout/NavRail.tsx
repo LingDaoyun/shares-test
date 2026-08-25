@@ -14,6 +14,7 @@ export function NavRail() {
   const pagePath: Record<PageKey, string> = {
     market: 'market',
     shortTerm: 'short-term',
+    overseas: 'overseas',
     policy: 'policy',
     watchlist: 'watchlist',
     tradeReview: 'trade-review',
@@ -24,6 +25,7 @@ export function NavRail() {
   const counts: Record<PageKey, string> = {
     market: '长投',
     shortTerm: '盘中',
+    overseas: '美日韩',
     policy: '产业',
     watchlist: '自选',
     tradeReview: '复盘',
@@ -32,7 +34,7 @@ export function NavRail() {
   }
 
   return (
-    <nav aria-label="模块菜单" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+    <nav aria-label="模块菜单" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
       {navItems.map((item) => {
         const active = current === item.key
         return (

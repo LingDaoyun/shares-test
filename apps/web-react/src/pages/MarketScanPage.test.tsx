@@ -3,12 +3,13 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchLongTermCandidateContext, fetchMarketScanReport } from '../api/client'
+import { fetchHighDividendBoard, fetchLongTermCandidateContext, fetchMarketScanReport } from '../api/client'
 import { MarketScanPage } from './MarketScanPage'
 
 vi.mock('../api/client', () => ({
   fetchMarketScanReport: vi.fn(),
-  fetchLongTermCandidateContext: vi.fn()
+  fetchLongTermCandidateContext: vi.fn(),
+  fetchHighDividendBoard: vi.fn()
 }))
 
 vi.mock('../components/watchlist/WatchButton', () => ({
@@ -27,6 +28,7 @@ vi.mock('../components/recommendation/EvidenceBundlePanel', () => ({
 
 const mockedFetchMarketScanReport = vi.mocked(fetchMarketScanReport)
 const mockedFetchLongTermCandidateContext = vi.mocked(fetchLongTermCandidateContext)
+const mockedFetchHighDividendBoard = vi.mocked(fetchHighDividendBoard)
 
 describe('MarketScanPage long-term assessment', () => {
   let host: HTMLDivElement
@@ -40,6 +42,17 @@ describe('MarketScanPage long-term assessment', () => {
     root = createRoot(host)
     mockedFetchMarketScanReport.mockResolvedValue(report as never)
     mockedFetchLongTermCandidateContext.mockResolvedValue(candidateContext as never)
+    mockedFetchHighDividendBoard.mockResolvedValue({
+      reportYear: 2025,
+      generatedAt: '2026-08-22T01:30:00Z',
+      available: true,
+      unavailableReason: null,
+      thresholdYield: 0.05,
+      totalCount: 0,
+      industryStats: [],
+      stocks: [],
+      dataGaps: []
+    } as never)
   })
 
   afterEach(() => {

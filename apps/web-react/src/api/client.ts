@@ -9,6 +9,8 @@ import type {
   LlmRuntimeConfig,
   InvestmentDecisionReport,
   LongTermCandidateContext,
+  HighDividendBoardSnapshot,
+  OverseasMarketBoardSnapshot,
   MarketScanReport,
   ManualTradeFillRequest,
   MispricingReport,
@@ -16,6 +18,7 @@ import type {
   RecommendationEvidenceBundle,
   ShortTermReport,
   ShortTermScanJobStatus,
+  ShortTermIndustryLeaderSnapshot,
   ShortTermLimitUpBoardSnapshot,
   ShortTermValidationBatchRequest,
   ShortTermValidationSummary,
@@ -112,6 +115,18 @@ export function fetchLongTermCandidateContext(symbol: string, industry?: string 
   }).then((res) => res.data)
 }
 
+export function fetchHighDividendBoard(minYieldPercent?: number) {
+  return http
+    .get<HighDividendBoardSnapshot>('/market-scan/high-dividend-board', {
+      params: minYieldPercent ? { minYieldPercent } : undefined
+    })
+    .then((res) => res.data)
+}
+
+export function fetchOverseasMarketBoard() {
+  return http.get<OverseasMarketBoardSnapshot>('/overseas-market/board').then((res) => res.data)
+}
+
 export interface ShortTermParams {
   limit?: number
   scanLimit?: number
@@ -142,6 +157,22 @@ export function fetchShortTermLimitUpBoard(date?: string) {
   return http
     .get<ShortTermLimitUpBoardSnapshot>('/short-term/limit-up-board', {
       params: date ? { date } : undefined
+    })
+    .then((res) => res.data)
+}
+
+export function fetchShortTermIndustryLeaders(
+  code: string,
+  options: { name?: string; flow?: 'INFLOW' | 'OUTFLOW'; limit?: number } = {}
+) {
+  return http
+    .get<ShortTermIndustryLeaderSnapshot>('/short-term/industry-fund-leaders', {
+      params: {
+        code,
+        name: options.name,
+        flow: options.flow,
+        limit: options.limit
+      }
     })
     .then((res) => res.data)
 }

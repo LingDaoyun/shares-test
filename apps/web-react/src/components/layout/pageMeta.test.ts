@@ -8,6 +8,7 @@ describe('page navigation meta', () => {
     expect(labels).toEqual([
       '短线右侧',
       '长期价投',
+      '外围市场',
       '政策解读',
       '特别关注',
       '交易复盘',
@@ -19,6 +20,7 @@ describe('page navigation meta', () => {
     expect(labels).not.toContain('周期试仓')
     expect(labels).not.toContain('每日信号')
     expect(pathToPage.policy).toBe('policy')
+    expect(pathToPage.overseas).toBe('overseas')
     expect(pathToPage.mispricing).toBeUndefined()
     expect(pathToPage.tech).toBeUndefined()
     expect(pathToPage.cycle).toBeUndefined()

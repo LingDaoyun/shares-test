@@ -17,6 +17,9 @@ services:
       MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       KIMI_API_KEY: ${KIMI_API_KEY:-}
+      # 外围看板日韩行业（Yahoo Finance）专用代理；只作用于 Yahoo 请求，国内数据源仍直连。
+      # 默认走宿主机本地代理（Clash 常用端口），没有代理可置空，日韩行业会降级为仅指数。
+      YAHOO_PROXY_URL: ${YAHOO_PROXY_URL:-http://host.docker.internal:7897}
     ports:
       - "127.0.0.1:${API_PORT:-19080}:19080"
     volumes:

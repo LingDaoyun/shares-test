@@ -6,6 +6,7 @@ import com.aistock.research.cycle.CycleTrialService;
 import com.aistock.research.dailysignal.DailySignalController;
 import com.aistock.research.dailysignal.DailySignalReport;
 import com.aistock.research.dailysignal.DailySignalService;
+import com.aistock.research.market.HighDividendBoardService;
 import com.aistock.research.market.MarketScanController;
 import com.aistock.research.market.MarketScanReport;
 import com.aistock.research.market.MarketScanService;
@@ -157,7 +158,7 @@ class RecommendationControllerAttestationTest {
         when(service.report(null, null, null, null, null, null, null, null, null, null)).thenReturn(raw);
         when(attestations.attest(raw)).thenReturn(attested);
 
-        MarketScanReport result = new MarketScanController(service, attestations)
+        MarketScanReport result = new MarketScanController(service, mock(HighDividendBoardService.class), attestations)
                 .report(null, null, null, null, null, null, null, null, null, null);
 
         assertThat(result).isSameAs(attested);

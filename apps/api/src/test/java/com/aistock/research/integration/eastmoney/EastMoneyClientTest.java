@@ -90,6 +90,47 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void shouldParseGlobalQuoteWithFlttDecimalFields() {
+        Instant marketTime = Instant.parse("2026-08-21T20:00:00Z");
+        JsonNode item = objectMapper.createObjectNode()
+                .put("f12", "DJIA")
+                .put("f13", 100)
+                .put("f14", "道琼斯")
+                .put("f2", 53277.01)
+                .put("f3", 0.98)
+                .put("f4", 517.80)
+                .put("f18", 52759.21)
+                .put("f124", marketTime.getEpochSecond());
+
+        EastMoneyGlobalQuote quote = client.readGlobalQuote(item, Instant.parse("2026-08-21T20:05:00Z")).orElseThrow();
+
+        assertThat(quote.code()).isEqualTo("DJIA");
+        assertThat(quote.name()).isEqualTo("道琼斯");
+        assertThat(quote.latestPrice()).isEqualByComparingTo("53277.01");
+        assertThat(quote.changePercent()).isEqualByComparingTo("0.98");
+        assertThat(quote.changeValue()).isEqualByComparingTo("517.8");
+        assertThat(quote.prevClose()).isEqualByComparingTo("52759.21");
+        assertThat(quote.marketCode()).isEqualTo(100);
+        assertThat(quote.quoteTime()).isEqualTo(marketTime);
+    }
+
+    @Test
+    void shouldFallBackToFetchedAtWhenGlobalQuoteTimestampMissing() {
+        JsonNode item = objectMapper.createObjectNode()
+                .put("f12", "XLK")
+                .put("f13", 107)
+                .put("f14", "科技行业精选指数ETF-SPDR")
+                .put("f2", 230.15)
+                .put("f3", 1.5);
+
+        Instant fetchedAt = Instant.parse("2026-08-21T20:05:00Z");
+        EastMoneyGlobalQuote quote = client.readGlobalQuote(item, fetchedAt).orElseThrow();
+
+        assertThat(quote.quoteTime()).isEqualTo(fetchedAt);
+        assertThat(quote.changeValue()).isNull();
+    }
+
+    @Test
     void shouldParseTencentExchangeTimestampInChinaMarketZone() {
         String[] fields = new String[49];
         Arrays.fill(fields, "");
@@ -350,6 +391,65 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void shouldParseBoardStockFundFlowRanksFromBoardConstituentResponse() throws Exception {
+        JsonNode diff = objectMapper.readTree("""
+                [
+                  {
+                    "f12": "002475",
+                    "f14": "立讯精密",
+                    "f2": 41.2,
+                    "f3": 5.6,
+                    "f62": 1200000000,
+                    "f184": 8.4,
+                    "f66": 800000000,
+                    "f72": 400000000,
+                    "f124": 1786083165
+                  },
+                  {
+                    "f12": "600703",
+                    "f14": "三安光电",
+                    "f2": 15.8,
+                    "f3": 3.2,
+                    "f62": 600000000,
+                    "f184": 5.1,
+                    "f66": 400000000,
+                    "f72": 200000000,
+                    "f124": 1786083165
+                  }
+                ]
+                """);
+
+        List<EastMoneyStockFundFlowRank> ranks = client.readBoardStockFundFlowRanks(
+                diff,
+                Instant.parse("2026-08-07T06:15:00Z"),
+                "https://push2delay.eastmoney.com/api/qt/clist/get"
+        );
+
+        assertThat(ranks).hasSize(2);
+        EastMoneyStockFundFlowRank first = ranks.get(0);
+        assertThat(first.symbol()).isEqualTo("002475");
+        assertThat(first.name()).isEqualTo("立讯精密");
+        assertThat(first.latestPrice()).isEqualByComparingTo("41.2");
+        assertThat(first.changePercent()).isEqualByComparingTo("5.6");
+        assertThat(first.mainNetInflow()).isEqualByComparingTo("1200000000");
+        assertThat(first.mainNetInflowRatio()).isEqualByComparingTo("8.4");
+        assertThat(first.superLargeNetInflow()).isEqualByComparingTo("800000000");
+        assertThat(first.largeNetInflow()).isEqualByComparingTo("400000000");
+        assertThat(first.marketTimestamp()).isEqualTo(Instant.parse("2026-08-07T06:12:45Z"));
+        assertThat(first.tradeDate()).isEqualTo(LocalDate.parse("2026-08-07"));
+        assertThat(first.sourceUrl()).isEqualTo("https://push2delay.eastmoney.com/api/qt/clist/get");
+
+        String inflowUrl = client.boardStockFundFlowUrl("BK1201", 10, false);
+        assertThat(inflowUrl).contains("pz=10");
+        assertThat(inflowUrl).contains("po=1");
+        assertThat(inflowUrl).contains("fid=f62");
+        assertThat(inflowUrl).contains("fs=b%3ABK1201+f%3A%2150");
+
+        assertThat(client.boardStockFundFlowUrl("BK0475", 10, true)).contains("po=0");
+        assertThat(client.fetchBoardStockFundFlowRanks("600519", 10, false)).isEmpty();
+    }
+
+    @Test
     void shouldParseLimitUpPoolEntriesFromTopicPoolPayload() throws Exception {
         String payload = "{\"rc\":0,\"data\":{\"tc\":2,\"pool\":["
                 + "{\"c\":\"000017\",\"m\":0,\"n\":\"深中华A\",\"p\":7110,\"zdp\":10.06,\"amount\":294182288,"
@@ -587,7 +687,9 @@ class EastMoneyClientTest {
                 false,
                 12,
                 2,
-                6
+                6,
+                LiveDataProperties.DEFAULT_YAHOO_SPARK_URL,
+                null
         );
     }
 

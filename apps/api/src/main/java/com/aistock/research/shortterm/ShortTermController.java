@@ -41,6 +41,16 @@ public class ShortTermController {
         return limitUpBoardService.snapshot(date);
     }
 
+    @GetMapping("/industry-fund-leaders")
+    public ShortTermIndustryLeaderSnapshot industryFundLeaders(
+            @RequestParam String code,
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false, defaultValue = "INFLOW") String flow,
+            @RequestParam(required = false, defaultValue = "10") Integer limit
+    ) {
+        return shortTermService.industryLeaderSnapshot(code, name, flow, limit == null ? 10 : limit);
+    }
+
     @GetMapping("/report")
     public ShortTermReport report(
             @RequestParam(required = false) Integer limit,

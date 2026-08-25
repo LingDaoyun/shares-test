@@ -27,10 +27,9 @@ public record ShortTermReport(
         List<String> reviewedSymbols,
         Instant dataCutoffAt,
         Instant generatedAt,
-        ShortTermTechnicalReviewCoverage technicalReviewCoverage,
-        ShortTermCrossSectionContext crossSectionContext,
-        ShortTermMarketRegime marketRegime,
-        List<ShortTermGreenLongLowerShadowCandidate> greenLongLowerShadowCandidates
+    ShortTermTechnicalReviewCoverage technicalReviewCoverage,
+    ShortTermCrossSectionContext crossSectionContext,
+    ShortTermMarketRegime marketRegime
 ) {
     public ShortTermReport {
         methodology = methodology == null ? List.of() : List.copyOf(methodology);
@@ -52,9 +51,6 @@ public record ShortTermReport(
         marketRegime = marketRegime == null
                 ? ShortTermMarketRegime.unavailable("历史报告未包含市场状态快照")
                 : marketRegime;
-        greenLongLowerShadowCandidates = greenLongLowerShadowCandidates == null
-                ? List.of()
-                : List.copyOf(greenLongLowerShadowCandidates);
     }
 
     public ShortTermReport(
@@ -87,8 +83,7 @@ public record ShortTermReport(
                 hotDirections, marketSentiment, marketFundDirection, exclusions, tradeCaptureTokens,
                 coverage, reviewedSymbols, dataCutoffAt, generatedAt,
                 technicalReviewCoverage, crossSectionContext,
-                ShortTermMarketRegime.unavailable("历史报告未包含市场状态快照"),
-                List.of()
+                ShortTermMarketRegime.unavailable("历史报告未包含市场状态快照")
         );
     }
 
@@ -121,8 +116,7 @@ public record ShortTermReport(
                 coverage, reviewedSymbols, dataCutoffAt, generatedAt,
                 ShortTermTechnicalReviewCoverage.unavailable(),
                 ShortTermCrossSectionContext.unavailable(),
-                ShortTermMarketRegime.unavailable("历史报告未包含市场状态快照"),
-                List.of()
+                ShortTermMarketRegime.unavailable("历史报告未包含市场状态快照")
         );
     }
 

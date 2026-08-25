@@ -130,7 +130,9 @@ class FilingEvidenceServiceTest {
                 true,
                 12,
                 2,
-                6
+                6,
+                LiveDataProperties.DEFAULT_YAHOO_SPARK_URL,
+                null
         );
     }
 }

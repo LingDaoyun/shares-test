@@ -71,3 +71,6 @@ research:
     filing-limit: 12
     filing-pdf-parse-limit: 2
     filing-pdf-max-pages: 6
+    yahoo-spark-url: https://query1.finance.yahoo.com/v8/finance/spark
+    # Yahoo 专用代理（容器内访问国际网络）；留空则回退环境变量 https_proxy，都不配则直连
+    yahoo-proxy-url: ${YAHOO_PROXY_URL:}

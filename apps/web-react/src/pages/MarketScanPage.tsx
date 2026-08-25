@@ -11,6 +11,7 @@ import { Loader } from '../components/ui/Loader'
 import { RecommendationEvidenceBundlePanel } from '../components/recommendation/EvidenceBundlePanel'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { LongTermCandidateContextPanel } from '../components/longterm/LongTermCandidateContextPanel'
+import { HighDividendBoardPanel } from '../components/market/HighDividendBoardPanel'
 import { BuyEntryButton } from '../components/tradefeedback/BuyEntryButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { SectionBanner } from '../components/ui/SectionBanner'
@@ -129,6 +130,8 @@ export function MarketScanPage() {
           </Button>
         }
       />
+
+      <HighDividendBoardPanel />
 
       <Card
         title={

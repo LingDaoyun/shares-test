@@ -515,6 +515,69 @@ export interface MarketScanReport {
   generatedAt: string
 }
 
+export interface HighDividendStock {
+  rank: number
+  symbol: string
+  name: string
+  market: string | null
+  industry: string | null
+  dividendYield: number | null
+  payoutRatio: number | null
+  latestPrice: number | null
+  changePercent: number | null
+  amount: number | null
+  peTtm: number | null
+  pbRatio: number | null
+  roe: number | null
+  dividendPlanDescription: string | null
+}
+
+export interface HighDividendIndustryStat {
+  industry: string
+  stockCount: number
+  topYield: number | null
+}
+
+export interface HighDividendBoardSnapshot {
+  reportYear: number
+  generatedAt: string
+  available: boolean
+  unavailableReason: string | null
+  thresholdYield: number
+  totalCount: number
+  industryStats: HighDividendIndustryStat[]
+  stocks: HighDividendStock[]
+  dataGaps: string[]
+}
+
+export interface OverseasIndexQuote {
+  code: string
+  name: string
+  latestPrice: number | null
+  changePercent: number | null
+  changeValue: number | null
+  currency: string
+  quoteTime: string | null
+}
+
+export interface OverseasMarketSection {
+  market: string
+  marketLabel: string
+  status: string
+  indices: OverseasIndexQuote[]
+  industries: OverseasIndexQuote[]
+  unavailableReason: string | null
+}
+
+export interface OverseasMarketBoardSnapshot {
+  generatedAt: string
+  available: boolean
+  unavailableReason: string | null
+  globalIndices: OverseasIndexQuote[]
+  markets: OverseasMarketSection[]
+  dataGaps: string[]
+}
+
 export interface ShortTermRuleSet {
   scanLimit: number
   klineLimit: number
@@ -896,25 +959,6 @@ export interface QuoteFreshnessSnapshot {
   reason: string
 }
 
-export interface ShortTermGreenLongLowerShadowCandidate {
-  rank: number
-  symbol: string
-  name: string
-  market: string | null
-  industry: string | null
-  latestPrice: number | null
-  changePercent: number | null
-  openPrice: number | null
-  highPrice: number | null
-  lowPrice: number | null
-  bodyPercent: number
-  lowerShadowPercent: number
-  amount: number | null
-  turnoverRate: number | null
-  quoteFreshness: QuoteFreshnessSnapshot
-  provisional: boolean
-}
-
 export interface ShortTermCandidate {
   rank: number
   symbol: string
@@ -994,7 +1038,6 @@ export interface ShortTermReport {
   technicalReviewCoverage?: ShortTermTechnicalReviewCoverage | null
   crossSectionContext?: ShortTermCrossSectionContext | null
   marketRegime?: ShortTermMarketRegime | null
-  greenLongLowerShadowCandidates?: ShortTermGreenLongLowerShadowCandidate[]
 }
 
 export interface ShortTermValidationCohortRequest {
@@ -1061,6 +1104,32 @@ export interface ShortTermMarketFundDirection {
   coveredIndustryCount: number
   expectedIndustryCount: number
   coverageRatio: number | null
+  tradeDate: string | null
+  fetchedAt: string | null
+  sourceName: string
+  dataGaps: string[]
+}
+
+export interface ShortTermIndustryLeaderStock {
+  rank: number
+  symbol: string
+  name: string
+  latestPrice: number | null
+  changePercent: number | null
+  mainNetInflow: number | null
+  mainNetInflowRatio: number | null
+  superLargeNetInflow: number | null
+  largeNetInflow: number | null
+  tradeDate: string | null
+  marketTimestamp: string | null
+  sourceUrl: string | null
+}
+
+export interface ShortTermIndustryLeaderSnapshot {
+  code: string
+  name: string | null
+  flowDirection: 'INFLOW' | 'OUTFLOW'
+  stocks: ShortTermIndustryLeaderStock[]
   tradeDate: string | null
   fetchedAt: string | null
   sourceName: string
