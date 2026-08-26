@@ -21,6 +21,19 @@ export interface RuleDefinition {
   updatedAt: string
 }
 
+export interface LlmConfigPreview {
+  provider: string
+  model: string
+  baseUrl: string
+  responseFormat: string
+  strictJsonSchema: boolean
+  apiKeyConfigured: boolean
+  apiKeySource: string
+  thinking: string | null
+  maxCompletionTokens: number | null
+  temperature: number | null
+}
+
 export interface PolicySourceConfig {
   name: string
   type: string
@@ -71,6 +84,26 @@ export interface PolicyTheme {
   signals: PolicySignal[]
   risks: string[]
   companyPool: PolicyCompanyCandidate[]
+}
+
+export interface PolicyAiReview {
+  themeCode: string
+  themeName: string
+  provider: string | null
+  model: string | null
+  relevanceScore: number | null
+  direction: string | null
+  directionLabel: string | null
+  phase: string | null
+  phaseLabel: string | null
+  logicSummary: string | null
+  confirmations: string[]
+  disagreements: string[]
+  risks: string[]
+  mustVerify: string[]
+  confidence: number | null
+  reviewedAt: string | null
+  dataGaps: string[]
 }
 
 export interface PolicyCompanyCandidate {

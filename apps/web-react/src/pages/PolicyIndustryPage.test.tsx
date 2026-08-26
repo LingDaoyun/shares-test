@@ -3,14 +3,22 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchPolicyThemes } from '../api/client'
+import { fetchPolicyThemes, reviewPolicyTheme } from '../api/client'
+import { toast } from '../components/ui/Toast'
+import { useAppStore } from '../store/appStore'
 import { PolicyIndustryPage } from './PolicyIndustryPage'
 
 vi.mock('../api/client', () => ({
-  fetchPolicyThemes: vi.fn()
+  fetchPolicyThemes: vi.fn(),
+  reviewPolicyTheme: vi.fn()
+}))
+
+vi.mock('../components/ui/Toast', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn(), loading: vi.fn(), dismiss: vi.fn() }
 }))
 
 const mockedFetchPolicyThemes = vi.mocked(fetchPolicyThemes)
+const mockedReviewPolicyTheme = vi.mocked(reviewPolicyTheme)
 
 describe('PolicyIndustryPage', () => {
   let host: HTMLDivElement
@@ -23,6 +31,7 @@ describe('PolicyIndustryPage', () => {
     document.body.append(host)
     root = createRoot(host)
     mockedFetchPolicyThemes.mockResolvedValue(policyThemes as never)
+    useAppStore.setState({ llmConfig: null })
   })
 
   afterEach(() => {
@@ -53,7 +62,108 @@ describe('PolicyIndustryPage', () => {
     expect(text).not.toContain('AI解读')
     expect(text).not.toContain('历史解读')
   })
+
+  it('hides the AI review entry when no model key is configured', async () => {
+    await renderPage()
+
+    expect(host.textContent).not.toContain('AI 复核')
+  })
+
+  it('runs the real agent review and renders structured verdict when configured', async () => {
+    useAppStore.setState({
+      llmConfig: {
+        provider: 'deepseek',
+        model: 'deepseek-v4-pro',
+        baseUrl: 'https://api.deepseek.com',
+        responseFormat: 'json_object',
+        strictJsonSchema: false,
+        apiKeyConfigured: true,
+        apiKeySource: 'env:DEEPSEEK_API_KEY',
+        thinking: null,
+        maxCompletionTokens: 8192,
+        temperature: null
+      }
+    })
+    mockedReviewPolicyTheme.mockResolvedValue({
+      themeCode: 'NEW_QUALITY_PRODUCTIVITY',
+      themeName: '新质生产力与高端制造',
+      provider: 'deepseek',
+      model: 'deepseek-v4-pro',
+      relevanceScore: 86,
+      direction: 'POSITIVE',
+      directionLabel: '政策利好',
+      phase: 'ONGOING',
+      phaseLabel: '持续发酵',
+      logicSummary: '高端装备投资规划直接拉动工业母机与核心零部件需求',
+      confirmations: ['政策原文Agent命中确认'],
+      disagreements: ['部分信号属于地方试点，不宜按全国推广解读'],
+      risks: ['订单兑现节奏低于预期'],
+      mustVerify: ['核实文件编号与发布机关'],
+      confidence: 78,
+      reviewedAt: '2026-08-26T10:00:00+08:00',
+      dataGaps: []
+    })
+    await renderPage()
+
+    const button = [...host.querySelectorAll('button')].find((item) => item.textContent?.includes('AI 复核'))
+    expect(button).toBeDefined()
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mockedReviewPolicyTheme).toHaveBeenCalledWith('NEW_QUALITY_PRODUCTIVITY')
+    const text = host.textContent ?? ''
+    expect(text).toContain('AI 复核')
+    expect(text).toContain('政策利好')
+    expect(text).toContain('持续发酵')
+    expect(text).toContain('关联度 86')
+    expect(text).toContain('高端装备投资规划')
+    expect(text).toContain('复核确认')
+    expect(text).toContain('复核异议')
+    expect(text).toContain('待人工核实')
+  })
+
+  it('reports review failures without breaking the board', async () => {
+    useAppStore.setState({
+      llmConfig: { ...configuredLlmConfig, apiKeyConfigured: true }
+    })
+    mockedReviewPolicyTheme.mockRejectedValue(new Error('模型接口超时'))
+    await renderPage()
+
+    const button = [...host.querySelectorAll('button')].find((item) => item.textContent?.includes('AI 复核'))
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('AI 复核失败'))
+    expect(host.textContent).not.toContain('复核确认')
+  })
+
+  async function renderPage() {
+    await act(async () => {
+      root.render(<PolicyIndustryPage />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
 })
+
+const configuredLlmConfig = {
+  provider: 'deepseek',
+  model: 'deepseek-v4-pro',
+  baseUrl: 'https://api.deepseek.com',
+  responseFormat: 'json_object',
+  strictJsonSchema: false,
+  apiKeyConfigured: false,
+  apiKeySource: 'missing',
+  thinking: null as string | null,
+  maxCompletionTokens: 8192 as number | null,
+  temperature: null as number | null
+}
 
 const policyThemes = [
   {

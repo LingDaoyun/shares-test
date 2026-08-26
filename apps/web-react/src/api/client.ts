@@ -5,6 +5,8 @@ import type {
   CycleTrialReport,
   DailySignalReport,
   DecisionHistoryEntry,
+  LlmConfigPreview,
+  LlmRuntimeConfig,
   InvestmentDecisionReport,
   LongTermCandidateContext,
   HighDividendBoardSnapshot,
@@ -12,6 +14,7 @@ import type {
   MarketScanReport,
   ManualTradeFillRequest,
   MispricingReport,
+  PolicyAiReview,
   PolicyTheme,
   RecommendationEvidenceBundle,
   ShortTermReport,
@@ -46,12 +49,30 @@ export function fetchRules() {
   return http.get<RuleDefinition[]>('/rules').then((res) => res.data)
 }
 
+export function fetchLlmConfig() {
+  return http.get<LlmConfigPreview>('/ai/llm-config').then((res) => res.data)
+}
+
 export function fetchRuntimeConfig() {
   return http.get<RuntimeConfigSnapshot>('/runtime-config').then((res) => res.data)
 }
 
 export function updateRuntimeConfig(request: RuntimeConfigSnapshot) {
   return http.put<RuntimeConfigSnapshot>('/runtime-config', request).then((res) => res.data)
+}
+
+export function fetchLlmRuntimeConfig() {
+  return http.get<LlmRuntimeConfig>('/runtime-config/llm').then((res) => res.data)
+}
+
+export function updateLlmRuntimeConfig(request: LlmRuntimeConfig) {
+  return http.put<LlmRuntimeConfig>('/runtime-config/llm', request).then((res) => res.data)
+}
+
+export function reviewPolicyTheme(themeCode: string) {
+  return http
+    .post<PolicyAiReview>(`/policy/themes/${encodeURIComponent(themeCode)}/ai-review`)
+    .then((res) => res.data)
 }
 
 export function fetchPolicySources() {
