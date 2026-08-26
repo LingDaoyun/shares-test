@@ -27,3 +27,6 @@ redis-data/
 external/
 .superpowers/
 .worktrees/
+
+# ZCode agent workspace
+.zcode/
