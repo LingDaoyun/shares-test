@@ -15,7 +15,7 @@ export interface IndustryLeaderSelection {
 
 type LeaderLoadState = 'LOADING' | 'READY' | 'FAILED'
 
-// 今日资金去向的二级弹窗：点击行业板块后按当日主力净流入/流出展示板块内前 10 只个股。
+// 今日资金去向的二级弹窗：点击行业板块后按当日主力净流入/流出展示板块内前 20 只个股。
 export function IndustryLeaderOverlay({
   selection,
   onClose
@@ -35,7 +35,7 @@ export function IndustryLeaderOverlay({
     fetchShortTermIndustryLeaders(selection.code, {
       name: selection.name,
       flow: selection.flow,
-      limit: 10
+      limit: 20
     })
       .then((data) => {
         if (cancelled) return
@@ -54,7 +54,7 @@ export function IndustryLeaderOverlay({
 
   if (!selection) return null
 
-  const rankLabel = selection.flow === 'OUTFLOW' ? '主力净流出前 10' : '主力净流入前 10'
+  const rankLabel = selection.flow === 'OUTFLOW' ? '主力净流出前 20' : '主力净流入前 20'
 
   return (
     <DetailOverlay

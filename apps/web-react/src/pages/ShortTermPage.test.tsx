@@ -572,18 +572,18 @@ describe('ShortTermPage manual scan flow', () => {
     await renderWithManualReport(root, reportWithFundDirection())
     await toggleResultView('展示今日资金去向')
 
-    const inflowButton = document.querySelector('button[aria-label="查看 电子 板块内主力资金前 10 个股"]') as HTMLButtonElement | null
+    const inflowButton = document.querySelector('button[aria-label="查看 电子 板块内主力资金前 20 个股"]') as HTMLButtonElement | null
     expect(inflowButton).not.toBeNull()
     await act(async () => {
       inflowButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await flushPromises()
     })
 
-    expect(fetchShortTermIndustryLeaders).toHaveBeenCalledWith('BK1201', { name: '电子', flow: 'INFLOW', limit: 10 })
+    expect(fetchShortTermIndustryLeaders).toHaveBeenCalledWith('BK1201', { name: '电子', flow: 'INFLOW', limit: 20 })
     expect(document.body.textContent).toContain('电子 · 龙头股')
     expect(document.body.textContent).toContain('立讯精密')
     expect(document.body.textContent).toContain('三安光电')
-    expect(document.body.textContent).toContain('主力净流入前 10')
+    expect(document.body.textContent).toContain('主力净流入前 20')
 
     const popupCloseButton = document.querySelector('button[aria-label="关闭详情"]') as HTMLButtonElement | null
     expect(popupCloseButton).not.toBeNull()
@@ -593,16 +593,16 @@ describe('ShortTermPage manual scan flow', () => {
     })
     expect(document.body.textContent).not.toContain('电子 · 龙头股')
 
-    const outflowButton = document.querySelector('button[aria-label="查看 银行 板块内主力资金前 10 个股"]') as HTMLButtonElement | null
+    const outflowButton = document.querySelector('button[aria-label="查看 银行 板块内主力资金前 20 个股"]') as HTMLButtonElement | null
     expect(outflowButton).not.toBeNull()
     await act(async () => {
       outflowButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await flushPromises()
     })
 
-    expect(fetchShortTermIndustryLeaders).toHaveBeenLastCalledWith('BK0475', { name: '银行', flow: 'OUTFLOW', limit: 10 })
+    expect(fetchShortTermIndustryLeaders).toHaveBeenLastCalledWith('BK0475', { name: '银行', flow: 'OUTFLOW', limit: 20 })
     expect(document.body.textContent).toContain('银行 · 龙头股')
-    expect(document.body.textContent).toContain('主力净流出前 10')
+    expect(document.body.textContent).toContain('主力净流出前 20')
   })
 
   it('shows a retry hint when the industry leader popup request fails', async () => {
@@ -610,7 +610,7 @@ describe('ShortTermPage manual scan flow', () => {
     await renderWithManualReport(root, reportWithFundDirection())
     await toggleResultView('展示今日资金去向')
 
-    const inflowButton = document.querySelector('button[aria-label="查看 电子 板块内主力资金前 10 个股"]') as HTMLButtonElement | null
+    const inflowButton = document.querySelector('button[aria-label="查看 电子 板块内主力资金前 20 个股"]') as HTMLButtonElement | null
     await act(async () => {
       inflowButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await flushPromises()

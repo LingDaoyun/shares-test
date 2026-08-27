@@ -476,7 +476,7 @@ function MarketFundDirectionCard({
         )}
         {hasRows ? (
           <p className="text-[11px] leading-relaxed text-ink-400">
-            点击行业板块可查看板块内个股当日主力净流入 / 流出前 10 的龙头股。
+            点击行业板块可查看板块内个股当日主力净流入 / 流出前 20 的龙头股。
           </p>
         ) : null}
         {direction?.dataGaps?.length ? (
@@ -514,8 +514,8 @@ function FundDirectionList({
           <button
             key={`${title}-${item.code}`}
             type="button"
-            title={`查看 ${item.name || item.code} 板块内主力资金前 10 个股`}
-            aria-label={`查看 ${item.name || item.code} 板块内主力资金前 10 个股`}
+            title={`查看 ${item.name || item.code} 板块内主力资金前 20 个股`}
+            aria-label={`查看 ${item.name || item.code} 板块内主力资金前 20 个股`}
             onClick={() => onSelectIndustry(item, tone === 'success' ? 'INFLOW' : 'OUTFLOW')}
             className="rounded-lg border border-line-soft px-2.5 py-2 text-left transition hover:border-brand-200 hover:bg-brand-50/60 focus-visible:border-brand-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-100"
           >
