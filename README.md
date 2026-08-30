@@ -118,16 +118,13 @@ http://127.0.0.1:5176
 
 React 容器直接复制 `apps/web-react/dist`，所以部署前必须先构建前端产物，否则页面会继续服务旧 JS 包。
 
-推荐部署顺序：
+推荐通过统一脚本部署。脚本会自动加载项目根目录的 `.env.local`，并在数据库密码缺失时中止，不会使用空密码重建容器：
 
 ```bash
-cd apps/web-react
-npm run build
-
-cd ../..
-mvn -pl apps/api -DskipTests package
-docker compose --env-file .env.local up -d --build api web
+./scripts/docker-up.sh
 ```
+
+也可以在当前终端设置 `JDBC_DATABASE_PASSWORD` 后运行该脚本；真实密码不得提交到 Git。
 
 查看容器状态：
 
