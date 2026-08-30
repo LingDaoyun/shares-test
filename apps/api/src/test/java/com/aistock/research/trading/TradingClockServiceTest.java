@@ -92,6 +92,10 @@ class TradingClockServiceTest {
                 .isEqualTo(LocalDate.parse("2026-06-18"));
         assertThat(service.tradingDayAfter(LocalDate.parse("2026-06-18"), -1))
                 .isEqualTo(LocalDate.parse("2026-06-18"));
+        assertThat(service.previousTradingDay(LocalDate.parse("2026-08-24")))
+                .isEqualTo(LocalDate.parse("2026-08-21"));
+        assertThat(service.previousTradingDay(LocalDate.parse("2026-06-22")))
+                .isEqualTo(LocalDate.parse("2026-06-18"));
     }
 
     @Test

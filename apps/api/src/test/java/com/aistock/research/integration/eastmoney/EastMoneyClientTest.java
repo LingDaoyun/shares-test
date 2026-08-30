@@ -90,6 +90,20 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void shouldParseRealtimeVolumeRatioFromBatchQuote() {
+        JsonNode item = objectMapper.createObjectNode()
+                .put("f12", "600000")
+                .put("f14", "浦发银行")
+                .put("f13", 1)
+                .put("f2", 1000)
+                .put("f10", 187);
+
+        EastMoneyQuote quote = client.readQuote(item, Instant.parse("2026-08-28T02:00:00Z")).orElseThrow();
+
+        assertThat(quote.realtimeVolumeRatio()).isEqualByComparingTo("1.87");
+    }
+
+    @Test
     void shouldParseGlobalQuoteWithFlttDecimalFields() {
         Instant marketTime = Instant.parse("2026-08-21T20:00:00Z");
         JsonNode item = objectMapper.createObjectNode()

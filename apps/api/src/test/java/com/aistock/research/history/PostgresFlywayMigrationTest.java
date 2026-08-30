@@ -50,6 +50,10 @@ class PostgresFlywayMigrationTest {
                     while (rows.next()) tables.add(rows.getString(1));
                     assertThat(tables).contains(
                             "flyway_schema_history",
+                            "first_board_daily_bar",
+                            "first_board_market_day",
+                            "first_board_baseline_run",
+                            "first_board_baseline_item",
                             "market_kline_history",
                             "runtime_config_section",
                             "short_term_signal_observation",

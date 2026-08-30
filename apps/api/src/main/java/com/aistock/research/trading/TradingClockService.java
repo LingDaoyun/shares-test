@@ -85,6 +85,14 @@ public class TradingClockService {
         return cursor;
     }
 
+    public LocalDate previousTradingDay(LocalDate date) {
+        LocalDate cursor = date.minusDays(1);
+        while (isMarketClosedDay(cursor)) {
+            cursor = cursor.minusDays(1);
+        }
+        return cursor;
+    }
+
     public LocalDate tradingDayAfter(LocalDate date, int offset) {
         LocalDate cursor = date;
         for (int i = 0; i < Math.max(0, offset); i++) {
