@@ -24,8 +24,8 @@ AI 股票研究与交易复盘系统，面向 A 股的长线价值研究、政�
 ```text
 前端：React 18 + TypeScript + Vite + Tailwind
 后端：Java 17 + Spring Boot 3
-运行时配置：H2/PostgreSQL 数据库
-存储：Docker 默认 H2 文件库，可切换 PostgreSQL/pgvector
+运行时配置：PostgreSQL + Flyway
+存储：复用本机 PostgreSQL，应用不自建数据库容器
 容器：Docker Compose
 AI：OpenAI 兼容接口，当前推荐 DeepSeek 配置
 ```
@@ -35,7 +35,7 @@ AI：OpenAI 兼容接口，当前推荐 DeepSeek 配置
 ```text
 apps/api          Spring Boot 后端
 apps/web-react    React 前端
-infra/db/init     PostgreSQL 初始化脚本
+infra/db/init     早期基础设施参考脚本（当前运行时不挂载）
 docs              设计文档和补充说明
 scripts           本地启动和运维脚本
 docker-compose.yml
@@ -61,13 +61,18 @@ cd apps/web-react
 npm install
 ```
 
-### 2. 启动可选基础设施
+### 2. 准备 PostgreSQL
 
-默认 Docker 部署使用持久化 H2 文件库，不需要额外配置服务。需要 PostgreSQL、Redis 或 MinIO 时，可按需启动：
+本项目只连接本机已有 PostgreSQL，不会通过 Compose 再启动一个 PostgreSQL。请先准备独立数据库和应用账号，并设置：
 
-```bash
-docker compose --profile infra up -d postgres redis minio
+```text
+JDBC_DATABASE_URL=jdbc:postgresql://host.docker.internal:5432/aistock
+JDBC_DATABASE_DRIVER=org.postgresql.Driver
+JDBC_DATABASE_USERNAME=aistock
+JDBC_DATABASE_PASSWORD=本机实际密码
 ```
+
+Redis 和 MinIO 如有需要仍可使用 `docker compose --profile infra up -d redis minio`。
 
 ### 3. 配置模型密钥
 
@@ -235,20 +240,26 @@ DEEPSEEK_API_KEY=你的密钥
 
 ## 数据持久化
 
-Docker 默认使用 H2 文件库并挂载到 `api-data` 卷，适合本地持续运行。
-
-如需 PostgreSQL：
+PostgreSQL 是唯一业务数据库，表结构只由 Flyway 管理。默认本机开发连接：
 
 ```bash
-docker compose --profile infra up -d postgres
-
-SPRING_PROFILES_ACTIVE=prod \
 JDBC_DATABASE_URL=jdbc:postgresql://127.0.0.1:5432/aistock \
 JDBC_DATABASE_DRIVER=org.postgresql.Driver \
 JDBC_DATABASE_USERNAME=aistock \
-JDBC_DATABASE_PASSWORD=aistock \
+JDBC_DATABASE_PASSWORD=本机实际密码 \
 mvn -pl apps/api spring-boot:run
 ```
+
+最终应用依赖、配置和 Compose 均不包含 H2 接入；历史 H2 物理备份只作为离线回滚证据保留。
+
+### 首板候选池数据
+
+- 首次运行从 `market_kline_history` 导入可复用前复权日线，只联网补齐不足 60 根的股票。
+- 每个交易日收盘后只增加该交易日，并为下一交易日发布不可变技术基线。
+- API 重启直接读取 PostgreSQL READY 基线，不重新拉取全市场历史。
+- 当前交易日增量或基线失败时，页面暂停推荐且不回退旧候选。
+- 非交易日继续使用最近交易日收盘行情。
+- 首板专用日线只保留最近 120 个交易日，基线保留最近 5 个扫描日，市场日状态保留 130 日；共享历史表不参与清理。
 
 核心历史表包括：
 
@@ -355,7 +366,7 @@ docker compose up -d --build web
 ```text
 GET /api/runtime-config 返回的 storage 是否为 database
 对应栏目 revision 是否已增加
-前后端是否连接同一个 H2 卷或 PostgreSQL 实例
+前后端是否连接同一个 PostgreSQL 数据库
 GET /api/ai/llm-config 是否已返回新的有效模型
 ```
 
