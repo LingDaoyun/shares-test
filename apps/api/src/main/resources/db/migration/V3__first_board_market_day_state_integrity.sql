@@ -10,7 +10,7 @@ SET status = 'FAILED',
     completed_at = NULL,
     next_retry_at = COALESCE(next_retry_at, now()),
     error_summary = LEFT(COALESCE(
-      NULLIF(error_summary, ''),
+      NULLIF(TRIM(error_summary), ''),
       'Flyway V3: historical READY row failed completeness validation'
     ), 500)
 WHERE status = 'READY'
@@ -33,7 +33,7 @@ SET failed_symbol_count = GREATEST(failed_symbol_count, 1),
     completed_at = NULL,
     next_retry_at = COALESCE(next_retry_at, now()),
     error_summary = LEFT(COALESCE(
-      NULLIF(error_summary, ''),
+      NULLIF(TRIM(error_summary), ''),
       'Flyway V3: failed market day normalized for retry'
     ), 500)
 WHERE status = 'FAILED';
