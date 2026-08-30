@@ -170,6 +170,13 @@ public class FirstBoardBaselineService {
                 eligibleBySymbol.putIfAbsent(quote.symbol(), quote);
             }
         }
+        Map<String, Integer> curveCounts = dailyBarStore.completedBarCounts(
+                eligibleBySymbol.keySet(), baselineDate, FirstBoardCurvePolicy.MINIMUM_VALID_BARS);
+        eligibleBySymbol.entrySet().removeIf(entry ->
+                !FirstBoardCurvePolicy.hasValidCurve(entry.getKey(), curveCounts));
+        if (eligibleBySymbol.isEmpty()) {
+            throw new IllegalStateException("没有股票达到最近至少 15 根有效日线门槛");
+        }
         Set<String> previousLimitUps = dailyBarStore.confirmedLimitUpSymbols(baselineDate);
         AtomicInteger insufficientHistoryCount = new AtomicInteger();
         Map<String, FirstBoardBaseline> evaluated = new ConcurrentHashMap<>();
@@ -203,7 +210,7 @@ public class FirstBoardBaselineService {
         });
         FirstBoardBaselineRun run = baselineStore.startRun(
                 scanDate, baselineDate, BASELINE_RULE_VERSION, marketDay.barDataVersion(),
-                quoteSnapshot.quotes().size(), supported.size(), excludedNameCount.get(),
+                quoteSnapshot.quotes().size(), eligibleBySymbol.size(), excludedNameCount.get(),
                 insufficientHistoryCount.get());
         try {
             baselineStore.publish(run, ordered);
