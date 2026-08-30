@@ -58,6 +58,34 @@ class FirstBoardMarketDayIngestionServiceTest {
         assertThat(progress.failed()).isZero();
     }
 
+    @Test
+    void publishesExistingCoverageWhenOneStockHistoryProviderFails() {
+        LocalDate scanDate = LocalDate.parse("2026-08-28");
+        LocalDate baselineDate = LocalDate.parse("2026-08-27");
+        FirstBoardMarketDataGateway gateway = mock(FirstBoardMarketDataGateway.class);
+        FirstBoardDailyBarStore store = mock(FirstBoardDailyBarStore.class);
+        TradingClockService clock = mock(TradingClockService.class);
+        when(clock.previousTradingDay(scanDate)).thenReturn(baselineDate);
+        when(store.marketDay(baselineDate)).thenReturn(Optional.empty());
+        when(store.latestReadyMarketDay()).thenReturn(Optional.empty());
+        when(gateway.fullMarketQuotes()).thenReturn(new AshareQuoteSnapshot(
+                List.of(quote("600000"), quote("001234")), 2, 2, 2, 0,
+                true, "test", Instant.parse("2026-08-28T07:00:00Z")));
+        when(gateway.dailyBars(any(), any(), any())).thenThrow(new IllegalStateException("provider limited"));
+        when(gateway.limitUpPool(baselineDate)).thenReturn(List.of());
+        when(store.completedBarCounts(any(), any(), anyInt()))
+                .thenReturn(Map.of("600000", 60, "001234", 0));
+        when(store.calculateBarDataVersion(baselineDate)).thenReturn("bars-v1");
+        service = new FirstBoardMarketDayIngestionService(gateway, store, clock);
+
+        FirstBoardIngestionProgress progress = service.ensureBaselineDayReady(scanDate);
+
+        assertThat(progress.status()).isEqualTo(FirstBoardMarketDayStatus.READY);
+        assertThat(progress.completed()).isEqualTo(1);
+        assertThat(progress.total()).isEqualTo(2);
+        assertThat(progress.failed()).isEqualTo(1);
+    }
+
     private EastMoneyQuote quote(String symbol) {
         return new EastMoneyQuote(
                 symbol, "测试股份", "沪深", "测试行业",

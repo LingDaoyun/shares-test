@@ -105,11 +105,12 @@ public class FirstBoardMarketDayIngestionService {
                     .collect(Collectors.toUnmodifiableSet());
             store.confirmLimitUpPool(baselineDate, limitUps);
             int written = completed.get();
-            if (failed.get() > 0 || written != total) {
-                throw new IllegalStateException("历史日线补充失败: " + failed.get() + "/" + total);
+            if (written == 0) {
+                throw new IllegalStateException("没有任何股票具备可用历史日线");
             }
             FirstBoardMarketDay ready = new FirstBoardMarketDay(
-                    baselineDate, baselineDate, FirstBoardMarketDayStatus.READY, total, written, 0, true,
+                    baselineDate, baselineDate, FirstBoardMarketDayStatus.READY,
+                    total, written, failed.get(), true,
                     store.calculateBarDataVersion(baselineDate), startedAt, Instant.now(), null, null);
             store.saveMarketDay(ready);
             return FirstBoardIngestionProgress.from(ready);
