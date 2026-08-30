@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Service
 public class FirstBoardBaselineService {
 
-    static final String BASELINE_RULE_VERSION = "first-board-baseline-v1";
+    static final String BASELINE_RULE_VERSION = "first-board-baseline-v2";
 
     private final FirstBoardMarketDataGateway gateway;
     private final FirstBoardMarketDayIngestionService ingestionService;

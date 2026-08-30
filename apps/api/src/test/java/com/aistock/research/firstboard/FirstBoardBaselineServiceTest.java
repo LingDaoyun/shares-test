@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -93,6 +94,41 @@ class FirstBoardBaselineServiceTest {
                 "bars-v1", 3, 2, 0, 1);
         verify(evaluator, never()).evaluate(eq("000003"), any(), any(), any(FirstBoardBoard.class),
                 anyList(), eq(baselineDate), anyBoolean());
+    }
+
+    @Test
+    void doesNotReuseLegacyV1BaselineAfterCurvePolicyChange() {
+        LocalDate scanDate = LocalDate.parse("2026-08-28");
+        LocalDate baselineDate = LocalDate.parse("2026-08-27");
+        FirstBoardMarketDataGateway gateway = mock(FirstBoardMarketDataGateway.class);
+        FirstBoardMarketDayIngestionService ingestionService = mock(FirstBoardMarketDayIngestionService.class);
+        FirstBoardDailyBarStore dailyBarStore = mock(FirstBoardDailyBarStore.class);
+        FirstBoardBaselineStore baselineStore = mock(FirstBoardBaselineStore.class);
+        FirstBoardTechnicalEvaluator evaluator = mock(FirstBoardTechnicalEvaluator.class);
+        TradingClockService clock = mock(TradingClockService.class);
+        FirstBoardMarketDay readyDay = new FirstBoardMarketDay(
+                baselineDate, baselineDate, FirstBoardMarketDayStatus.READY,
+                4951, 4951, 0, true, "bars-v1", Instant.now(), Instant.now(), null, null);
+        FirstBoardBaselineSnapshot legacy = new FirstBoardBaselineSnapshot(
+                scanDate, baselineDate, Instant.now(), Map.of(), 5905, 5553, 472, 137);
+
+        when(clock.isMarketClosedDay(scanDate)).thenReturn(false);
+        when(clock.previousTradingDay(scanDate)).thenReturn(baselineDate);
+        when(dailyBarStore.marketDay(baselineDate)).thenReturn(Optional.of(readyDay));
+        when(baselineStore.findReady(
+                scanDate, baselineDate, "first-board-baseline-v1", "bars-v1"))
+                .thenReturn(Optional.of(legacy));
+        when(baselineStore.findReady(
+                scanDate, baselineDate, "first-board-baseline-v2", "bars-v1"))
+                .thenReturn(Optional.empty());
+        service = new FirstBoardBaselineService(
+                gateway, ingestionService, dailyBarStore, baselineStore, evaluator, clock);
+
+        FirstBoardBaselineAccess access = service.access(scanDate);
+
+        assertThat(access.status()).isEqualTo(FirstBoardAlertStatus.UPDATING);
+        verify(baselineStore, atLeastOnce()).findReady(
+                scanDate, baselineDate, "first-board-baseline-v2", "bars-v1");
     }
 
     private EastMoneyQuote quote(String symbol) {
