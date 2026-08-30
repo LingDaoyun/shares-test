@@ -27,7 +27,6 @@ import java.util.stream.Collectors;
 @Service
 public class FirstBoardMarketDayIngestionService {
 
-    private static final int MINIMUM_HISTORY_BARS = 60;
     private static final Duration RETRY_DELAY = Duration.ofMinutes(5);
     private static final MathContext MC = MathContext.DECIMAL64;
 
@@ -70,47 +69,43 @@ public class FirstBoardMarketDayIngestionService {
             if (quoteSnapshot == null || !quoteSnapshot.complete()) {
                 throw new IllegalStateException("全市场股票列表不完整");
             }
-            List<EastMoneyQuote> eligible = eligibleQuotes(quoteSnapshot);
-            int total = eligible.size();
-            saveImporting(baselineDate, startedAt, total, 0, 0);
-
-            List<String> symbols = eligible.stream().map(EastMoneyQuote::symbol).toList();
-            Map<String, Integer> counts = store.completedBarCounts(symbols, baselineDate, MINIMUM_HISTORY_BARS);
-            List<EastMoneyQuote> gaps = eligible.stream()
-                    .filter(quote -> counts.getOrDefault(quote.symbol(), 0) < MINIMUM_HISTORY_BARS)
+            List<EastMoneyQuote> candidates = eligibleQuotes(quoteSnapshot);
+            List<String> symbols = candidates.stream().map(EastMoneyQuote::symbol).toList();
+            Map<String, Integer> initialCounts = store.completedBarCounts(
+                    symbols, baselineDate, FirstBoardCurvePolicy.MINIMUM_VALID_BARS);
+            List<EastMoneyQuote> gaps = candidates.stream()
+                    .filter(quote -> !FirstBoardCurvePolicy.hasValidCurve(quote.symbol(), initialCounts))
                     .toList();
-            AtomicInteger completed = new AtomicInteger(total - gaps.size());
-            AtomicInteger failed = new AtomicInteger();
+            AtomicInteger processed = new AtomicInteger(candidates.size() - gaps.size());
+            saveImporting(baselineDate, startedAt, candidates.size(), processed.get(), 0);
+
             List<CompletableFuture<Void>> tasks = gaps.stream()
                     .map(quote -> CompletableFuture.runAsync(() -> {
+                        List<EastMoneyKLine> rows;
                         try {
-                            List<EastMoneyKLine> rows = gateway.dailyBars(
+                            rows = gateway.dailyBars(
                                     quote.symbol(), baselineDate.minusDays(260), baselineDate);
-                            if (rows == null) {
-                                throw new IllegalStateException("历史日线返回为空");
-                            }
-                            store.upsertBars(rows, "东方财富前复权日线");
-                            completed.incrementAndGet();
-                        } catch (RuntimeException exception) {
-                            failed.incrementAndGet();
+                        } catch (RuntimeException ignored) {
+                            rows = List.of();
                         }
-                        saveImporting(baselineDate, startedAt, total, completed.get(), failed.get());
+                        if (rows != null && !rows.isEmpty()) {
+                            store.upsertBars(rows, "东方财富前复权日线");
+                        }
+                        saveImporting(
+                                baselineDate, startedAt, candidates.size(), processed.incrementAndGet(), 0);
                     }, seedExecutor))
                     .toList();
             CompletableFuture.allOf(tasks.toArray(CompletableFuture[]::new)).join();
 
-            int written = completed.get();
-            int failureCount = failed.get();
-            if (total <= 0 || written != total || failureCount != 0) {
-                FirstBoardMarketDay partial = new FirstBoardMarketDay(
-                        baselineDate, baselineDate, FirstBoardMarketDayStatus.IMPORTING,
-                        total, written, failureCount, false, null,
-                        startedAt, null, null, null);
-                store.saveMarketDay(partial);
-                return fail(baselineDate, startedAt, partial,
-                        new IllegalStateException(
-                                "历史日线补齐不完整: " + written + "/" + total
-                                        + ", failed=" + failureCount));
+            Map<String, Integer> finalCounts = store.completedBarCounts(
+                    symbols, baselineDate, FirstBoardCurvePolicy.MINIMUM_VALID_BARS);
+            int validCount = (int) candidates.stream()
+                    .filter(quote -> FirstBoardCurvePolicy.hasValidCurve(quote.symbol(), finalCounts))
+                    .count();
+            saveImporting(baselineDate, startedAt, validCount, validCount, 0);
+            if (validCount == 0) {
+                return fail(baselineDate, startedAt, null,
+                        new IllegalStateException("没有股票达到最近至少 15 根有效日线门槛"));
             }
 
             Set<String> limitUps = gateway.limitUpPool(baselineDate).stream()
@@ -120,7 +115,7 @@ public class FirstBoardMarketDayIngestionService {
             store.confirmLimitUpPool(baselineDate, limitUps);
             FirstBoardMarketDay ready = new FirstBoardMarketDay(
                     baselineDate, baselineDate, FirstBoardMarketDayStatus.READY,
-                    total, written, failureCount, true,
+                    validCount, validCount, 0, true,
                     store.calculateBarDataVersion(baselineDate), startedAt, Instant.now(), null, null);
             store.saveMarketDay(ready);
             return FirstBoardIngestionProgress.from(ready);
