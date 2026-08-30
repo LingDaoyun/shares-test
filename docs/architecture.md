@@ -71,7 +71,7 @@ ai-agent-service
 
 复盘列表由数据库完成状态/股票过滤，并以 `createdAt + caseId` 做有界 keyset 分页；Criteria 查询通过 `setMaxResults` 返回 `List`，不执行全量 count。前端把实体缓存、首屏初始化和服务端页游标分开，单条捕获或详情读取不能跳过第一页。成交和结果按页批量加载。复盘历史的反馈队列按 `sourceModule + ruleVersion` 隔离，只使用服务端认证且已成熟的推荐 `T20` 结果，并采用有界样本窗口和短时缓存。5 个样本后可作为受限的 Agent 提示词上下文，20 个样本后才产生 `-5..+5` 的可靠性调整。历史反馈不能自动修改数据库运行配置、确定性共识分，或绕过既有硬风控门禁。
 
-本地 Docker 使用挂载在命名卷上的 H2 文件库，复盘案例、成交和结果随 API 容器重启保留。生产/联调可切换 PostgreSQL；共享 schema 同时覆盖两种数据库，避免复盘表出现环境分叉。
+本地、联调和生产统一使用 PostgreSQL；应用不管理 PostgreSQL 容器或数据卷。业务表只由 Flyway 版本化迁移管理，Hibernate 在启动时执行结构校验，不存在 H2 或 `schema.sql` 回退路径。复盘案例、成交和结果均保存在同一 PostgreSQL 业务库中。
 
 ## AI 框架选择
 

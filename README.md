@@ -35,7 +35,6 @@ AI：OpenAI 兼容接口，当前推荐 DeepSeek 配置
 ```text
 apps/api          Spring Boot 后端
 apps/web-react    React 前端
-infra/db/init     早期基础设施参考脚本（当前运行时不挂载）
 docs              设计文档和补充说明
 scripts           本地启动和运维脚本
 docker-compose.yml
@@ -73,6 +72,12 @@ JDBC_DATABASE_PASSWORD=本机实际密码
 ```
 
 Redis 和 MinIO 如有需要仍可使用 `docker compose --profile infra up -d redis minio`。
+
+Flyway 迁移必须使用独立测试库验证。专用入口会检查三个测试数据库环境变量，缺少任一项都会在 Maven 启动前失败，不会把测试跳过误认为验证成功：
+
+```bash
+./scripts/verify-postgres-migrations.sh
+```
 
 ### 3. 配置模型密钥
 
@@ -250,14 +255,14 @@ JDBC_DATABASE_PASSWORD=本机实际密码 \
 mvn -pl apps/api spring-boot:run
 ```
 
-最终应用依赖、配置和 Compose 均不包含 H2 接入；历史 H2 物理备份只作为离线回滚证据保留。
+最终应用依赖、配置和 Compose 均不包含 H2 接入；历史 H2 物理备份只作为离线回滚证据保留。本地忽略目录 `backups/` 中的 `SHA256SUMS` 和 `MIGRATION-AUDIT.md` 记录现有备份摘要、证据缺口与隔离恢复边界，不能代替真实恢复演练。
 
 ### 首板候选池数据
 
 - 首次运行从 `market_kline_history` 导入可复用前复权日线，只联网补齐不足 60 根的股票。
 - 每个交易日收盘后只增加该交易日，并为下一交易日发布不可变技术基线。
 - API 重启直接读取 PostgreSQL READY 基线，不重新拉取全市场历史。
-- 当前交易日增量或基线失败时，页面暂停推荐且不回退旧候选。
+- 当前交易日增量、历史补齐或基线只要存在失败，页面暂停推荐且不回退旧候选；Flyway 状态约束禁止不完整市场日进入 READY。
 - 非交易日继续使用最近交易日收盘行情。
 - 首板专用日线只保留最近 120 个交易日，基线保留最近 5 个扫描日，市场日状态保留 130 日；共享历史表不参与清理。
 

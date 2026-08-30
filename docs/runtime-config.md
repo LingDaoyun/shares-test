@@ -1,6 +1,6 @@
 # 数据库运行配置
 
-系统的动态配置存储在当前 H2 或 PostgreSQL 数据库的 `runtime_config_section` 表中，不依赖独立配置中心。
+系统的动态配置只存储在 PostgreSQL 的 `runtime_config_section` 表中，不依赖独立配置中心，也不存在 H2 回退路径。
 
 ## 配置栏目
 
@@ -58,7 +58,8 @@ GET  /api/ai/llm-config
 1. 请求 `GET /api/runtime-config`，确认 `storage=database` 以及目标栏目修订号。
 2. 保存后再次读取，确认目标栏目 `revision` 已增加，另一栏目修订号未变化。
 3. 请求 `GET /api/ai/llm-config`，确认有效 Provider、模型和 Key 来源。
-4. Docker 默认数据库位于 `api-data` 命名卷；重建容器时不要删除该卷。
-5. PostgreSQL 部署要确认所有 API 实例连接同一个数据库。
+4. 确认 `JDBC_DATABASE_URL` 使用 PostgreSQL，且所有 API 实例连接同一个业务数据库。
+5. 结构迁移使用独立测试库执行 `./scripts/verify-postgres-migrations.sh`；缺少测试库凭据时脚本会明确失败。
+6. 备份按可能含直接 API Key 的敏感材料管理；当前本地备份摘要和恢复边界记录在被 Git 忽略的 `backups/MIGRATION-AUDIT.md`。
 
 配置解析损坏时服务会明确报错，不会静默覆盖为默认值。需要修复时先备份数据库，再通过受控 SQL 或管理接口处理目标栏目。
