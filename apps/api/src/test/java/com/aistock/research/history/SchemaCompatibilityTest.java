@@ -77,4 +77,20 @@ class SchemaCompatibilityTest {
                 .doesNotContain("<groupId>com.h2database</groupId>")
                 .doesNotContain("<artifactId>h2</artifactId>");
     }
+
+    @Test
+    void migrationVerificationIsExplicitAndLegacySchemaSourceIsAbsent() throws Exception {
+        Path scriptPath = Path.of("../../scripts/verify-postgres-migrations.sh");
+        assertThat(scriptPath).exists();
+
+        String script = Files.readString(scriptPath);
+        assertThat(script)
+                .contains("AISTOCK_TEST_JDBC_URL")
+                .contains("AISTOCK_TEST_DB_USERNAME")
+                .contains("AISTOCK_TEST_DB_PASSWORD")
+                .contains("exit 1")
+                .contains("-Dtest=PostgresFlywayMigrationTest");
+
+        assertThat(Path.of("../../infra/db/init/001_schema.sql")).doesNotExist();
+    }
 }
