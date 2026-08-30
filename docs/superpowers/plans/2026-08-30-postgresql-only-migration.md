@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将现有系统从 H2 文件库完整迁移到 PostgreSQL 16，保留全部业务数据，并从最终应用、配置和镜像中移除 H2 接入。
+**Goal:** 将现有系统从 H2 文件库完整迁移到本机现有 PostgreSQL 17，保留全部业务数据，并从最终应用、配置和镜像中移除 H2 接入。
 
 **Architecture:** PostgreSQL 成为唯一事实库，Flyway 成为唯一结构迁移入口。正式切换前使用被 `.gitignore` 排除的一次性 JDBC 搬运程序只读 H2 备份、批量写入全新 PostgreSQL，并通过表清单、行数、主键摘要和序列校验阻止不完整切换。
 
-**Tech Stack:** Java 17, Spring Boot 3.3.5, Spring Data JPA, Flyway, PostgreSQL 16/pgvector, Testcontainers, Docker Compose, Maven
+**Tech Stack:** Java 17, Spring Boot 3.3.5, Spring Data JPA, Flyway, existing PostgreSQL 17 container, Docker Compose, Maven
 
 ## Global Constraints
 
-- PostgreSQL 16 是最终唯一数据库；默认、本地和生产配置均不得回退到 H2。
+- 本机现有 `postgres:17` 容器是最终唯一 PostgreSQL 实例；默认、本地和生产配置均不得回退到 H2。
 - 现有 H2 中每一张真实业务表都必须迁移；任何表清单或数据校验失败都不得切换。
 - 最终 API 依赖、配置、Docker 镜像和 Compose 中不得存在 H2 驱动、`jdbc:h2:` 或 H2 文件卷挂载。
 - H2 物理备份在业务验收前只离线保留，不删除旧卷，不提供运行时连接入口。
@@ -18,6 +18,17 @@
 - 不引入 TimescaleDB、分库分表或第二个数据库。
 - 保留工作区内现有首板代码改动；每次提交只暂存本任务明确列出的路径。
 - 运行测试、构建、容器检查、备份和切换必须在用户明确选择执行计划后进行；本计划编写阶段不执行这些动作。
+
+## Confirmed Execution Overrides
+
+以下覆盖项来自实施开始后的用户明确要求，优先于本文后续任何冲突步骤：
+
+- 不安装、不拉起、不创建第二个 PostgreSQL 服务；复用现有容器 `postgres`（PostgreSQL 17.10，宿主机端口 5432）。
+- 在现有实例内新建独立 `aistock` 正式库与 `aistock_test` 测试库；不得在已有 `geo_flow` 库中创建本系统业务表。
+- 本项目 `docker-compose.yml` 删除整个 `postgres` 服务和 `postgres-data` 卷；API 通过 `jdbc:postgresql://host.docker.internal:5432/aistock` 连接宿主机已有实例，不声明 `depends_on: postgres`。
+- 所有原计划中的 Testcontainers PostgreSQL 测试改为连接 `aistock_test`，每个测试使用随机 schema 并在结束时 `DROP SCHEMA ... CASCADE`；不得启动临时 PostgreSQL 容器。
+- 所有原计划中的 `ai-stock-postgres` 命令改为现有容器 `postgres`；不得停止、重建或更改该容器的挂载和重启策略。
+- PostgreSQL 账号密码只存于被 Git 忽略的本机 `.env` 或运行环境，不写入仓库和任务输出。
 
 ---
 
@@ -376,7 +387,7 @@ git commit -m "refactor: make PostgreSQL the only application database"
 
 ---
 
-### Task 3: Convert Docker Compose to PostgreSQL-only startup
+### Task 3: Connect Docker Compose to the existing local PostgreSQL
 
 **Files:**
 - Modify: `docker-compose.yml`
@@ -386,7 +397,7 @@ git commit -m "refactor: make PostgreSQL the only application database"
 
 **Interfaces:**
 - Consumes: PostgreSQL-only application configuration from Task 2.
-- Produces: default Compose dependency `api -> healthy postgres`, persistent `postgres-data`, and no API H2 volume.
+- Produces: API connection to `host.docker.internal:5432/aistock` and no project-owned PostgreSQL/H2 volume.
 
 - [ ] **Step 1: Add a failing static Compose assertion**
 

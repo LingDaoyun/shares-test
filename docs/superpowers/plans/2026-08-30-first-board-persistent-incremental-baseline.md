@@ -6,7 +6,7 @@
 
 **Architecture:** `FirstBoardDailyBarStore` 管理规范日线和每日完整性，`FirstBoardBaselineStore` 管理不可变构建 run 与技术条目；网络导入和技术计算通过两个窄接口连接。基线只有在日线日期、规则版本和数据版本全部匹配时才能原子发布为 READY，任何缺失或失败都返回空候选。
 
-**Tech Stack:** Java 17, Spring Boot 3.3.5, Spring JDBC/JPA transactions, PostgreSQL 16, Flyway, JUnit 5, Mockito, React 18, TypeScript, Vitest
+**Tech Stack:** Java 17, Spring Boot 3.3.5, Spring JDBC/JPA transactions, existing PostgreSQL 17, Flyway, JUnit 5, Mockito, React 18, TypeScript, Vitest
 
 ## Global Constraints
 
@@ -20,6 +20,16 @@
 - 非交易日扫描最近交易日收盘行情，基线再回退一个交易日。
 - 不引入 Redis、第二个数据库、TimescaleDB、分库分表或新的微服务。
 - 保留工作区中的其他改动；提交时只暂存每个任务列出的文件。
+
+## Confirmed Execution Overrides
+
+- 使用本机现有 `postgres` 容器中的独立 `aistock` 数据库；本项目不启动第二个 PostgreSQL。
+- 每次新交易日与下一扫描日基线都 READY 后运行 `FirstBoardRetentionService`，清理不得早于发布事务。
+- `first_board_daily_bar` 只保留最近 120 个不同交易日。
+- `first_board_baseline_run` 与级联 `first_board_baseline_item` 只保留最近 5 个不同扫描日；BUILDING run 不删除。
+- `first_board_market_day` 保留最近 130 个交易日，用于缺口与截止日期计算。
+- 清理不得触碰共享 `market_kline_history` 或其他业务表；日常 DELETE 后依靠 autovacuum 复用空间，不执行每日 `VACUUM FULL`。
+- 集成测试复用现有 `aistock_test` 数据库的随机 schema，不使用 Testcontainers PostgreSQL。
 
 ---
 
@@ -65,6 +75,11 @@
 - Modify: `apps/web-react/src/types.ts`
 - Modify: `apps/web-react/src/pages/FirstBoardAlertPage.tsx`
 - Modify: `apps/web-react/src/pages/FirstBoardAlertPage.test.tsx`
+
+### Retention cleanup
+
+- Create: `apps/api/src/main/java/com/aistock/research/firstboard/FirstBoardRetentionService.java` — 成功发布后的有界清理。
+- Create: `apps/api/src/test/java/com/aistock/research/firstboard/FirstBoardRetentionServiceTest.java` — 120/5/130 保留窗口和 BUILDING 保护。
 
 ---
 
@@ -1045,7 +1060,98 @@ git commit -m "feat: repair first-board QFQ discontinuities"
 
 ---
 
-### Task 7: Deploy once and prove incremental restart behavior
+### Task 7: Delete first-board data outside the retained windows
+
+**Files:**
+- Modify: `apps/api/src/main/resources/db/migration/V2__first_board_persistent_baseline.sql`
+- Create: `apps/api/src/main/java/com/aistock/research/firstboard/FirstBoardRetentionService.java`
+- Modify: `apps/api/src/main/java/com/aistock/research/firstboard/FirstBoardBaselineScheduler.java`
+- Create: `apps/api/src/test/java/com/aistock/research/firstboard/FirstBoardRetentionServiceTest.java`
+
+**Interfaces:**
+- Consumes: a newly published READY run and PostgreSQL first-board tables.
+- Produces: stable module storage bounded to 120 bar dates, 5 scan dates and 130 market-day rows without touching shared history.
+
+- [ ] **Step 1: Write the failing PostgreSQL retention test**
+
+Create a PostgreSQL integration test that inserts 121 distinct `first_board_daily_bar` dates, 131 `first_board_market_day` dates, six READY run dates with one item each, and one old BUILDING run. Call `cleanup()` and assert:
+
+- exactly 120 distinct bar dates remain;
+- exactly 130 market-day dates remain;
+- READY runs remain for exactly the newest five distinct scan dates;
+- items belonging to deleted READY runs are removed by the foreign key cascade;
+- the old BUILDING run remains;
+- `market_kline_history` row count is unchanged.
+
+- [ ] **Step 2: Run the test and verify it fails**
+
+Run:
+
+```bash
+mvn -pl apps/api -Dtest=FirstBoardRetentionServiceTest test
+```
+
+Expected: compilation fails because `FirstBoardRetentionService` does not exist.
+
+- [ ] **Step 3: Tune autovacuum for the churn tables**
+
+Append to V2:
+
+```sql
+ALTER TABLE first_board_daily_bar SET (
+  autovacuum_vacuum_scale_factor = 0.02,
+  autovacuum_analyze_scale_factor = 0.01
+);
+ALTER TABLE first_board_baseline_item SET (
+  autovacuum_vacuum_scale_factor = 0.02,
+  autovacuum_analyze_scale_factor = 0.01
+);
+```
+
+- [ ] **Step 4: Implement transactional cutoff deletion**
+
+Create `FirstBoardRetentionService` with constants:
+
+```java
+static final int BAR_TRADING_DAYS = 120;
+static final int BASELINE_SCAN_DAYS = 5;
+static final int MARKET_DAY_ROWS = 130;
+```
+
+Use PostgreSQL distinct-date cutoffs. Delete bars older than the 120th newest bar date, non-BUILDING runs older than the fifth newest READY scan date, and market-day rows older than the 130th newest date. Run the three deletes in one transaction. If fewer dates exist, skip that table’s delete. Never issue SQL against `market_kline_history`.
+
+The run delete must include:
+
+```sql
+DELETE FROM first_board_baseline_run
+WHERE status <> 'BUILDING'
+  AND scan_trade_date < :cutoff;
+```
+
+- [ ] **Step 5: Trigger cleanup only after successful publication**
+
+Inject retention into `FirstBoardBaselineScheduler`. After `ingestClosedDay(today)` is READY and `baselineService.access(nextTradingDay)` reaches/publishes READY, invoke cleanup asynchronously. Catch cleanup exceptions, log one bounded error, and retry on the next scheduled/startup reconciliation; do not change the READY run to FAILED.
+
+- [ ] **Step 6: Run the retention and lifecycle tests**
+
+Run:
+
+```bash
+mvn -pl apps/api -Dtest=FirstBoardRetentionServiceTest,FirstBoardBaselineServicePersistenceTest test
+```
+
+Expected: PASS; the shared history count assertion proves cleanup scope.
+
+- [ ] **Step 7: Commit retention**
+
+```bash
+git add apps/api/src/main/resources/db/migration/V2__first_board_persistent_baseline.sql apps/api/src/main/java/com/aistock/research/firstboard/FirstBoardRetentionService.java apps/api/src/main/java/com/aistock/research/firstboard/FirstBoardBaselineScheduler.java apps/api/src/test/java/com/aistock/research/firstboard/FirstBoardRetentionServiceTest.java
+git commit -m "feat: bound first-board database retention"
+```
+
+---
+
+### Task 8: Deploy once and prove incremental restart behavior
 
 **Files/State:**
 - Write: PostgreSQL `first_board_*` tables through Flyway and the running application.
