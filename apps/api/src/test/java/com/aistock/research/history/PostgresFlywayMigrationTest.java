@@ -1,15 +1,18 @@
 package com.aistock.research.history;
 
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PostgresFlywayMigrationTest {
 
@@ -82,6 +85,89 @@ class PostgresFlywayMigrationTest {
                     );
                 }
             }
+        } finally {
+            try (var connection = DriverManager.getConnection(url, username, password)) {
+                connection.createStatement().execute("DROP SCHEMA " + schema + " CASCADE");
+            }
+        }
+    }
+
+    @Test
+    void repairsUnsafeReadyRowsAndRejectsFutureIncompleteReadyRows() throws Exception {
+        String url = System.getenv("AISTOCK_TEST_JDBC_URL");
+        String username = System.getenv("AISTOCK_TEST_DB_USERNAME");
+        String password = System.getenv("AISTOCK_TEST_DB_PASSWORD");
+        Assumptions.assumeTrue(url != null && username != null && password != null,
+                "PostgreSQL integration-test credentials are required");
+
+        String schema = "flyway_state_test_" + UUID.randomUUID().toString().replace("-", "");
+        try (var connection = DriverManager.getConnection(url, username, password)) {
+            connection.createStatement().execute("CREATE SCHEMA " + schema);
+        }
+        try {
+            Flyway.configure()
+                    .dataSource(url, username, password)
+                    .schemas(schema)
+                    .defaultSchema(schema)
+                    .locations("classpath:db/migration")
+                    .target(MigrationVersion.fromVersion("2"))
+                    .load()
+                    .migrate();
+
+            try (var connection = DriverManager.getConnection(url, username, password)) {
+                connection.setSchema(schema);
+                connection.createStatement().execute("""
+                        INSERT INTO first_board_market_day (
+                          trade_date, source_trade_date, status,
+                          expected_symbol_count, written_symbol_count, failed_symbol_count,
+                          limit_up_pool_complete, bar_data_version, started_at, completed_at,
+                          next_retry_at, error_summary
+                        ) VALUES (
+                          DATE '2026-08-28', DATE '2026-08-28', 'READY',
+                          2, 1, 1, TRUE, 'partial', now(), now(), NULL, NULL
+                        )
+                        """);
+            }
+
+            Flyway.configure()
+                    .dataSource(url, username, password)
+                    .schemas(schema)
+                    .defaultSchema(schema)
+                    .locations("classpath:db/migration")
+                    .load()
+                    .migrate();
+
+            try (var connection = DriverManager.getConnection(url, username, password)) {
+                connection.setSchema(schema);
+                try (var rows = connection.createStatement().executeQuery("""
+                        SELECT status, failed_symbol_count, next_retry_at, error_summary
+                        FROM first_board_market_day
+                        WHERE trade_date = DATE '2026-08-28'
+                        """)) {
+                    rows.next();
+                    assertThat(rows.getString("status")).isEqualTo("FAILED");
+                    assertThat(rows.getInt("failed_symbol_count")).isPositive();
+                    assertThat(rows.getObject("next_retry_at")).isNotNull();
+                    assertThat(rows.getString("error_summary")).contains("Flyway V3");
+                }
+            }
+
+            assertThatThrownBy(() -> {
+                try (var connection = DriverManager.getConnection(url, username, password)) {
+                    connection.setSchema(schema);
+                    connection.createStatement().execute("""
+                            INSERT INTO first_board_market_day (
+                              trade_date, source_trade_date, status,
+                              expected_symbol_count, written_symbol_count, failed_symbol_count,
+                              limit_up_pool_complete, bar_data_version, started_at, completed_at,
+                              next_retry_at, error_summary
+                            ) VALUES (
+                              DATE '2026-08-29', DATE '2026-08-29', 'READY',
+                              2, 1, 1, TRUE, 'partial', now(), now(), NULL, NULL
+                            )
+                            """);
+                }
+            }).isInstanceOf(SQLException.class);
         } finally {
             try (var connection = DriverManager.getConnection(url, username, password)) {
                 connection.createStatement().execute("DROP SCHEMA " + schema + " CASCADE");
