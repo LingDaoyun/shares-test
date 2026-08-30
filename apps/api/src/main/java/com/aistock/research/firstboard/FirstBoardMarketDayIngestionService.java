@@ -86,14 +86,11 @@ public class FirstBoardMarketDayIngestionService {
                         try {
                             List<EastMoneyKLine> rows = gateway.dailyBars(
                                     quote.symbol(), baselineDate.minusDays(260), baselineDate);
-                            store.upsertBars(rows, "东方财富前复权日线");
-                            if (store.completedBarCounts(
-                                    List.of(quote.symbol()), baselineDate, MINIMUM_HISTORY_BARS
-                            ).getOrDefault(quote.symbol(), 0) >= MINIMUM_HISTORY_BARS) {
-                                completed.incrementAndGet();
-                            } else {
-                                failed.incrementAndGet();
+                            if (rows == null) {
+                                throw new IllegalStateException("历史日线返回为空");
                             }
+                            store.upsertBars(rows, "东方财富前复权日线");
+                            completed.incrementAndGet();
                         } catch (RuntimeException exception) {
                             failed.incrementAndGet();
                         }
@@ -107,13 +104,9 @@ public class FirstBoardMarketDayIngestionService {
                     .filter(symbol -> symbol != null && !symbol.isBlank())
                     .collect(Collectors.toUnmodifiableSet());
             store.confirmLimitUpPool(baselineDate, limitUps);
-            Map<String, Integer> finalCounts = store.completedBarCounts(
-                    symbols, baselineDate, MINIMUM_HISTORY_BARS);
-            int written = (int) symbols.stream()
-                    .filter(symbol -> finalCounts.getOrDefault(symbol, 0) >= MINIMUM_HISTORY_BARS)
-                    .count();
-            if (written != total) {
-                throw new IllegalStateException("历史日线仍有缺口: " + written + "/" + total);
+            int written = completed.get();
+            if (failed.get() > 0 || written != total) {
+                throw new IllegalStateException("历史日线补充失败: " + failed.get() + "/" + total);
             }
             FirstBoardMarketDay ready = new FirstBoardMarketDay(
                     baselineDate, baselineDate, FirstBoardMarketDayStatus.READY, total, written, 0, true,
