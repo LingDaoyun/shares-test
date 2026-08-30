@@ -1,6 +1,8 @@
 import axios from 'axios'
 import type {
   BacktestReport,
+  FirstBoardAlertSnapshot,
+  FirstBoardBarSeries,
   OvernightBacktestReport,
   CycleTrialReport,
   DailySignalReport,
@@ -47,6 +49,16 @@ const http = axios.create({
 
 export function fetchRules() {
   return http.get<RuleDefinition[]>('/rules').then((res) => res.data)
+}
+
+export function fetchFirstBoardAlertSnapshot(params: { includeGrowth: boolean; includeStar: boolean }) {
+  return http.get<FirstBoardAlertSnapshot>('/first-board-alert/snapshot', { params }).then((res) => res.data)
+}
+
+export function fetchFirstBoardBars(symbol: string) {
+  return http
+    .get<FirstBoardBarSeries>(`/first-board-alert/bars/${encodeURIComponent(symbol)}`)
+    .then((res) => res.data)
 }
 
 export function fetchLlmConfig() {

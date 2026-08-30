@@ -7,6 +7,7 @@ describe('page navigation meta', () => {
 
     expect(labels).toEqual([
       '短线右侧',
+      '首板预警',
       '长期价投',
       '外围市场',
       '政策解读',
@@ -20,6 +21,7 @@ describe('page navigation meta', () => {
     expect(labels).not.toContain('周期试仓')
     expect(labels).not.toContain('每日信号')
     expect(pathToPage.policy).toBe('policy')
+    expect(pathToPage['first-board-alert']).toBe('firstBoardAlert')
     expect(pathToPage.overseas).toBe('overseas')
     expect(pathToPage.mispricing).toBeUndefined()
     expect(pathToPage.tech).toBeUndefined()

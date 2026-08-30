@@ -1,5 +1,88 @@
 // 当前 React 前端消费的后端数据契约。
 
+export type FirstBoardAlertStatus = 'INITIALIZING' | 'UPDATING' | 'READY' | 'FAILED'
+export type FirstBoardBoard = 'MAIN' | 'GROWTH' | 'STAR'
+export type FirstBoardAlertLane = 'LATENT' | 'PREVIOUS_LIMIT_UP'
+export type FirstBoardAlertLevel =
+  | 'WATCH'
+  | 'STRONG'
+  | 'ACCELERATING'
+  | 'REPEAT_STRONG'
+  | 'REPEAT_ACCELERATING'
+
+export interface FirstBoardAlertCandidate {
+  symbol: string
+  name: string
+  industry: string | null
+  board: FirstBoardBoard
+  lane: FirstBoardAlertLane
+  level: FirstBoardAlertLevel
+  latestPrice: number
+  changePercent: number
+  ma10: number
+  ma20: number
+  ma20Slope: number
+  rsi14: number
+  macdHistogram: number
+  technicalPassCount: number
+  realtimeVolumeRatio: number
+  previousDayVolumeRatio: number
+  recentFiveMaxVolumeRatio: number
+  upperShadowRatio: number
+  intradayDrawdown: number | null
+  threeDayCloseRange: number
+}
+
+export interface FirstBoardAlertCoverage {
+  universeCount: number
+  supportedCount: number
+  baselineCount: number
+  scopedBaselineCount: number
+  quotedCount: number
+  eligibleCount: number
+  excludedNameCount: number
+  insufficientHistoryCount: number
+  excludedMissingQuoteCount: number
+  excludedTouchedLimitCount: number
+  excludedVolumeRatioCount: number
+}
+
+export interface FirstBoardAlertSnapshot {
+  status: FirstBoardAlertStatus
+  tradeDate: string
+  baselineDate: string | null
+  generatedAt: string
+  quoteFetchedAt: string | null
+  autoRefreshAllowed: boolean
+  ruleVersion: string
+  phase: string
+  progressCompleted: number
+  progressTotal: number
+  progressFailed: number
+  baselinePublishedAt: string | null
+  nextRetryAt: string | null
+  coverage: FirstBoardAlertCoverage
+  latentCandidates: FirstBoardAlertCandidate[]
+  previousLimitUpCandidates: FirstBoardAlertCandidate[]
+  dataGaps: string[]
+}
+
+export interface FirstBoardBar {
+  tradeDate: string
+  open: number
+  close: number
+  high: number
+  low: number
+  volume: number
+}
+
+export interface FirstBoardBarSeries {
+  symbol: string
+  tradeDate: string
+  baselineDate: string
+  bars: FirstBoardBar[]
+}
+
 export type RuleAction = 'PASS' | 'REJECT' | 'SCORE' | 'ALERT' | 'DOWN_WEIGHT' | 'REVIEW'
 export type Operator = 'GT' | 'GTE' | 'LT' | 'LTE' | 'EQ'
 
