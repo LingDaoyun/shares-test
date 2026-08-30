@@ -99,18 +99,28 @@ public class FirstBoardMarketDayIngestionService {
                     .toList();
             CompletableFuture.allOf(tasks.toArray(CompletableFuture[]::new)).join();
 
+            int written = completed.get();
+            int failureCount = failed.get();
+            if (total <= 0 || written != total || failureCount != 0) {
+                FirstBoardMarketDay partial = new FirstBoardMarketDay(
+                        baselineDate, baselineDate, FirstBoardMarketDayStatus.IMPORTING,
+                        total, written, failureCount, false, null,
+                        startedAt, null, null, null);
+                store.saveMarketDay(partial);
+                return fail(baselineDate, startedAt, partial,
+                        new IllegalStateException(
+                                "历史日线补齐不完整: " + written + "/" + total
+                                        + ", failed=" + failureCount));
+            }
+
             Set<String> limitUps = gateway.limitUpPool(baselineDate).stream()
                     .map(EastMoneyLimitUpPoolEntry::symbol)
                     .filter(symbol -> symbol != null && !symbol.isBlank())
                     .collect(Collectors.toUnmodifiableSet());
             store.confirmLimitUpPool(baselineDate, limitUps);
-            int written = completed.get();
-            if (written == 0) {
-                throw new IllegalStateException("没有任何股票具备可用历史日线");
-            }
             FirstBoardMarketDay ready = new FirstBoardMarketDay(
                     baselineDate, baselineDate, FirstBoardMarketDayStatus.READY,
-                    total, written, failed.get(), true,
+                    total, written, failureCount, true,
                     store.calculateBarDataVersion(baselineDate), startedAt, Instant.now(), null, null);
             store.saveMarketDay(ready);
             return FirstBoardIngestionProgress.from(ready);

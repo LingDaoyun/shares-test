@@ -59,7 +59,7 @@ class FirstBoardMarketDayIngestionServiceTest {
     }
 
     @Test
-    void publishesExistingCoverageWhenOneStockHistoryProviderFails() {
+    void failsClosedWhenOneStockHistoryProviderFails() {
         LocalDate scanDate = LocalDate.parse("2026-08-28");
         LocalDate baselineDate = LocalDate.parse("2026-08-27");
         FirstBoardMarketDataGateway gateway = mock(FirstBoardMarketDataGateway.class);
@@ -80,10 +80,12 @@ class FirstBoardMarketDayIngestionServiceTest {
 
         FirstBoardIngestionProgress progress = service.ensureBaselineDayReady(scanDate);
 
-        assertThat(progress.status()).isEqualTo(FirstBoardMarketDayStatus.READY);
+        assertThat(progress.status()).isEqualTo(FirstBoardMarketDayStatus.FAILED);
         assertThat(progress.completed()).isEqualTo(1);
         assertThat(progress.total()).isEqualTo(2);
         assertThat(progress.failed()).isEqualTo(1);
+        assertThat(progress.nextRetryAt()).isNotNull();
+        assertThat(progress.errorSummary()).contains("历史日线补齐不完整");
     }
 
     private EastMoneyQuote quote(String symbol) {
