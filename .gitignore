@@ -19,6 +19,8 @@ tmp/
 .env.*
 !.env.example
 uploads/
+backups/
+.migration-work/
 minio-data/
 postgres-data/
 redis-data/

@@ -58,6 +58,26 @@ class PostgresFlywayMigrationTest {
                     );
                 }
             }
+
+            try (var connection = DriverManager.getConnection(url, username, password);
+                 var statement = connection.prepareStatement("""
+                         SELECT indexname
+                         FROM pg_indexes
+                         WHERE schemaname = ?
+                         """)) {
+                statement.setString(1, schema);
+                try (var rows = statement.executeQuery()) {
+                    Set<String> indexes = new TreeSet<>();
+                    while (rows.next()) indexes.add(rows.getString(1));
+                    assertThat(indexes).contains(
+                            "uk_trade_fill_revision_sequence",
+                            "idx_trade_fill_feedback_lookup",
+                            "idx_trade_fill_revision_sequence_projection",
+                            "idx_trade_outcome_feedback_lookup",
+                            "idx_trade_case_dirty_refresh"
+                    );
+                }
+            }
         } finally {
             try (var connection = DriverManager.getConnection(url, username, password)) {
                 connection.createStatement().execute("DROP SCHEMA " + schema + " CASCADE");

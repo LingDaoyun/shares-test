@@ -9,9 +9,9 @@ services:
       TZ: Asia/Shanghai
       SERVER_PORT: 19080
       NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-host.docker.internal:8848}
-      JDBC_DATABASE_URL: ${JDBC_DATABASE_URL:-jdbc:h2:file:/data/aistock;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_ON_EXIT=FALSE}
-      JDBC_DATABASE_DRIVER: ${JDBC_DATABASE_DRIVER:-org.h2.Driver}
-      JDBC_DATABASE_USERNAME: ${JDBC_DATABASE_USERNAME:-sa}
+      JDBC_DATABASE_URL: ${JDBC_DATABASE_URL:-jdbc:postgresql://host.docker.internal:5432/aistock}
+      JDBC_DATABASE_DRIVER: ${JDBC_DATABASE_DRIVER:-org.postgresql.Driver}
+      JDBC_DATABASE_USERNAME: ${JDBC_DATABASE_USERNAME:-aistock}
       JDBC_DATABASE_PASSWORD: ${JDBC_DATABASE_PASSWORD:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
@@ -22,8 +22,6 @@ services:
       YAHOO_PROXY_URL: ${YAHOO_PROXY_URL:-http://host.docker.internal:7897}
     ports:
       - "127.0.0.1:${API_PORT:-19080}:19080"
-    volumes:
-      - api-data:/data
 
   web:
     build:
@@ -35,25 +33,6 @@ services:
       - "127.0.0.1:${WEB_PORT:-5176}:80"
     depends_on:
       - api
-
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: ai-stock-postgres
-    profiles: ["infra"]
-    environment:
-      POSTGRES_DB: aistock
-      POSTGRES_USER: aistock
-      POSTGRES_PASSWORD: aistock
-    ports:
-      - "5432:5432"
-    volumes:
-      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aistock -d aistock"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -84,7 +63,5 @@ services:
       - minio-data:/data
 
 volumes:
-  api-data:
-  postgres-data:
   redis-data:
   minio-data:
