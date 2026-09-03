@@ -1,8 +1,8 @@
 import { Empty } from '../ui/Empty'
-import type { FirstBoardBar } from '../../types'
+import type { LeaderBar } from '../../types'
 
-interface FirstBoardCandlestickChartProps {
-  bars: FirstBoardBar[]
+interface LeaderCandlestickChartProps {
+  bars: LeaderBar[]
 }
 
 const WIDTH = 920
@@ -14,7 +14,7 @@ const PRICE_BOTTOM = 270
 const VOLUME_TOP = 300
 const VOLUME_BOTTOM = 365
 
-export function FirstBoardCandlestickChart({ bars }: FirstBoardCandlestickChartProps) {
+export function LeaderCandlestickChart({ bars }: LeaderCandlestickChartProps) {
   if (!bars.length) return <Empty text="暂无可用日线" />
 
   const priceMinimum = Math.min(...bars.map((bar) => Number(bar.low)))
@@ -70,7 +70,7 @@ export function FirstBoardCandlestickChart({ bars }: FirstBoardCandlestickChartP
                 y={bodyTop}
                 width={candleWidth}
                 height={bodyHeight}
-                fill={rising ? "white" : color}
+                fill={rising ? 'white' : color}
                 stroke={color}
                 strokeWidth="1.2"
               />

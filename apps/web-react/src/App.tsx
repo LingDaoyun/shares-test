@@ -71,7 +71,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 
 const MarketScanPage = lazyPage(() => import('./pages/MarketScanPage').then((m) => m.MarketScanPage))
 const ShortTermPage = lazyPage(() => import('./pages/ShortTermPage').then((m) => m.ShortTermPage))
-const FirstBoardAlertPage = lazyPage(() => import('./pages/FirstBoardAlertPage').then((m) => m.FirstBoardAlertPage))
+const PotentialLeaderPage = lazyPage(() => import('./pages/PotentialLeaderPage').then((m) => m.PotentialLeaderPage))
 const OverseasMarketPage = lazyPage(() => import('./pages/OverseasMarketPage').then((m) => m.OverseasMarketPage))
 const PolicyIndustryPage = lazyPage(() => import('./pages/PolicyIndustryPage').then((m) => m.PolicyIndustryPage))
 const WatchlistPage = lazyPage(() => import('./pages/WatchlistPage').then((m) => m.WatchlistPage))
@@ -89,7 +89,8 @@ export default function App() {
               <Route index element={<Navigate to="/short-term" replace />} />
               <Route path="market" element={<MarketScanPage />} />
               <Route path="short-term" element={<ShortTermPage />} />
-              <Route path="first-board-alert" element={<FirstBoardAlertPage />} />
+              <Route path="potential-leader" element={<PotentialLeaderPage />} />
+              <Route path="first-board-alert" element={<Navigate to="/potential-leader" replace />} />
               <Route path="overseas" element={<OverseasMarketPage />} />
               <Route path="backtest" element={<Navigate to="/short-term" replace />} />
               <Route path="policy" element={<PolicyIndustryPage />} />

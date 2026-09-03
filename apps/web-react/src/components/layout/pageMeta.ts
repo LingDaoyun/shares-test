@@ -1,4 +1,4 @@
-export type PageKey = 'market' | 'shortTerm' | 'firstBoardAlert' | 'overseas' | 'policy' | 'watchlist' | 'tradeReview' | 'rules' | 'settings'
+export type PageKey = 'market' | 'shortTerm' | 'potentialLeader' | 'overseas' | 'policy' | 'watchlist' | 'tradeReview' | 'rules' | 'settings'
 
 export interface PageMeta {
   eyebrow: string
@@ -17,10 +17,10 @@ export const pageMeta: Record<PageKey, PageMeta> = {
     title: '短线右侧',
     description: '用 K 线右侧早期、量能和财报质量共同筛选价值回归候选。'
   },
-  firstBoardAlert: {
-    eyebrow: 'FIRST BOARD ALERT',
-    title: '首板预警',
-    description: '用 T-1 技术基线和盘中量比扫描尚未触板的首板候选，并独立观察昨日涨停股票。'
+  potentialLeader: {
+    eyebrow: 'POTENTIAL LEADER',
+    title: '潜力龙头',
+    description: '用主线共振、板块辨识度与资金容量形成潜龙、竞龙双通道正式排名。'
   },
   overseas: {
     eyebrow: 'GLOBAL MARKETS',
@@ -56,7 +56,7 @@ export const pageMeta: Record<PageKey, PageMeta> = {
 
 export const navItems: { key: PageKey; label: string }[] = [
   { key: 'shortTerm', label: '短线右侧' },
-  { key: 'firstBoardAlert', label: '首板预警' },
+  { key: 'potentialLeader', label: '潜力龙头' },
   { key: 'market', label: '长期价投' },
   { key: 'overseas', label: '外围市场' },
   { key: 'policy', label: '政策解读' },
@@ -70,7 +70,8 @@ export const pathToPage: Record<string, PageKey> = {
   '': 'shortTerm',
   market: 'market',
   'short-term': 'shortTerm',
-  'first-board-alert': 'firstBoardAlert',
+  'potential-leader': 'potentialLeader',
+  'first-board-alert': 'potentialLeader',
   backtest: 'shortTerm',
   overseas: 'overseas',
   policy: 'policy',

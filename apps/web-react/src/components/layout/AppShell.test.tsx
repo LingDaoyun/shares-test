@@ -57,7 +57,7 @@ describe('AppShell', () => {
   })
 
   it('keeps the global header on other business pages too', async () => {
-    await renderShell(root, '/market')
+    await renderShell(root, '/potential-leader')
 
     expect(document.querySelector('[data-testid="global-header"]')).not.toBeNull()
   })

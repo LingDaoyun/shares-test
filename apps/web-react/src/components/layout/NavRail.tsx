@@ -14,7 +14,7 @@ export function NavRail() {
   const pagePath: Record<PageKey, string> = {
     market: 'market',
     shortTerm: 'short-term',
-    firstBoardAlert: 'first-board-alert',
+    potentialLeader: 'potential-leader',
     overseas: 'overseas',
     policy: 'policy',
     watchlist: 'watchlist',
@@ -26,7 +26,7 @@ export function NavRail() {
   const counts: Record<PageKey, string> = {
     market: '长投',
     shortTerm: '盘中',
-    firstBoardAlert: '首板',
+    potentialLeader: '双通道',
     overseas: '美日韩',
     policy: '产业',
     watchlist: '自选',
