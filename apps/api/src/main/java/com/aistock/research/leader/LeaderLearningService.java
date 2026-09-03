@@ -61,6 +61,10 @@ public class LeaderLearningService {
         return Optional.of(snapshotId);
     }
 
+    public boolean hasSnapshot(LocalDate tradeDate, String ruleVersion) {
+        return snapshotStore.findSnapshotId(tradeDate, ruleVersion).isPresent();
+    }
+
     public void refreshPending(LocalDate evaluatedAsOf) {
         LocalDate asOf = evaluatedAsOf == null ? tradingClock.currentMarketDate() : evaluatedAsOf;
         for (LeaderSnapshotStore.PendingOutcome pending : snapshotStore.pendingOutcomes()) {

@@ -1,4 +1,4 @@
-package com.aistock.research.firstboard;
+package com.aistock.research.leader;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -9,17 +9,17 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 @RestController
-@RequestMapping("/api/first-board-alert")
-public class FirstBoardAlertController {
+@RequestMapping("/api/potential-leaders")
+public class PotentialLeaderController {
 
-    private final FirstBoardAlertService service;
+    private final PotentialLeaderService service;
 
-    public FirstBoardAlertController(FirstBoardAlertService service) {
+    public PotentialLeaderController(PotentialLeaderService service) {
         this.service = service;
     }
 
     @GetMapping("/snapshot")
-    public FirstBoardAlertSnapshot snapshot(
+    public PotentialLeaderSnapshot snapshot(
             @RequestParam(defaultValue = "false") boolean includeGrowth,
             @RequestParam(defaultValue = "false") boolean includeStar
     ) {
@@ -27,8 +27,8 @@ public class FirstBoardAlertController {
     }
 
     @GetMapping("/bars/{symbol}")
-    public FirstBoardBarSeries bars(@PathVariable String symbol) {
-        return service.bars(symbol)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "该股票的 T-1 图表数据不可用"));
+    public LeaderBarSeries bars(@PathVariable String symbol) {
+        return service.bars(symbol).orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "该股票的日线数据不可用"));
     }
 }
