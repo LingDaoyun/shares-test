@@ -55,6 +55,7 @@ public class EastMoneyClient {
     private static final String INDUSTRY_BOARD_FILTER = "m:90 t:2 f:!50";
     private static final String INDUSTRY_FUND_FLOW_FILTER = "m:90+t:2+f:!50";
     private static final int MAX_QUOTE_PAGE_SIZE = 100;
+    private static final int SNAPSHOT_PAGE_ATTEMPTS = 2;
     private static final int EASTMONEY_ATTEMPTS = 1;
     private static final int EASTMONEY_REMOTE_ATTEMPTS = 3;
     private static final int GENERIC_REMOTE_ATTEMPTS = 2;
@@ -152,7 +153,7 @@ public class EastMoneyClient {
         for (int pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
             AshareQuotePage page;
             try {
-                page = fetchAshareQuotePage(pageNumber, pageSize);
+                page = fetchSnapshotPage(pageNumber, pageSize);
             } catch (RuntimeException exception) {
                 pageFailure = exception;
                 break;
@@ -214,6 +215,24 @@ public class EastMoneyClient {
                         .max(Instant::compareTo)
                         .orElseGet(Instant::now)
         );
+    }
+
+    private AshareQuotePage fetchSnapshotPage(int pageNumber, int pageSize) {
+        RuntimeException failure = null;
+        for (int attempt = 1; attempt <= SNAPSHOT_PAGE_ATTEMPTS; attempt++) {
+            try {
+                return fetchAshareQuotePage(pageNumber, pageSize);
+            } catch (RuntimeException exception) {
+                failure = exception;
+                if (attempt < SNAPSHOT_PAGE_ATTEMPTS) {
+                    logger.warn("A股全市场行情第 {} 页瞬时失败，将从当前页续抓：{}",
+                            pageNumber, rootMessage(exception));
+                }
+            }
+        }
+        throw failure == null
+                ? new IllegalStateException("A股全市场行情分页获取失败：" + pageNumber)
+                : failure;
     }
 
     public List<EastMoneyQuote> fetchAshareQuotes() {

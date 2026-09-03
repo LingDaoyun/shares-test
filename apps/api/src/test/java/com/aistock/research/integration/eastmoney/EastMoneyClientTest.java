@@ -620,6 +620,21 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void snapshotRetriesOnlyTheFailedPageAfterATransientProviderError() {
+        TransientPageFailureStubClient snapshotClient = new TransientPageFailureStubClient();
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(2);
+
+        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.expectedCount()).isEqualTo(2);
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol)
+                .containsExactly("600001", "600002");
+        assertThat(snapshotClient.firstPageAttempts).isEqualTo(1);
+        assertThat(snapshotClient.secondPageAttempts).isEqualTo(2);
+    }
+
+    @Test
     void snapshotUsesLivePaginationAsCanonicalUniverse() {
         SnapshotStubClient snapshotClient = new SnapshotStubClient();
 
@@ -915,6 +930,34 @@ class EastMoneyClientTest {
                         SnapshotStubClient.quote("600003", "工业", "东方财富实时全市场")));
                 default -> new AshareQuotePage(3, List.of());
             };
+        }
+    }
+
+    private static final class TransientPageFailureStubClient extends EastMoneyClient {
+
+        private int firstPageAttempts;
+        private int secondPageAttempts;
+
+        private TransientPageFailureStubClient() {
+            super(null, new ObjectMapper(), null);
+        }
+
+        @Override
+        AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+            if (pageNumber == 1) {
+                firstPageAttempts++;
+                return new AshareQuotePage(2, List.of(
+                        SnapshotStubClient.quote("600001", "工业", "东方财富实时全市场")));
+            }
+            if (pageNumber == 2) {
+                secondPageAttempts++;
+                if (secondPageAttempts == 1) {
+                    throw new IllegalStateException("transient provider error");
+                }
+                return new AshareQuotePage(2, List.of(
+                        SnapshotStubClient.quote("600002", "工业", "东方财富实时全市场")));
+            }
+            return new AshareQuotePage(2, List.of());
         }
     }
 }
