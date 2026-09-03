@@ -1431,7 +1431,7 @@ public class EastMoneyClient {
         List<String> candidateUrls = remoteCandidateUrls(url);
         Exception restClientException = null;
         for (String candidateUrl : candidateUrls) {
-            throttleEastMoney(candidateUrl);
+            throttleRemote(candidateUrl);
             try {
                 return restClient.get().uri(URI.create(candidateUrl)).retrieve().body(String.class);
             } catch (Exception exception) {
