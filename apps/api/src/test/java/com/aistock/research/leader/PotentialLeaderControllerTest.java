@@ -12,7 +12,9 @@ import java.util.Optional;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup;
@@ -20,11 +22,12 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standal
 class PotentialLeaderControllerTest {
 
     private final PotentialLeaderService service = mock(PotentialLeaderService.class);
+    private final LeaderAiReviewService aiReviewService = mock(LeaderAiReviewService.class);
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = standaloneSetup(new PotentialLeaderController(service)).build();
+        mockMvc = standaloneSetup(new PotentialLeaderController(service, aiReviewService)).build();
     }
 
     @Test
@@ -54,5 +57,33 @@ class PotentialLeaderControllerTest {
 
         verify(service).snapshot(true, false);
         verify(service).bars("600000");
+    }
+
+    @Test
+    void acceptsOnlyLaneSymbolAndSnapshotHashForManualAiReview() throws Exception {
+        LocalDate date = LocalDate.parse("2026-09-03");
+        LeaderAiReview review = new LeaderAiReview(
+                java.util.UUID.randomUUID(), date, PotentialLeaderSnapshot.Lane.POTENTIAL,
+                "600000", LeaderRuleSet.RULE_VERSION, "candidate-hash", "SUCCEEDED",
+                "SUPPORT", "EMERGING", List.of("主线共振"), List.of(), List.of(), List.of(),
+                new java.math.BigDecimal("0.78"), "deepseek", "deepseek-v4-pro",
+                "potential-leader-ai-v1", null, Instant.parse("2026-09-03T07:10:00Z"));
+        when(aiReviewService.review(
+                PotentialLeaderSnapshot.Lane.POTENTIAL, "600000", "candidate-hash"))
+                .thenReturn(review);
+
+        mockMvc.perform(post("/api/potential-leaders/ai-review/potential/600000")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"snapshotHash\":\"candidate-hash\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.verdict").value("SUPPORT"));
+        mockMvc.perform(post("/api/potential-leaders/ai-review/unknown/600000")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"snapshotHash\":\"candidate-hash\"}"))
+                .andExpect(status().isBadRequest());
+
+        verify(aiReviewService).review(
+                PotentialLeaderSnapshot.Lane.POTENTIAL, "600000", "candidate-hash");
     }
 }

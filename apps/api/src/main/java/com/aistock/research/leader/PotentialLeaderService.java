@@ -117,6 +117,10 @@ public class PotentialLeaderService {
                         normalized, tradeDate, baseline.baselineDate(), "QFQ", rows));
     }
 
+    public LocalDate currentTradeDate() {
+        return effectiveTradeDate();
+    }
+
     public PotentialLeaderSnapshot.Candidate currentCandidate(
             PotentialLeaderSnapshot.Lane lane,
             String symbol,

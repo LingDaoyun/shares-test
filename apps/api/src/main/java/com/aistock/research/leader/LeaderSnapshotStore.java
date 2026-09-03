@@ -164,6 +164,23 @@ public class LeaderSnapshotStore {
         }, lane.name(), grade.name(), directionHeat);
     }
 
+    public void saveAiReview(LeaderAiReview review) {
+        jdbc.update("""
+                INSERT INTO leader_ai_review (
+                  id, trade_date, lane, symbol, rule_version, snapshot_hash,
+                  status, verdict, phase, advantages_json, counter_evidence_json,
+                  data_gaps_json, must_verify_json, confidence, provider, model,
+                  prompt_version, error_summary, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb,
+                          ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?)
+                """,
+                review.id(), review.tradeDate(), review.lane().name(), normalizeSymbol(review.symbol()),
+                review.ruleVersion(), review.snapshotHash(), review.status(), review.verdict(), review.phase(),
+                json(review.advantages()), json(review.counterEvidence()), json(review.dataGaps()),
+                json(review.mustVerify()), review.confidence(), review.provider(), review.model(),
+                review.promptVersion(), bounded(review.errorSummary()), Timestamp.from(review.createdAt()));
+    }
+
     private String json(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -201,6 +218,13 @@ public class LeaderSnapshotStore {
 
     private static String normalizeSymbol(String symbol) {
         return LeaderDirectionEngine.normalizeSymbol(symbol);
+    }
+
+    private static String bounded(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.length() <= 500 ? value : value.substring(0, 500);
     }
 
     private record SourceStatus(
