@@ -10,7 +10,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-interface FirstBoardDailyBarStore {
+public interface FirstBoardDailyBarStore {
     int importLatestHistoryVersions();
 
     void upsertBars(List<EastMoneyKLine> rows, String sourceName);

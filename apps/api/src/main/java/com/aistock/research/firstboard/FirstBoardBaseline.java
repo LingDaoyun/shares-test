@@ -27,4 +27,12 @@ record FirstBoardBaseline(
     FirstBoardBaseline {
         recentBars = recentBars == null ? List.of() : List.copyOf(recentBars);
     }
+
+    FirstBoardBaseline withRecentBars(List<FirstBoardBar> bars) {
+        return new FirstBoardBaseline(
+                symbol, name, industry, board, baselineDate, previousClose, ma10, ma20, ma20Slope,
+                rsi14, macdHistogram, technicalPassCount, previousDayVolumeRatio,
+                recentFiveMaxVolumeRatio, upperShadowRatio, threeDayCloseRange,
+                previousLimitUp, bars);
+    }
 }

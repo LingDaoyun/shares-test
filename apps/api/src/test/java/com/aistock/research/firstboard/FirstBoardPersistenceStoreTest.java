@@ -102,8 +102,13 @@ class FirstBoardPersistenceStoreTest {
 
     @Test
     void publishAndExactLookupExposeOnlyReadyCompleteRun() {
+        LocalDate baselineDate = LocalDate.of(2026, 8, 28);
+        bars.upsertBars(java.util.stream.IntStream.range(0, 20)
+                .mapToObj(index -> bar(
+                        "600000", baselineDate.minusDays(19L - index), "10.00", "10.20"))
+                .toList(), "test");
         FirstBoardBaselineRun run = baselines.startRun(
-                LocalDate.of(2026, 8, 31), LocalDate.of(2026, 8, 28),
+                LocalDate.of(2026, 8, 31), baselineDate,
                 "first-board-baseline-v1", "bars-a", 2, 2, 0, 0);
 
         FirstBoardBaselineSnapshot published = baselines.publish(run, List.of(
@@ -111,6 +116,7 @@ class FirstBoardPersistenceStoreTest {
 
         assertThat(published.runId()).isEqualTo(run.runId());
         assertThat(published.stocks()).containsOnlyKeys("600000", "000001");
+        assertThat(published.stocks().get("600000").recentBars()).hasSize(20);
         assertThat(baselines.findReady(
                 LocalDate.of(2026, 8, 31), LocalDate.of(2026, 8, 28),
                 "first-board-baseline-v1", "bars-a")).isPresent();

@@ -146,9 +146,9 @@ class FirstBoardBaselineServiceTest {
         FirstBoardMarketDay readyDay = new FirstBoardMarketDay(
                 baselineDate, baselineDate, FirstBoardMarketDayStatus.READY,
                 5100, 5100, 0, true, "bars-v1", publishedAt, publishedAt, null, null);
-        List<FirstBoardBar> recentBars = java.util.stream.IntStream.range(0, 60)
+        List<FirstBoardBar> recentBars = java.util.stream.IntStream.range(0, 20)
                 .mapToObj(offset -> new FirstBoardBar(
-                        baselineDate.minusDays(59L - offset), BigDecimal.TEN, BigDecimal.TEN,
+                        baselineDate.minusDays(19L - offset), BigDecimal.TEN, BigDecimal.TEN,
                         new BigDecimal("10.20"), new BigDecimal("9.80"), new BigDecimal("100000")))
                 .toList();
         FirstBoardBaseline stock = new FirstBoardBaseline(
@@ -181,7 +181,7 @@ class FirstBoardBaselineServiceTest {
         assertThat(access.universeCount()).isEqualTo(5200);
         assertThat(access.supportedCount()).isEqualTo(5100);
         assertThat(access.stocks()).containsOnlyKeys("600000");
-        assertThat(access.stocks().get("600000").recentBars()).hasSize(60);
+        assertThat(access.stocks().get("600000").recentBars()).hasSize(20);
         assertThat(access.stocks().get("600000").technicalPassCount()).isEqualTo(5);
         assertThatThrownBy(() -> access.stocks().clear())
                 .isInstanceOf(UnsupportedOperationException.class);

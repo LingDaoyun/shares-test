@@ -145,6 +145,30 @@ public class PostgresFirstBoardBaselineStore implements FirstBoardBaselineStore 
                     rows.getBigDecimal("three_day_close_range"), rows.getBoolean("previous_limit_up"), List.of());
             items.put(item.symbol(), item);
         }, runId);
+        Map<String, List<FirstBoardBar>> recentBars = new LinkedHashMap<>();
+        jdbc.query("""
+                SELECT symbol, trade_date, open_price, close_price, high_price, low_price, volume
+                FROM (
+                  SELECT d.symbol, d.trade_date, d.open_price, d.close_price,
+                         d.high_price, d.low_price, d.volume,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY d.symbol ORDER BY d.trade_date DESC
+                         ) AS recent_position
+                  FROM first_board_daily_bar d
+                  JOIN first_board_baseline_item i
+                    ON i.run_id = ? AND i.symbol = d.symbol
+                  WHERE d.trade_date <= i.baseline_date
+                ) recent
+                WHERE recent_position <= 20
+                ORDER BY symbol, trade_date
+                """, rows -> {
+            recentBars.computeIfAbsent(rows.getString("symbol"), ignored -> new java.util.ArrayList<>())
+                    .add(new FirstBoardBar(
+                            rows.getObject("trade_date", LocalDate.class), rows.getBigDecimal("open_price"),
+                            rows.getBigDecimal("close_price"), rows.getBigDecimal("high_price"),
+                            rows.getBigDecimal("low_price"), rows.getBigDecimal("volume")));
+        }, runId);
+        items.replaceAll((symbol, item) -> item.withRecentBars(recentBars.getOrDefault(symbol, List.of())));
         FirstBoardBaselineRun metadata = run.get();
         return Optional.of(new FirstBoardBaselineSnapshot(
                 metadata.runId(), metadata.scanTradeDate(), metadata.baselineTradeDate(),
