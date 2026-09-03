@@ -60,6 +60,7 @@ public class EastMoneyClient {
     private static final int EASTMONEY_REMOTE_ATTEMPTS = 3;
     private static final int GENERIC_REMOTE_ATTEMPTS = 2;
     private static final long EASTMONEY_MIN_INTERVAL_MILLIS = 650;
+    private static final long TENCENT_HISTORY_MIN_INTERVAL_MILLIS = 200;
     private static final List<String> EASTMONEY_PUSH2_HOSTS = List.of(
             "push2delay.eastmoney.com",
             "push2.eastmoney.com",
@@ -96,10 +97,12 @@ public class EastMoneyClient {
     private final KlineHistoryRecorder klineHistoryRecorder;
     private final Object industryBoardCacheLock = new Object();
     private final Object eastMoneyRequestLock = new Object();
+    private final Object tencentHistoryRequestLock = new Object();
     private final Map<String, CachedQuotes> industryConstituentCache = new ConcurrentHashMap<>();
     private final Map<String, CachedBoardStockFundFlows> boardStockFundFlowCache = new ConcurrentHashMap<>();
     private volatile CachedIndustryBoards cachedIndustryBoards = new CachedIndustryBoards(List.of(), Instant.EPOCH);
     private volatile long lastEastMoneyRequestMillis;
+    private volatile long lastTencentHistoryRequestMillis;
 
     public EastMoneyClient(RestClient restClient, ObjectMapper objectMapper, LiveDataProperties properties) {
         this(restClient, objectMapper, properties, null);
@@ -1524,7 +1527,7 @@ public class EastMoneyClient {
             int retryCount
     ) {
         try {
-            throttleEastMoney(url);
+            throttleRemote(url);
             List<String> command = new ArrayList<>(List.of(
                     "curl",
                     "-L",
@@ -1662,17 +1665,31 @@ public class EastMoneyClient {
                 .collect(java.util.stream.Collectors.joining("；"));
     }
 
-    private void throttleEastMoney(String url) {
-        if (url == null || !url.contains("eastmoney.com")) {
+    private void throttleRemote(String url) {
+        if (url == null) {
             return;
         }
-        synchronized (eastMoneyRequestLock) {
-            long now = System.currentTimeMillis();
-            long waitMillis = EASTMONEY_MIN_INTERVAL_MILLIS - (now - lastEastMoneyRequestMillis);
-            if (waitMillis > 0) {
-                quietSleep(waitMillis);
+        if (url.contains("eastmoney.com")) {
+            synchronized (eastMoneyRequestLock) {
+                long now = System.currentTimeMillis();
+                long waitMillis = EASTMONEY_MIN_INTERVAL_MILLIS - (now - lastEastMoneyRequestMillis);
+                if (waitMillis > 0) {
+                    quietSleep(waitMillis);
+                }
+                lastEastMoneyRequestMillis = System.currentTimeMillis();
             }
-            lastEastMoneyRequestMillis = System.currentTimeMillis();
+            return;
+        }
+        if (url.contains("web.ifzq.gtimg.cn/appstock/app/fqkline/get")) {
+            synchronized (tencentHistoryRequestLock) {
+                long now = System.currentTimeMillis();
+                long waitMillis = TENCENT_HISTORY_MIN_INTERVAL_MILLIS
+                        - (now - lastTencentHistoryRequestMillis);
+                if (waitMillis > 0) {
+                    quietSleep(waitMillis);
+                }
+                lastTencentHistoryRequestMillis = System.currentTimeMillis();
+            }
         }
     }
 
