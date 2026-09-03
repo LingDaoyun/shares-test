@@ -253,7 +253,7 @@ PostgreSQL T-1 日线/基线 ─┐
 
 ## 9. AI 影子复核
 
-AI 复核接口只接受 `lane` 和 `symbol`。服务器重新读取当前正式快照中的候选、分项和证据，不信任客户端上传的行情或特征。
+AI 复核接口只接受路径中的 `lane`、`symbol` 和请求体中的 `snapshotHash` 并发令牌。服务器重新读取当前正式快照中的候选、分项和证据，不信任客户端上传的行情或特征。
 
 结构化输出固定为：
 
@@ -330,11 +330,12 @@ GET /api/potential-leaders/bars/{symbol}
 POST /api/potential-leaders/ai-review/{lane}/{symbol}
 ```
 
-`lane` 只允许 `potential` 或 `competition`。候选不存在、已从当前快照移除或 `snapshotHash` 变化时返回冲突状态，不对任意股票临时拼装 AI 建议。
+请求体固定为 `{"snapshotHash":"..."}`。`lane` 只允许 `potential` 或 `competition`；`snapshotHash` 仅用于确认用户点击的仍是当前候选，不作为行情事实。候选不存在、已从当前快照移除或 `snapshotHash` 变化时返回冲突状态，不对任意股票临时拼装 AI 建议。
 
 ## 12. PostgreSQL 模型
 
-通过 `V3` Flyway 迁移新增且只新增三张表：
+当前仓库已经存在 `V3__first_board_market_day_state_integrity.sql`，因此通过
+`V4__potential_leader_shadow_learning.sql` Flyway 迁移新增且只新增三张表：
 
 ### 12.1 `leader_daily_snapshot`
 
