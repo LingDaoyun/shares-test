@@ -24,6 +24,11 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -34,6 +39,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -153,6 +159,37 @@ class PotentialLeaderServiceTest {
         assertThat(snapshot.boardOptions()).isEqualTo(new PotentialLeaderSnapshot.BoardOptions(true, true));
         verify(baselineService).leaderAccess(TRADE_DATE);
         verify(candidateEngine).select(any(), anyList(), any(), anyList(), eq(true), eq(true));
+    }
+
+    @Test
+    void concurrentColdRequestsShareOneMarketRefresh() throws Exception {
+        stubSuccessfulCore();
+        CountDownLatch fetchStarted = new CountDownLatch(1);
+        CountDownLatch allowFetchToFinish = new CountDownLatch(1);
+        when(eastMoneyClient.fetchAshareQuoteSnapshot(6000)).thenAnswer(ignored -> {
+            fetchStarted.countDown();
+            assertThat(allowFetchToFinish.await(2, TimeUnit.SECONDS)).isTrue();
+            return completeQuotes();
+        });
+        when(dragonTigerGateway.fetch(any(), any())).thenReturn(
+                new DragonTigerGateway.DragonTigerBatch(null, Map.of(), List.of()));
+        when(scoreEngine.rankPotential(anyList(), anyList(), anyMap())).thenReturn(List.of());
+        when(scoreEngine.rankCompetition(anyList(), anyList(), any(), anyMap(), anyMap()))
+                .thenReturn(List.of());
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<PotentialLeaderSnapshot> first = executor.submit(() -> service.snapshot(false, false));
+            assertThat(fetchStarted.await(2, TimeUnit.SECONDS)).isTrue();
+            Future<PotentialLeaderSnapshot> second = executor.submit(() -> service.snapshot(false, false));
+            allowFetchToFinish.countDown();
+
+            assertThat(first.get(2, TimeUnit.SECONDS).status()).isEqualTo(PotentialLeaderSnapshot.Status.READY);
+            assertThat(second.get(2, TimeUnit.SECONDS).status()).isEqualTo(PotentialLeaderSnapshot.Status.READY);
+            verify(eastMoneyClient, times(1)).fetchAshareQuoteSnapshot(6000);
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private void stubSuccessfulCore() {

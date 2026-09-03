@@ -46,6 +46,7 @@ public class PotentialLeaderService {
     private final Clock cacheClock;
     private final Map<CacheKey, CachedSnapshot> cache = new ConcurrentHashMap<>();
     private final Map<CacheKey, PotentialLeaderSnapshot> lastSuccessful = new ConcurrentHashMap<>();
+    private final Map<CacheKey, Object> refreshLocks = new ConcurrentHashMap<>();
 
     @Autowired
     public PotentialLeaderService(
@@ -95,11 +96,19 @@ public class PotentialLeaderService {
         if (cached != null && now.isBefore(cached.expiresAt())) {
             return cached.snapshot();
         }
-        PotentialLeaderSnapshot refreshed = refresh(key, now);
-        cache.put(key, new CachedSnapshot(refreshed, now.plusSeconds(CACHE_SECONDS)));
-        cache.keySet().removeIf(existing -> existing.tradeDate().isBefore(tradeDate.minusDays(7)));
-        lastSuccessful.keySet().removeIf(existing -> existing.tradeDate().isBefore(tradeDate.minusDays(7)));
-        return refreshed;
+        Object refreshLock = refreshLocks.computeIfAbsent(key, ignored -> new Object());
+        synchronized (refreshLock) {
+            now = cacheClock.instant();
+            cached = cache.get(key);
+            if (cached != null && now.isBefore(cached.expiresAt())) {
+                return cached.snapshot();
+            }
+            PotentialLeaderSnapshot refreshed = refresh(key, now);
+            cache.put(key, new CachedSnapshot(refreshed, now.plusSeconds(CACHE_SECONDS)));
+            cache.keySet().removeIf(existing -> existing.tradeDate().isBefore(tradeDate.minusDays(7)));
+            lastSuccessful.keySet().removeIf(existing -> existing.tradeDate().isBefore(tradeDate.minusDays(7)));
+            return refreshed;
+        }
     }
 
     public Optional<LeaderBarSeries> bars(String symbol) {
