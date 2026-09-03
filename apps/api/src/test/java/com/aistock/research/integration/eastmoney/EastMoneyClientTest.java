@@ -597,6 +597,17 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void shouldPreferTencentFinanceProxyForDailyKlineRequests() {
+        String url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+                + "?param=sz300700,day,2026-09-02,2026-09-02,500,qfq";
+
+        assertThat(client.remoteCandidateUrls(url)).containsExactly(
+                "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get"
+                        + "?param=sz300700,day,2026-09-02,2026-09-02,500,qfq",
+                url);
+    }
+
+    @Test
     void quotePageUrlUsesStableSecurityCodeSort() {
         String url = client.ashareQuotePageUrl(2, 100);
 

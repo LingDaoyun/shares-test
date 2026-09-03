@@ -1583,6 +1583,15 @@ public class EastMoneyClient {
         if (host == null) {
             return List.of(url);
         }
+        if ("web.ifzq.gtimg.cn".equals(host)
+                && url.contains("/appstock/app/fqkline/get")) {
+            String proxyUrl = url.replace(
+                    "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+                    "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get");
+            urls.put(proxyUrl, proxyUrl);
+            urls.put(url, url);
+            return new ArrayList<>(urls.values());
+        }
         if (isPush2Host(host)) {
             for (String fallbackHost : EASTMONEY_PUSH2_HOSTS) {
                 if (fallbackHost.equals(host)) {
@@ -1680,7 +1689,7 @@ public class EastMoneyClient {
             }
             return;
         }
-        if (url.contains("web.ifzq.gtimg.cn/appstock/app/fqkline/get")) {
+        if (url.contains("/appstock/app/fqkline/get")) {
             synchronized (tencentHistoryRequestLock) {
                 long now = System.currentTimeMillis();
                 long waitMillis = TENCENT_HISTORY_MIN_INTERVAL_MILLIS
