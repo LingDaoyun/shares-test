@@ -72,6 +72,15 @@ class LeaderSnapshotStoreTest {
                 .isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM leader_outcome", Integer.class))
                 .isEqualTo(1);
+        assertThat(store.pendingOutcomes()).singleElement().satisfies(outcome -> {
+            assertThat(outcome.snapshotId()).isEqualTo(first);
+            assertThat(outcome.lane()).isEqualTo(PotentialLeaderSnapshot.Lane.POTENTIAL);
+            assertThat(outcome.symbol()).isEqualTo("600000");
+            assertThat(outcome.industry()).isEqualTo("半导体");
+            assertThat(outcome.sampleClose()).isEqualByComparingTo("10");
+            assertThat(outcome.directionConstituents()).containsExactly(
+                    "600000", "600001", "600002", "600003", "600004");
+        });
     }
 
     private PotentialLeaderSnapshot snapshot() {

@@ -105,18 +105,19 @@ public class LeaderSnapshotStore {
                        s.potential_candidates_json::text AS potential_candidates_json,
                        s.competition_candidates_json::text AS competition_candidates_json,
                        s.directions_json::text AS directions_json
-                FROM leader_outcome o
+        FROM leader_outcome o
                 JOIN leader_daily_snapshot s ON s.id = o.snapshot_id
                 WHERE o.status = 'PENDING_DATA'
                 ORDER BY o.trade_date, o.lane, o.symbol
                 """, (rows, rowNumber) -> {
             PotentialLeaderSnapshot.Lane lane = PotentialLeaderSnapshot.Lane.valueOf(rows.getString("lane"));
+            String symbol = normalizeSymbol(rows.getString("symbol"));
             List<PotentialLeaderSnapshot.Candidate> candidates = readList(
                     rows.getString(lane == PotentialLeaderSnapshot.Lane.POTENTIAL
                             ? "potential_candidates_json" : "competition_candidates_json"),
                     PotentialLeaderSnapshot.Candidate.class);
             PotentialLeaderSnapshot.Candidate candidate = candidates.stream()
-                    .filter(value -> normalizeSymbol(value.symbol()).equals(rows.getString("symbol")))
+                    .filter(value -> normalizeSymbol(value.symbol()).equals(symbol))
                     .findFirst().orElse(null);
             List<PotentialLeaderSnapshot.Direction> directions = readList(
                     rows.getString("directions_json"), PotentialLeaderSnapshot.Direction.class);
@@ -124,7 +125,7 @@ public class LeaderSnapshotStore {
                     .filter(value -> value.industry().equals(candidate.industry()))
                     .findFirst().orElse(null);
             return new PendingOutcome(
-                    rows.getObject("snapshot_id", UUID.class), lane, rows.getString("symbol"),
+                    rows.getObject("snapshot_id", UUID.class), lane, symbol,
                     rows.getObject("trade_date", LocalDate.class), rows.getString("rule_version"),
                     PotentialLeaderSnapshot.Grade.valueOf(rows.getString("grade")),
                     rows.getString("direction_heat"), candidate == null ? null : candidate.industry(),
