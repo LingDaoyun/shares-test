@@ -174,6 +174,16 @@ public class PostgresFirstBoardDailyBarStore implements FirstBoardDailyBarStore 
     }
 
     @Override
+    public int storedBarCount(LocalDate tradeDate) {
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*)
+                FROM first_board_daily_bar
+                WHERE trade_date = ?
+                """, Integer.class, tradeDate);
+        return count == null ? 0 : count;
+    }
+
+    @Override
     public Set<String> confirmedLimitUpSymbols(LocalDate tradeDate) {
         return Set.copyOf(jdbc.query("""
                 SELECT symbol

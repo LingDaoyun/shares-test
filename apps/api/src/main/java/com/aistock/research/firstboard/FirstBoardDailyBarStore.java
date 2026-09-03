@@ -21,6 +21,8 @@ public interface FirstBoardDailyBarStore {
 
     Map<String, BigDecimal> closingPrices(Collection<String> symbols, LocalDate tradeDate);
 
+    int storedBarCount(LocalDate tradeDate);
+
     Set<String> confirmedLimitUpSymbols(LocalDate tradeDate);
 
     List<EastMoneyKLine> recentBars(String symbol, LocalDate endDate, int maximumBars);

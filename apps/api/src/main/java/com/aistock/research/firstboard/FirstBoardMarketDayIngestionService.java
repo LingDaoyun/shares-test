@@ -51,7 +51,8 @@ public class FirstBoardMarketDayIngestionService {
 
     public FirstBoardIngestionProgress ensureBaselineDayReady(LocalDate scanTradeDate) {
         LocalDate baselineDate = clock.previousTradingDay(scanTradeDate);
-        FirstBoardMarketDay existing = store.marketDay(baselineDate).orElse(null);
+        FirstBoardMarketDay existing = reconcileDeclaredReadyCoverage(
+                store.marketDay(baselineDate).orElse(null));
         if (existing != null && existing.status() == FirstBoardMarketDayStatus.READY) {
             return FirstBoardIngestionProgress.from(existing);
         }
@@ -73,8 +74,10 @@ public class FirstBoardMarketDayIngestionService {
             List<String> symbols = candidates.stream().map(EastMoneyQuote::symbol).toList();
             Map<String, Integer> initialCounts = store.completedBarCounts(
                     symbols, baselineDate, FirstBoardCurvePolicy.MINIMUM_VALID_BARS);
+            Map<String, BigDecimal> initialCloses = store.closingPrices(symbols, baselineDate);
             List<EastMoneyQuote> gaps = candidates.stream()
-                    .filter(quote -> !FirstBoardCurvePolicy.hasValidCurve(quote.symbol(), initialCounts))
+                    .filter(quote -> !FirstBoardCurvePolicy.hasValidCurve(quote.symbol(), initialCounts)
+                            || !initialCloses.containsKey(quote.symbol()))
                     .toList();
             AtomicInteger processed = new AtomicInteger(candidates.size() - gaps.size());
             saveImporting(baselineDate, startedAt, candidates.size(), processed.get(), 0);
@@ -83,8 +86,12 @@ public class FirstBoardMarketDayIngestionService {
                     .map(quote -> CompletableFuture.runAsync(() -> {
                         List<EastMoneyKLine> rows;
                         try {
+                            LocalDate fetchStart = FirstBoardCurvePolicy.hasValidCurve(
+                                    quote.symbol(), initialCounts)
+                                    ? baselineDate
+                                    : baselineDate.minusDays(260);
                             rows = gateway.dailyBars(
-                                    quote.symbol(), baselineDate.minusDays(260), baselineDate);
+                                    quote.symbol(), fetchStart, baselineDate);
                         } catch (RuntimeException ignored) {
                             rows = List.of();
                         }
@@ -99,8 +106,10 @@ public class FirstBoardMarketDayIngestionService {
 
             Map<String, Integer> finalCounts = store.completedBarCounts(
                     symbols, baselineDate, FirstBoardCurvePolicy.MINIMUM_VALID_BARS);
+            Map<String, BigDecimal> finalCloses = store.closingPrices(symbols, baselineDate);
             int validCount = (int) candidates.stream()
-                    .filter(quote -> FirstBoardCurvePolicy.hasValidCurve(quote.symbol(), finalCounts))
+                    .filter(quote -> FirstBoardCurvePolicy.hasValidCurve(quote.symbol(), finalCounts)
+                            && finalCloses.containsKey(quote.symbol()))
                     .count();
             saveImporting(baselineDate, startedAt, validCount, validCount, 0);
             if (validCount == 0) {
@@ -125,7 +134,8 @@ public class FirstBoardMarketDayIngestionService {
     }
 
     public FirstBoardIngestionProgress ingestClosedDay(LocalDate tradeDate) {
-        FirstBoardMarketDay existing = store.marketDay(tradeDate).orElse(null);
+        FirstBoardMarketDay existing = reconcileDeclaredReadyCoverage(
+                store.marketDay(tradeDate).orElse(null));
         if (existing != null && existing.status() == FirstBoardMarketDayStatus.READY) {
             return FirstBoardIngestionProgress.from(existing);
         }
@@ -221,6 +231,23 @@ public class FirstBoardMarketDayIngestionService {
                 startedAt == null ? Instant.now() : startedAt, null, Instant.now().plus(RETRY_DELAY), message);
         store.saveMarketDay(failed);
         return FirstBoardIngestionProgress.from(failed);
+    }
+
+    private FirstBoardMarketDay reconcileDeclaredReadyCoverage(FirstBoardMarketDay existing) {
+        if (existing == null || existing.status() != FirstBoardMarketDayStatus.READY) {
+            return existing;
+        }
+        int stored = store.storedBarCount(existing.tradeDate());
+        if (existing.writtenSymbolCount() > 0 && stored >= existing.writtenSymbolCount()) {
+            return existing;
+        }
+        Instant startedAt = existing.startedAt() == null ? Instant.now() : existing.startedAt();
+        FirstBoardMarketDay repairing = new FirstBoardMarketDay(
+                existing.tradeDate(), existing.sourceTradeDate(), FirstBoardMarketDayStatus.IMPORTING,
+                Math.max(existing.expectedSymbolCount(), existing.writtenSymbolCount()), stored, 0,
+                false, null, startedAt, null, null, null);
+        store.saveMarketDay(repairing);
+        return repairing;
     }
 
     private void saveImporting(
