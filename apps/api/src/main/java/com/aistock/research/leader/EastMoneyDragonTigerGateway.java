@@ -48,7 +48,8 @@ public class EastMoneyDragonTigerGateway implements DragonTigerGateway {
             TradingClockService tradingClock
     ) {
         this(objectMapper, tradingClock,
-                (report, page, start, end) -> fetchRemote(restClient, report, page, start, end));
+                (report, page, start, end) -> fetchRemote(
+                        restClient, objectMapper, report, page, start, end));
     }
 
     EastMoneyDragonTigerGateway(
@@ -357,12 +358,13 @@ public class EastMoneyDragonTigerGateway implements DragonTigerGateway {
 
     private static JsonNode fetchRemote(
             RestClient restClient,
+            ObjectMapper objectMapper,
             String report,
             int page,
             LocalDate start,
             LocalDate end
     ) {
-        JsonNode response = restClient.get()
+        String body = restClient.get()
                 .uri(builder -> builder
                         .scheme("https")
                         .host("datacenter-web.eastmoney.com")
@@ -378,11 +380,23 @@ public class EastMoneyDragonTigerGateway implements DragonTigerGateway {
                         .queryParam("filter", "(TRADE_DATE>='" + start + "')(TRADE_DATE<='" + end + "')")
                         .build())
                 .retrieve()
-                .body(JsonNode.class);
-        if (response == null) {
+                .body(String.class);
+        return parseRemoteBody(objectMapper, body, report);
+    }
+
+    static JsonNode parseRemoteBody(ObjectMapper objectMapper, String body, String report) {
+        if (body == null || body.isBlank()) {
             throw new IllegalStateException(report + " 返回空响应");
         }
-        return response;
+        try {
+            JsonNode response = objectMapper.readTree(body);
+            if (response == null) {
+                throw new IllegalStateException(report + " 返回空响应");
+            }
+            return response;
+        } catch (Exception exception) {
+            throw new IllegalStateException(report + " 返回内容不是有效 JSON", exception);
+        }
     }
 
     private String text(JsonNode row, String... fields) {

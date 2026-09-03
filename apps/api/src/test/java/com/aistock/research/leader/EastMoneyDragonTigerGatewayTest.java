@@ -62,6 +62,15 @@ class EastMoneyDragonTigerGatewayTest {
         assertThat(failed.dataGaps()).singleElement().asString().contains("upstream unavailable");
     }
 
+    @Test
+    void acceptsJsonPayloadEvenWhenTheProviderUsesTextPlainContentType() throws Exception {
+        JsonNode response = EastMoneyDragonTigerGateway.parseRemoteBody(
+                objectMapper, profileFixture(), "RPT_DAILYBILLBOARD_PROFILE");
+
+        assertThat(response.path("success").asBoolean()).isTrue();
+        assertThat(response.path("result").path("data")).hasSize(2);
+    }
+
     private JsonNode json(String value) throws Exception {
         return objectMapper.readTree(value);
     }
