@@ -42,6 +42,8 @@ const snapshot: ShortTermLimitUpBoardSnapshot = {
       sealBreakCount: 0
     }
   ],
+  brokenBoardAvailable: true,
+  brokenStocks: [],
   industryStats: [
     {
       industry: '饰品',
@@ -120,6 +122,8 @@ describe('LimitUpBoardEntry', () => {
           available: false,
           unavailableReason: '当日涨停池为空（可能是非交易日、盘前或数据源尚未生成）',
           stocks: [],
+          brokenBoardAvailable: false,
+          brokenStocks: [],
           industryStats: [],
           sentiment: null,
           marketTurnover: null,
@@ -186,6 +190,8 @@ describe('LimitUpBoardDetail', () => {
           available: false,
           unavailableReason: '当日涨停池为空',
           stocks: [],
+          brokenBoardAvailable: false,
+          brokenStocks: [],
           industryStats: [],
           sentiment: null,
           marketTurnover: null,

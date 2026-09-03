@@ -1,15 +1,12 @@
-export interface FirstBoardBoardPreferences {
-  includeGrowth: boolean
-  includeStar: boolean
-}
+import type { PotentialLeaderPreferences } from '../types'
 
-const STORAGE_KEY = 'ai-stock:first-board-alert:boards:v1'
-const DEFAULTS: FirstBoardBoardPreferences = { includeGrowth: false, includeStar: false }
+const STORAGE_KEY = 'ai-stock:potential-leader:boards:v1'
+const DEFAULTS: PotentialLeaderPreferences = { includeGrowth: false, includeStar: false }
 
-export function loadFirstBoardBoardPreferences(storage: Storage | null = browserStorage()) {
+export function loadPotentialLeaderPreferences(storage: Storage | null = browserStorage()): PotentialLeaderPreferences {
   if (!storage) return { ...DEFAULTS }
   try {
-    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) ?? '{}') as Partial<FirstBoardBoardPreferences>
+    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) ?? '{}') as Partial<PotentialLeaderPreferences>
     return {
       includeGrowth: parsed.includeGrowth === true,
       includeStar: parsed.includeStar === true
@@ -19,8 +16,8 @@ export function loadFirstBoardBoardPreferences(storage: Storage | null = browser
   }
 }
 
-export function saveFirstBoardBoardPreferences(
-  preferences: FirstBoardBoardPreferences,
+export function savePotentialLeaderPreferences(
+  preferences: PotentialLeaderPreferences,
   storage: Storage | null = browserStorage()
 ) {
   if (!storage) return

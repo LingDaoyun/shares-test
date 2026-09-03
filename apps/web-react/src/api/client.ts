@@ -1,8 +1,11 @@
 import axios from 'axios'
 import type {
   BacktestReport,
-  FirstBoardAlertSnapshot,
-  FirstBoardBarSeries,
+  LeaderAiReview,
+  LeaderBarSeries,
+  PotentialLeaderCandidate,
+  PotentialLeaderPreferences,
+  PotentialLeaderSnapshot,
   OvernightBacktestReport,
   CycleTrialReport,
   DailySignalReport,
@@ -51,13 +54,22 @@ export function fetchRules() {
   return http.get<RuleDefinition[]>('/rules').then((res) => res.data)
 }
 
-export function fetchFirstBoardAlertSnapshot(params: { includeGrowth: boolean; includeStar: boolean }) {
-  return http.get<FirstBoardAlertSnapshot>('/first-board-alert/snapshot', { params }).then((res) => res.data)
+export function fetchPotentialLeaderSnapshot(params: PotentialLeaderPreferences) {
+  return http.get<PotentialLeaderSnapshot>('/potential-leaders/snapshot', { params }).then((res) => res.data)
 }
 
-export function fetchFirstBoardBars(symbol: string) {
+export function fetchPotentialLeaderBars(symbol: string) {
   return http
-    .get<FirstBoardBarSeries>(`/first-board-alert/bars/${encodeURIComponent(symbol)}`)
+    .get<LeaderBarSeries>(`/potential-leaders/bars/${encodeURIComponent(symbol)}`)
+    .then((res) => res.data)
+}
+
+export function requestPotentialLeaderAiReview(candidate: PotentialLeaderCandidate) {
+  return http
+    .post<LeaderAiReview>(
+      `/potential-leaders/ai-review/${candidate.lane.toLowerCase()}/${encodeURIComponent(candidate.symbol)}`,
+      { snapshotHash: candidate.snapshotHash }
+    )
     .then((res) => res.data)
 }
 

@@ -1,73 +1,154 @@
 // 当前 React 前端消费的后端数据契约。
 
-export type FirstBoardAlertStatus = 'INITIALIZING' | 'UPDATING' | 'READY' | 'FAILED'
-export type FirstBoardBoard = 'MAIN' | 'GROWTH' | 'STAR'
-export type FirstBoardAlertLane = 'LATENT' | 'PREVIOUS_LIMIT_UP'
-export type FirstBoardAlertLevel =
-  | 'WATCH'
-  | 'STRONG'
-  | 'ACCELERATING'
-  | 'REPEAT_STRONG'
-  | 'REPEAT_ACCELERATING'
+export type PotentialLeaderStatus = 'PREPARING' | 'READY' | 'STALE' | 'UNAVAILABLE'
+export type PotentialLeaderLane = 'POTENTIAL' | 'COMPETITION'
+export type PotentialLeaderGrade = 'A' | 'B' | 'C'
+export type PotentialLeaderDisclosureStatus =
+  | 'DISCLOSED'
+  | 'NOT_DISCLOSED'
+  | 'FETCH_FAILED'
+  | 'STALE_DISCLOSURE'
+export type PotentialLeaderCalibrationStatus = 'READY' | 'COLLECTING'
+export type PotentialLeaderAiStatus = 'SUCCEEDED' | 'FAILED'
+export type PotentialLeaderAiVerdict = 'SUPPORT' | 'NEUTRAL' | 'OPPOSE'
+export type PotentialLeaderAiPhase = 'EMERGING' | 'COMPETING' | 'CROWDED' | 'FADING'
 
-export interface FirstBoardAlertCandidate {
-  symbol: string
-  name: string
-  industry: string | null
-  board: FirstBoardBoard
-  lane: FirstBoardAlertLane
-  level: FirstBoardAlertLevel
-  latestPrice: number
-  changePercent: number
-  ma10: number
-  ma20: number
-  ma20Slope: number
-  rsi14: number
-  macdHistogram: number
-  technicalPassCount: number
-  realtimeVolumeRatio: number
-  previousDayVolumeRatio: number
-  recentFiveMaxVolumeRatio: number
-  upperShadowRatio: number
-  intradayDrawdown: number | null
-  threeDayCloseRange: number
+export interface PotentialLeaderPreferences {
+  includeGrowth: boolean
+  includeStar: boolean
 }
 
-export interface FirstBoardAlertCoverage {
-  universeCount: number
-  supportedCount: number
-  baselineCount: number
-  scopedBaselineCount: number
-  quotedCount: number
-  eligibleCount: number
-  excludedNameCount: number
-  insufficientHistoryCount: number
-  excludedMissingQuoteCount: number
-  excludedTouchedLimitCount: number
-  excludedVolumeRatioCount: number
+export type PotentialLeaderBoardOptions = PotentialLeaderPreferences
+
+export interface PotentialLeaderMarketSummary {
+  limitUpCount: number
+  brokenCount: number | null
+  maxBoard: number
+  sealRatePercent: number | null
+  boards2PlusRatioPercent: number | null
+  sentimentTone: string
 }
 
-export interface FirstBoardAlertSnapshot {
-  status: FirstBoardAlertStatus
-  tradeDate: string
-  baselineDate: string | null
-  generatedAt: string
-  quoteFetchedAt: string | null
-  autoRefreshAllowed: boolean
-  ruleVersion: string
-  phase: string
-  progressCompleted: number
-  progressTotal: number
-  progressFailed: number
-  baselinePublishedAt: string | null
-  nextRetryAt: string | null
-  coverage: FirstBoardAlertCoverage
-  latentCandidates: FirstBoardAlertCandidate[]
-  previousLimitUpCandidates: FirstBoardAlertCandidate[]
+export interface PotentialLeaderDirection {
+  industry: string
+  rank: number
+  score: number
+  breadthPercent: number
+  medianChangePercent: number
+  limitUpCount: number
+  brokenCount: number
+  maxBoard: number
+  amount: number
+  constituentSymbols: string[]
+}
+
+export interface PotentialLeaderScoreComponent {
+  code: string
+  label: string
+  rawValue: number | null
+  points: number
+  maximumPoints: number
+}
+
+export interface PotentialLeaderRiskDeduction {
+  code: string
+  label: string
+  rawValue: number | null
+  threshold: number | null
+  points: number
+}
+
+export interface PotentialLeaderSeat {
+  side: string
+  branchCode: string | null
+  branchName: string
+  buyAmount: number | null
+  sellAmount: number | null
+  netAmount: number | null
+  institution: boolean
+  stockConnect: boolean
+}
+
+export interface PotentialLeaderDragonTigerEvidence {
+  status: PotentialLeaderDisclosureStatus
+  disclosureDate: string | null
+  adjustment: number
+  seats: PotentialLeaderSeat[]
   dataGaps: string[]
 }
 
-export interface FirstBoardBar {
+export interface PotentialLeaderCalibration {
+  status: PotentialLeaderCalibrationStatus
+  sampleSize: number
+  successRate: number | null
+  lower95: number | null
+  upper95: number | null
+}
+
+export interface PotentialLeaderCandidate {
+  lane: PotentialLeaderLane
+  rank: number
+  grade: PotentialLeaderGrade
+  score: number
+  symbol: string
+  name: string
+  industry: string
+  board: string
+  latestPrice: number | null
+  changePercent: number | null
+  realtimeVolumeRatio: number | null
+  turnoverRate: number | null
+  amount: number | null
+  circulatingMarketValue: number | null
+  ma10: number | null
+  ma20: number | null
+  ma20Slope: number | null
+  breakoutPositionPercent: number | null
+  currentlySealed: boolean
+  consecutiveBoards: number
+  firstSealTime: string | null
+  lastSealTime: string | null
+  sealBreakCount: number
+  sealFunds: number | null
+  scoreBreakdown: PotentialLeaderScoreComponent[]
+  riskDeductions: PotentialLeaderRiskDeduction[]
+  evidence: string[]
+  dragonTiger: PotentialLeaderDragonTigerEvidence
+  calibration: PotentialLeaderCalibration
+  snapshotHash: string
+}
+
+export interface PotentialLeaderCoverage {
+  universeCount: number
+  baselineCount: number
+  scopedCount: number
+  liquidCount: number
+  strongDirectionCount: number
+  potentialEligibleCount: number
+  competitionEligibleCount: number
+  hiddenBelowScoreCount: number
+  excludedMissingDataCount: number
+}
+
+export interface PotentialLeaderSnapshot {
+  status: PotentialLeaderStatus
+  tradeDate: string
+  quoteTradeDate: string | null
+  quoteTimestamp: string | null
+  dragonTigerDate: string | null
+  generatedAt: string
+  autoRefreshAllowed: boolean
+  ruleVersion: string
+  boardOptions: PotentialLeaderBoardOptions
+  marketSummary: PotentialLeaderMarketSummary | null
+  directions: PotentialLeaderDirection[]
+  potentialCandidates: PotentialLeaderCandidate[]
+  competitionCandidates: PotentialLeaderCandidate[]
+  coverage: PotentialLeaderCoverage
+  dataGaps: string[]
+}
+
+export interface LeaderBar {
   tradeDate: string
   open: number
   close: number
@@ -76,11 +157,34 @@ export interface FirstBoardBar {
   volume: number
 }
 
-export interface FirstBoardBarSeries {
+export interface LeaderBarSeries {
   symbol: string
   tradeDate: string
   baselineDate: string
-  bars: FirstBoardBar[]
+  adjustMode: 'QFQ'
+  bars: LeaderBar[]
+}
+
+export interface LeaderAiReview {
+  id: string
+  tradeDate: string
+  lane: PotentialLeaderLane
+  symbol: string
+  ruleVersion: string
+  snapshotHash: string
+  status: PotentialLeaderAiStatus
+  verdict: PotentialLeaderAiVerdict | null
+  phase: PotentialLeaderAiPhase | null
+  advantages: string[]
+  counterEvidence: string[]
+  dataGaps: string[]
+  mustVerify: string[]
+  confidence: number | null
+  provider: string | null
+  model: string | null
+  promptVersion: string
+  errorSummary: string | null
+  createdAt: string
 }
 
 export type RuleAction = 'PASS' | 'REJECT' | 'SCORE' | 'ALERT' | 'DOWN_WEIGHT' | 'REVIEW'
@@ -1284,6 +1388,19 @@ export interface ShortTermLimitUpStock {
   sealBreakCount: number
 }
 
+export interface ShortTermBrokenBoardStock {
+  symbol: string
+  name: string
+  industry: string | null
+  latestPrice: number | null
+  limitUpPrice: number | null
+  changePercent: number | null
+  amount: number | null
+  firstSealTime: string | null
+  sealBreakCount: number
+  currentlySealed: boolean
+}
+
 export interface ShortTermLimitUpIndustryStat {
   industry: string
   limitUpCount: number
@@ -1325,6 +1442,8 @@ export interface ShortTermLimitUpBoardSnapshot {
   available: boolean
   unavailableReason: string | null
   stocks: ShortTermLimitUpStock[]
+  brokenBoardAvailable: boolean
+  brokenStocks: ShortTermBrokenBoardStock[]
   industryStats: ShortTermLimitUpIndustryStat[]
   sentiment: ShortTermLimitUpSentiment | null
   marketTurnover: ShortTermMarketTurnover | null
