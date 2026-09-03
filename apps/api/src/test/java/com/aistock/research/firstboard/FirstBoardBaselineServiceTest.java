@@ -61,6 +61,7 @@ class FirstBoardBaselineServiceTest {
         when(clock.isMarketClosedDay(scanDate)).thenReturn(false);
         when(clock.previousTradingDay(scanDate)).thenReturn(baselineDate);
         when(dailyBarStore.marketDay(baselineDate)).thenReturn(Optional.of(readyDay));
+        when(dailyBarStore.storedBarCount(baselineDate)).thenReturn(readyDay.writtenSymbolCount());
         when(baselineStore.findReady(scanDate, baselineDate,
                 FirstBoardBaselineService.BASELINE_RULE_VERSION, "bars-v1")).thenReturn(Optional.empty());
         when(gateway.fullMarketQuotes()).thenReturn(new AshareQuoteSnapshot(
@@ -116,6 +117,7 @@ class FirstBoardBaselineServiceTest {
         when(clock.isMarketClosedDay(scanDate)).thenReturn(false);
         when(clock.previousTradingDay(scanDate)).thenReturn(baselineDate);
         when(dailyBarStore.marketDay(baselineDate)).thenReturn(Optional.of(readyDay));
+        when(dailyBarStore.storedBarCount(baselineDate)).thenReturn(readyDay.writtenSymbolCount());
         when(baselineStore.findReady(
                 scanDate, baselineDate, "first-board-baseline-v1", "bars-v1"))
                 .thenReturn(Optional.of(legacy));
@@ -164,6 +166,7 @@ class FirstBoardBaselineServiceTest {
         when(clock.isMarketClosedDay(scanDate)).thenReturn(false);
         when(clock.previousTradingDay(scanDate)).thenReturn(baselineDate);
         when(dailyBarStore.marketDay(baselineDate)).thenReturn(Optional.of(readyDay));
+        when(dailyBarStore.storedBarCount(baselineDate)).thenReturn(readyDay.writtenSymbolCount());
         when(baselineStore.findReady(
                 scanDate, baselineDate, FirstBoardBaselineService.BASELINE_RULE_VERSION, "bars-v1"))
                 .thenReturn(Optional.of(snapshot));
@@ -185,6 +188,44 @@ class FirstBoardBaselineServiceTest {
         assertThat(access.stocks().get("600000").technicalPassCount()).isEqualTo(5);
         assertThatThrownBy(() -> access.stocks().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void repairsReadyMetadataWhoseDeclaredTradingDayRowsAreMissing() throws Exception {
+        LocalDate scanDate = LocalDate.parse("2026-09-03");
+        LocalDate baselineDate = LocalDate.parse("2026-09-02");
+        FirstBoardMarketDataGateway gateway = mock(FirstBoardMarketDataGateway.class);
+        FirstBoardMarketDayIngestionService ingestionService = mock(FirstBoardMarketDayIngestionService.class);
+        FirstBoardDailyBarStore dailyBarStore = mock(FirstBoardDailyBarStore.class);
+        FirstBoardBaselineStore baselineStore = mock(FirstBoardBaselineStore.class);
+        FirstBoardTechnicalEvaluator evaluator = mock(FirstBoardTechnicalEvaluator.class);
+        TradingClockService clock = mock(TradingClockService.class);
+        FirstBoardMarketDay falselyReady = new FirstBoardMarketDay(
+                baselineDate, baselineDate, FirstBoardMarketDayStatus.READY,
+                4958, 4958, 0, true, "empty-day", Instant.now(), Instant.now(), null, null);
+        CountDownLatch repairStarted = new CountDownLatch(1);
+
+        when(clock.isMarketClosedDay(scanDate)).thenReturn(false);
+        when(clock.previousTradingDay(scanDate)).thenReturn(baselineDate);
+        when(dailyBarStore.marketDay(baselineDate)).thenReturn(Optional.of(falselyReady));
+        when(dailyBarStore.storedBarCount(baselineDate)).thenReturn(0);
+        when(ingestionService.ensureBaselineDayReady(scanDate)).thenAnswer(invocation -> {
+            repairStarted.countDown();
+            return new FirstBoardIngestionProgress(
+                    baselineDate, FirstBoardMarketDayStatus.IMPORTING, "REPAIRING_MISSING_TRADE_DATE",
+                    0, 4958, 0, null, null);
+        });
+        service = new FirstBoardBaselineService(
+                gateway, ingestionService, dailyBarStore, baselineStore, evaluator, clock);
+
+        FirstBoardBaselineAccess access = service.access(scanDate);
+
+        assertThat(access.status()).isEqualTo(FirstBoardAlertStatus.UPDATING);
+        assertThat(access.progress().phase()).isEqualTo("REPAIRING_MISSING_TRADE_DATE");
+        assertThat(access.progress().completed()).isZero();
+        assertThat(access.progress().total()).isEqualTo(4958);
+        assertThat(repairStarted.await(1, TimeUnit.SECONDS)).isTrue();
+        verify(baselineStore, never()).findReady(any(), any(), anyString(), anyString());
     }
 
     private EastMoneyQuote quote(String symbol) {

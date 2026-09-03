@@ -71,6 +71,16 @@ public class FirstBoardBaselineService {
             startIngestion(scanDate);
             return FirstBoardBaselineAccess.initializing(progress);
         }
+        if (marketDay.status() == FirstBoardMarketDayStatus.READY) {
+            int stored = dailyBarStore.storedBarCount(baselineDate);
+            if (marketDay.writtenSymbolCount() <= 0 || stored < marketDay.writtenSymbolCount()) {
+                startIngestion(scanDate);
+                return FirstBoardBaselineAccess.updating(new FirstBoardIngestionProgress(
+                        baselineDate, FirstBoardMarketDayStatus.IMPORTING,
+                        "REPAIRING_MISSING_TRADE_DATE", stored,
+                        marketDay.writtenSymbolCount(), 0, null, null));
+            }
+        }
         if (marketDay.status() == FirstBoardMarketDayStatus.IMPORTING) {
             startIngestion(scanDate);
             return FirstBoardBaselineAccess.updating(FirstBoardIngestionProgress.from(marketDay));
