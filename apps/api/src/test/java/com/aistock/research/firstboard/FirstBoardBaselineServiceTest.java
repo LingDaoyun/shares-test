@@ -17,6 +17,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -129,6 +130,61 @@ class FirstBoardBaselineServiceTest {
         assertThat(access.status()).isEqualTo(FirstBoardAlertStatus.UPDATING);
         verify(baselineStore, atLeastOnce()).findReady(
                 scanDate, baselineDate, "first-board-baseline-v2", "bars-v1");
+    }
+
+    @Test
+    void exposesReadyBaselineThroughImmutableLeaderFacade() {
+        LocalDate scanDate = LocalDate.parse("2026-09-03");
+        LocalDate baselineDate = LocalDate.parse("2026-09-02");
+        Instant publishedAt = Instant.parse("2026-09-02T08:20:00Z");
+        FirstBoardMarketDataGateway gateway = mock(FirstBoardMarketDataGateway.class);
+        FirstBoardMarketDayIngestionService ingestionService = mock(FirstBoardMarketDayIngestionService.class);
+        FirstBoardDailyBarStore dailyBarStore = mock(FirstBoardDailyBarStore.class);
+        FirstBoardBaselineStore baselineStore = mock(FirstBoardBaselineStore.class);
+        FirstBoardTechnicalEvaluator evaluator = mock(FirstBoardTechnicalEvaluator.class);
+        TradingClockService clock = mock(TradingClockService.class);
+        FirstBoardMarketDay readyDay = new FirstBoardMarketDay(
+                baselineDate, baselineDate, FirstBoardMarketDayStatus.READY,
+                5100, 5100, 0, true, "bars-v1", publishedAt, publishedAt, null, null);
+        List<FirstBoardBar> recentBars = java.util.stream.IntStream.range(0, 60)
+                .mapToObj(offset -> new FirstBoardBar(
+                        baselineDate.minusDays(59L - offset), BigDecimal.TEN, BigDecimal.TEN,
+                        new BigDecimal("10.20"), new BigDecimal("9.80"), new BigDecimal("100000")))
+                .toList();
+        FirstBoardBaseline stock = new FirstBoardBaseline(
+                "600000", "测试股份", "半导体", FirstBoardBoard.MAIN, baselineDate,
+                BigDecimal.TEN, new BigDecimal("9.80"), new BigDecimal("9.50"),
+                new BigDecimal("0.03"), new BigDecimal("58"), new BigDecimal("0.12"),
+                5, new BigDecimal("1.20"), new BigDecimal("1.60"),
+                new BigDecimal("0.02"), new BigDecimal("0.08"), false, recentBars);
+        FirstBoardBaselineSnapshot snapshot = new FirstBoardBaselineSnapshot(
+                UUID.randomUUID(), scanDate, baselineDate, FirstBoardBaselineService.BASELINE_RULE_VERSION,
+                "bars-v1", publishedAt, Map.of(stock.symbol(), stock), 5200, 5100, 70, 30);
+
+        when(clock.isMarketClosedDay(scanDate)).thenReturn(false);
+        when(clock.previousTradingDay(scanDate)).thenReturn(baselineDate);
+        when(dailyBarStore.marketDay(baselineDate)).thenReturn(Optional.of(readyDay));
+        when(baselineStore.findReady(
+                scanDate, baselineDate, FirstBoardBaselineService.BASELINE_RULE_VERSION, "bars-v1"))
+                .thenReturn(Optional.of(snapshot));
+        service = new FirstBoardBaselineService(
+                gateway, ingestionService, dailyBarStore, baselineStore, evaluator, clock);
+
+        FirstBoardLeaderBaselineAccess access = service.leaderAccess(scanDate);
+
+        assertThat(access.status()).isEqualTo(FirstBoardAlertStatus.READY);
+        assertThat(access.tradeDate()).isEqualTo(scanDate);
+        assertThat(access.baselineDate()).isEqualTo(baselineDate);
+        assertThat(access.publishedAt()).isEqualTo(publishedAt);
+        assertThat(access.progress()).isNull();
+        assertThat(access.dataGaps()).isEmpty();
+        assertThat(access.universeCount()).isEqualTo(5200);
+        assertThat(access.supportedCount()).isEqualTo(5100);
+        assertThat(access.stocks()).containsOnlyKeys("600000");
+        assertThat(access.stocks().get("600000").recentBars()).hasSize(60);
+        assertThat(access.stocks().get("600000").technicalPassCount()).isEqualTo(5);
+        assertThatThrownBy(() -> access.stocks().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     private EastMoneyQuote quote(String symbol) {

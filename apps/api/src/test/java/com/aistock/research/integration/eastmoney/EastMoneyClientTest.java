@@ -104,6 +104,21 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void shouldParseCirculatingMarketValueFromBatchQuote() {
+        JsonNode item = objectMapper.createObjectNode()
+                .put("f12", "600000")
+                .put("f14", "浦发银行")
+                .put("f13", 1)
+                .put("f2", 1000)
+                .put("f21", 8800000000L);
+
+        EastMoneyQuote quote = client.readQuote(
+                item, Instant.parse("2026-09-03T02:00:00Z")).orElseThrow();
+
+        assertThat(quote.circulatingMarketValue()).isEqualByComparingTo("8800000000");
+    }
+
+    @Test
     void shouldParseGlobalQuoteWithFlttDecimalFields() {
         Instant marketTime = Instant.parse("2026-08-21T20:00:00Z");
         JsonNode item = objectMapper.createObjectNode()

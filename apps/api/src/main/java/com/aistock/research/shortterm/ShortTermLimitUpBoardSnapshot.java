@@ -17,6 +17,8 @@ public record ShortTermLimitUpBoardSnapshot(
         boolean available,
         String unavailableReason,
         List<ShortTermLimitUpStock> stocks,
+        boolean brokenBoardAvailable,
+        List<ShortTermBrokenBoardStock> brokenStocks,
         List<ShortTermLimitUpIndustryStat> industryStats,
         ShortTermLimitUpSentiment sentiment,
         ShortTermMarketTurnover marketTurnover,
@@ -24,6 +26,7 @@ public record ShortTermLimitUpBoardSnapshot(
 ) {
     public ShortTermLimitUpBoardSnapshot {
         stocks = stocks == null ? List.of() : List.copyOf(stocks);
+        brokenStocks = brokenStocks == null ? List.of() : List.copyOf(brokenStocks);
         industryStats = industryStats == null ? List.of() : List.copyOf(industryStats);
         dataGaps = dataGaps == null ? List.of() : List.copyOf(dataGaps);
     }
@@ -34,6 +37,8 @@ public record ShortTermLimitUpBoardSnapshot(
                 fetchedAt,
                 false,
                 reason == null || reason.isBlank() ? "涨停池数据不可用" : reason,
+                List.of(),
+                false,
                 List.of(),
                 List.of(),
                 null,

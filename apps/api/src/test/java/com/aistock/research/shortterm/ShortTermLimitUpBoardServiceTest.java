@@ -1,6 +1,7 @@
 package com.aistock.research.shortterm;
 
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
+import com.aistock.research.integration.eastmoney.EastMoneyBrokenBoardPoolEntry;
 import com.aistock.research.integration.eastmoney.EastMoneyIndexVolumeBar;
 import com.aistock.research.integration.eastmoney.EastMoneyLimitUpPoolEntry;
 import org.junit.jupiter.api.Test;
@@ -117,7 +118,17 @@ class ShortTermLimitUpBoardServiceTest {
                         entry("600003", "丙", "半导体", 2, "09:30:00"),
                         entry("600004", "丁", "医药", 2, "09:26:00")
                 ),
-                List.of(),
+                List.of(new EastMoneyBrokenBoardPoolEntry(
+                        "600099",
+                        "测试炸板",
+                        "半导体",
+                        new BigDecimal("9.85"),
+                        new BigDecimal("10.00"),
+                        new BigDecimal("8.24"),
+                        new BigDecimal("88000000"),
+                        LocalTime.parse("10:05:00"),
+                        2
+                )),
                 List.of(),
                 null,
                 List.of()
@@ -128,6 +139,12 @@ class ShortTermLimitUpBoardServiceTest {
                 .containsExactly("600002", "600004", "600003", "600001");
         assertThat(snapshot.sentiment().maxConsecutiveBoards()).isEqualTo(3);
         assertThat(snapshot.sentiment().limitUpCount()).isEqualTo(4);
+        assertThat(snapshot.brokenBoardAvailable()).isTrue();
+        assertThat(snapshot.brokenStocks()).singleElement().satisfies(stock -> {
+            assertThat(stock.symbol()).isEqualTo("600099");
+            assertThat(stock.currentlySealed()).isFalse();
+            assertThat(stock.sealBreakCount()).isEqualTo(2);
+        });
         assertThat(snapshot.dataGaps()).isEmpty();
     }
 

@@ -94,7 +94,28 @@ public class FirstBoardBaselineService {
                 marketDay.failedSymbolCount(), null, null));
     }
 
-    Optional<List<FirstBoardBar>> recentBars(LocalDate tradeDate, String symbol) {
+    public FirstBoardLeaderBaselineAccess leaderAccess(LocalDate requestedTradeDate) {
+        FirstBoardBaselineAccess internal = access(requestedTradeDate);
+        FirstBoardBaselineSnapshot snapshot = internal.snapshot();
+        if (snapshot != null) {
+            Map<String, FirstBoardLeaderBaselineStock> stocks = new LinkedHashMap<>();
+            snapshot.stocks().forEach((symbol, baseline) ->
+                    stocks.put(symbol, FirstBoardLeaderBaselineStock.from(baseline)));
+            return new FirstBoardLeaderBaselineAccess(
+                    internal.status(), snapshot.tradeDate(), snapshot.baselineDate(), snapshot.generatedAt(),
+                    stocks, internal.progress(), snapshot.universeCount(), snapshot.supportedCount(),
+                    snapshot.excludedNameCount(), snapshot.insufficientHistoryCount(), internal.dataGaps());
+        }
+        LocalDate tradeDate = effectiveScanDate(requestedTradeDate);
+        LocalDate baselineDate = internal.progress() == null
+                ? clock.previousTradingDay(tradeDate)
+                : internal.progress().tradeDate();
+        return new FirstBoardLeaderBaselineAccess(
+                internal.status(), tradeDate, baselineDate, null, Map.of(), internal.progress(),
+                0, 0, 0, 0, internal.dataGaps());
+    }
+
+    public Optional<List<FirstBoardBar>> recentBars(LocalDate tradeDate, String symbol) {
         if (tradeDate == null || symbol == null || symbol.isBlank()) {
             return Optional.empty();
         }

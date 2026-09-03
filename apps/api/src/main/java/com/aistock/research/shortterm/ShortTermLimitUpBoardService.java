@@ -104,9 +104,11 @@ public class ShortTermLimitUpBoardService {
         }
         List<String> dataGaps = new ArrayList<>();
         List<EastMoneyBrokenBoardPoolEntry> brokenEntries = List.of();
+        boolean brokenBoardAvailable = true;
         try {
             brokenEntries = eastMoneyClient.fetchBrokenBoardPool(tradeDate);
         } catch (Exception exception) {
+            brokenBoardAvailable = false;
             logger.warn("炸板池获取失败：{}", rootMessage(exception));
             dataGaps.add("炸板池获取失败，炸板率缺失：" + rootMessage(exception));
         }
@@ -124,7 +126,9 @@ public class ShortTermLimitUpBoardService {
             logger.warn("大盘量能对比获取失败：{}", rootMessage(exception));
             dataGaps.add("大盘量能对比获取失败：" + rootMessage(exception));
         }
-        return buildSnapshot(tradeDate, fetchedAt, limitUpEntries, brokenEntries, limitDownEntries, marketTurnover, dataGaps);
+        return buildSnapshot(
+                tradeDate, fetchedAt, limitUpEntries, brokenEntries, brokenBoardAvailable,
+                limitDownEntries, marketTurnover, dataGaps);
     }
 
     private ShortTermMarketTurnover fetchMarketTurnover(LocalDate tradeDate) {
@@ -251,9 +255,31 @@ public class ShortTermLimitUpBoardService {
             ShortTermMarketTurnover marketTurnover,
             List<String> dataGaps
     ) {
+        return buildSnapshot(
+                tradeDate, fetchedAt, limitUpEntries, brokenEntries, true,
+                limitDownEntries, marketTurnover, dataGaps);
+    }
+
+    private ShortTermLimitUpBoardSnapshot buildSnapshot(
+            LocalDate tradeDate,
+            Instant fetchedAt,
+            List<EastMoneyLimitUpPoolEntry> limitUpEntries,
+            List<EastMoneyBrokenBoardPoolEntry> brokenEntries,
+            boolean brokenBoardAvailable,
+            List<EastMoneyLimitDownPoolEntry> limitDownEntries,
+            ShortTermMarketTurnover marketTurnover,
+            List<String> dataGaps
+    ) {
         List<ShortTermLimitUpStock> stocks = limitUpEntries.stream()
                 .sorted(boardDepthThenSealTime())
                 .map(ShortTermLimitUpBoardService::toStock)
+                .toList();
+        List<ShortTermBrokenBoardStock> brokenStocks = brokenEntries.stream()
+                .sorted(Comparator
+                        .comparing(EastMoneyBrokenBoardPoolEntry::firstSealTime,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(EastMoneyBrokenBoardPoolEntry::symbol))
+                .map(ShortTermLimitUpBoardService::toBrokenStock)
                 .toList();
         return new ShortTermLimitUpBoardSnapshot(
                 tradeDate,
@@ -261,10 +287,27 @@ public class ShortTermLimitUpBoardService {
                 true,
                 null,
                 stocks,
+                brokenBoardAvailable,
+                brokenStocks,
                 industryStats(limitUpEntries),
                 sentiment(limitUpEntries, brokenEntries.size(), limitDownEntries.size()),
                 marketTurnover,
                 dataGaps
+        );
+    }
+
+    private static ShortTermBrokenBoardStock toBrokenStock(EastMoneyBrokenBoardPoolEntry entry) {
+        return new ShortTermBrokenBoardStock(
+                entry.symbol(),
+                entry.name(),
+                entry.industry(),
+                entry.latestPrice(),
+                entry.limitUpPrice(),
+                entry.changePercent(),
+                entry.amount(),
+                entry.firstSealTime(),
+                entry.sealBreakCount(),
+                false
         );
     }
 
