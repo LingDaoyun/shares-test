@@ -25,6 +25,23 @@
 
 ---
 
+## Implementation Record (2026-09-03)
+
+The approved implementation is present on `main` in these scoped commits:
+
+- `58b00f4` — shared quote, broken-board and baseline inputs;
+- `d7b43f9` — deterministic direction, candidate and scoring engines;
+- `ad06f2c` — Dragon-Tiger evidence gateway and soft adjustment;
+- `8ac243f` — close snapshots, future outcomes and shadow calibration;
+- `6be9bdb` — potential-leader orchestration/API and old candidate API retirement;
+- `d2577b8` — manual structured AI shadow review;
+- `59dfe92` — frontend contracts, preferences and same-day A-grade notifications;
+- `849c579` — dual-lane page, evidence detail, navigation replacement and legacy redirect.
+
+Focused test source was added alongside the implementation. In accordance with the repository boundary, Codex did not run tests, builds, compilation, lint/type checks, static/diff checks, browser/API/database checks, startup, deployment, or runtime acceptance. Engineering status: `未由 Codex 测试`.
+
+---
+
 ## File Structure
 
 ### Existing infrastructure adapted, not replaced
@@ -1072,17 +1089,17 @@ Commit with message `feat: replace first board page with potential leaders` usin
 **Interfaces:**
 - Produces: final source/spec consistency and an explicit user-owned verification handoff.
 
-- [ ] **Step 1: Preserve the already identified spec corrections**
+- [x] **Step 1: Preserve the already identified spec corrections**
 
 Ensure the spec says `V4__potential_leader_shadow_learning.sql`, not V3, and the AI request accepts only `snapshotHash` as a concurrency token in addition to path identifiers. Do not alter approved scoring or product scope during cleanup.
 
-- [ ] **Step 2: Do not perform a verification sweep**
+- [x] **Step 2: Do not perform a verification sweep**
 
 Do not run tests, compilation, build, lint, typecheck, `git diff --check`, browser checks, API calls, database migration checks, application startup, health/log checks, or deployment. Do not delegate those actions.
 
 The user may choose to run, in their own environment, the focused commands documented in Tasks 1–8 and a PostgreSQL-backed migration test.
 
-- [ ] **Step 3: Commit documentation state and report exact limitations**
+- [x] **Step 3: Commit documentation state and report exact limitations**
 
 Stage only the design correction and this plan if they are not already committed:
 
