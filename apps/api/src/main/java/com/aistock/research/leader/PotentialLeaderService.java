@@ -104,7 +104,8 @@ public class PotentialLeaderService {
                 return cached.snapshot();
             }
             PotentialLeaderSnapshot refreshed = refresh(key, now);
-            cache.put(key, new CachedSnapshot(refreshed, now.plusSeconds(CACHE_SECONDS)));
+            cache.put(key, new CachedSnapshot(
+                    refreshed, cacheClock.instant().plusSeconds(CACHE_SECONDS)));
             cache.keySet().removeIf(existing -> existing.tradeDate().isBefore(tradeDate.minusDays(7)));
             lastSuccessful.keySet().removeIf(existing -> existing.tradeDate().isBefore(tradeDate.minusDays(7)));
             return refreshed;

@@ -192,6 +192,27 @@ class PotentialLeaderServiceTest {
         }
     }
 
+    @Test
+    void refreshDurationDoesNotConsumeThePublishedCacheLifetime() {
+        stubSuccessfulCore();
+        when(eastMoneyClient.fetchAshareQuoteSnapshot(6000)).thenAnswer(ignored -> {
+            cacheClock.advance(Duration.ofSeconds(61));
+            return completeQuotes();
+        });
+        when(dragonTigerGateway.fetch(any(), any())).thenReturn(
+                new DragonTigerGateway.DragonTigerBatch(null, Map.of(), List.of()));
+        when(scoreEngine.rankPotential(anyList(), anyList(), anyMap())).thenReturn(List.of());
+        when(scoreEngine.rankCompetition(anyList(), anyList(), any(), anyMap(), anyMap()))
+                .thenReturn(List.of());
+
+        PotentialLeaderSnapshot first = service.snapshot(false, false);
+        PotentialLeaderSnapshot cached = service.snapshot(false, false);
+
+        assertThat(first.status()).isEqualTo(PotentialLeaderSnapshot.Status.READY);
+        assertThat(cached).isSameAs(first);
+        verify(eastMoneyClient, times(1)).fetchAshareQuoteSnapshot(6000);
+    }
+
     private void stubSuccessfulCore() {
         when(baselineService.leaderAccess(TRADE_DATE)).thenReturn(readyBaseline());
         when(eastMoneyClient.fetchAshareQuoteSnapshot(6000)).thenReturn(completeQuotes());
