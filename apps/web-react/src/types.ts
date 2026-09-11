@@ -1436,6 +1436,17 @@ export interface ShortTermMarketTurnover {
   explanation: string
 }
 
+export interface ShortTermMarketBreadth {
+  tradeDate: string
+  fetchedAt: string
+  advancing: number
+  declining: number
+  unchanged: number
+  excludedCount: number
+  totalCount: number
+  source: string
+}
+
 export interface ShortTermLimitUpBoardSnapshot {
   tradeDate: string
   fetchedAt: string

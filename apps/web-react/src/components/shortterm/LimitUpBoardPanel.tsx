@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Flame, RefreshCw } from 'lucide-react'
-import { fetchShortTermLimitUpBoard } from '../../api/client'
+import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
 import { DetailOverlay } from '../ui/DetailOverlay'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { Spinner } from '../ui/Loader'
 import { Tag } from '../ui/Badge'
 import { formatAmount, formatDateTime, formatPercent, formatSignedPercent } from '../../lib/format'
-import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment, ShortTermMarketTurnover } from '../../types'
+import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment, ShortTermMarketBreadth, ShortTermMarketTurnover } from '../../types'
 
 const toneLabel: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'neutral'> = {
   接力退潮: 'danger',
@@ -29,18 +29,26 @@ export function LimitUpBoardPanel() {
   const [snapshot, setSnapshot] = useState<ShortTermLimitUpBoardSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [breadth, setBreadth] = useState<ShortTermMarketBreadth | null>(null)
+  const [breadthLoading, setBreadthLoading] = useState(false)
+  const [breadthError, setBreadthError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
-    try {
-      setSnapshot(await fetchShortTermLimitUpBoard())
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '涨停看板获取失败')
-    } finally {
-      setLoading(false)
-    }
+    setBreadthLoading(true)
+    setBreadthError(null)
+    await Promise.all([
+      fetchShortTermLimitUpBoard()
+        .then(setSnapshot)
+        .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '涨停看板获取失败'))
+        .finally(() => setLoading(false)),
+      fetchShortTermMarketBreadth()
+        .then(setBreadth)
+        .catch((reason: unknown) => setBreadthError(reason instanceof Error ? reason.message : '涨跌家数获取失败'))
+        .finally(() => setBreadthLoading(false))
+    ])
   }, [])
 
   useEffect(() => {
@@ -53,6 +61,9 @@ export function LimitUpBoardPanel() {
         snapshot={snapshot}
         loading={loading}
         error={error}
+        breadth={breadth}
+        breadthLoading={breadthLoading}
+        breadthError={breadthError}
         onRefresh={() => void refresh()}
         onOpen={() => setOpen(true)}
       />
@@ -75,6 +86,9 @@ export function LimitUpBoardPanel() {
           snapshot={snapshot}
           loading={loading}
           error={error}
+          breadth={breadth}
+          breadthLoading={breadthLoading}
+          breadthError={breadthError}
           onRefresh={() => void refresh()}
         />
       </DetailOverlay>
@@ -82,7 +96,13 @@ export function LimitUpBoardPanel() {
   )
 }
 
-interface LimitUpBoardEntryProps {
+interface MarketBreadthProps {
+  breadth?: ShortTermMarketBreadth | null
+  breadthLoading?: boolean
+  breadthError?: string | null
+}
+
+interface LimitUpBoardEntryProps extends MarketBreadthProps {
   snapshot: ShortTermLimitUpBoardSnapshot | null
   loading: boolean
   error: string | null
@@ -91,7 +111,7 @@ interface LimitUpBoardEntryProps {
 }
 
 /** 页面内的一行式入口：情绪摘要 + 查看完整看板的按钮。 */
-export function LimitUpBoardEntry({ snapshot, loading, error, onRefresh, onOpen }: LimitUpBoardEntryProps) {
+export function LimitUpBoardEntry({ snapshot, loading, error, breadth, breadthLoading, breadthError, onRefresh, onOpen }: LimitUpBoardEntryProps) {
   const sentiment = snapshot != null && snapshot.available ? snapshot.sentiment : null
   return (
     <Card>
@@ -99,6 +119,21 @@ export function LimitUpBoardEntry({ snapshot, loading, error, onRefresh, onOpen 
         <span className="inline-flex items-center gap-2 text-sm font-semibold text-ink-900">
           <Flame className="h-4 w-4 shrink-0 text-rose-500" />
           涨停看板
+        </span>
+        <span className="inline-flex flex-wrap items-center gap-2 text-xs">
+          {breadth ? (
+            <>
+              <span className="font-semibold text-rose-600">上涨 {breadth.advancing} 家</span>
+              <span className="font-semibold text-emerald-600">下跌 {breadth.declining} 家</span>
+              <span className="text-ink-500">平盘 {breadth.unchanged} 家</span>
+              <span className="text-ink-400">{formatDateTime(breadth.fetchedAt)}</span>
+            </>
+          ) : breadthLoading ? (
+            <span className="text-ink-400">正在获取涨跌家数…</span>
+          ) : !breadthError ? (
+            <span className="text-ink-400">涨跌家数暂无数据</span>
+          ) : null}
+          {breadthError ? <span className="text-amber-700">涨跌家数更新失败{breadth ? '，保留上次快照' : ''}</span> : null}
         </span>
         {error ? (
           <span className="min-w-0 truncate text-xs text-rose-600">获取失败：{error}</span>
@@ -116,6 +151,7 @@ export function LimitUpBoardEntry({ snapshot, loading, error, onRefresh, onOpen 
             <Tag tone={toneLabel[sentiment.tone] ?? 'neutral'}>{sentiment.tone}</Tag>
             <span className="truncate">
               涨停 {sentiment.limitUpCount} 家
+              {` · 跌停 ${sentiment.limitDownCount == null ? '待补充' : `${sentiment.limitDownCount} 家`}`}
               {snapshot?.marketTurnover
                 ? ` · 量能 ${snapshot.marketTurnover.label} ${formatSignedPercent(snapshot.marketTurnover.volumeChangePercent)}`
                 : ''}
@@ -128,12 +164,12 @@ export function LimitUpBoardEntry({ snapshot, loading, error, onRefresh, onOpen 
           <Button
             variant="secondary"
             icon={<RefreshCw className="h-4 w-4" />}
-            loading={loading}
+            loading={loading || breadthLoading}
             onClick={onRefresh}
           >
             刷新
           </Button>
-          <Button variant="primary" disabled={!sentiment} onClick={onOpen}>
+          <Button variant="primary" onClick={onOpen}>
             查看看板
           </Button>
         </span>
@@ -142,7 +178,7 @@ export function LimitUpBoardEntry({ snapshot, loading, error, onRefresh, onOpen 
   )
 }
 
-interface LimitUpBoardDetailProps {
+interface LimitUpBoardDetailProps extends MarketBreadthProps {
   snapshot: ShortTermLimitUpBoardSnapshot | null
   loading: boolean
   error: string | null
@@ -150,9 +186,52 @@ interface LimitUpBoardDetailProps {
 }
 
 /** 浮层内的完整看板内容。 */
-export function LimitUpBoardDetail({ snapshot, loading, error, onRefresh }: LimitUpBoardDetailProps) {
+export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthLoading, breadthError, onRefresh }: LimitUpBoardDetailProps) {
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold text-ink-900">涨跌家数</h4>
+        <Button
+          variant="secondary"
+          icon={<RefreshCw className="h-4 w-4" />}
+          loading={loading || breadthLoading}
+          onClick={onRefresh}
+        >
+          刷新
+        </Button>
+      </div>
+      {breadth ? (
+        <div className="flex flex-col gap-2">
+          <dl className="grid grid-cols-2 border-t border-line-soft text-xs sm:grid-cols-4">
+            <Metric label="上涨" value={`${breadth.advancing} 家`} />
+            <Metric label="下跌" value={`${breadth.declining} 家`} />
+            <Metric label="平盘" value={`${breadth.unchanged} 家`} />
+            <Metric
+              label="跌停"
+              value={!error && snapshot?.available && snapshot.sentiment?.limitDownCount != null
+                ? `${snapshot.sentiment.limitDownCount} 家` : '待补充'}
+            />
+          </dl>
+          <p className="text-[11px] leading-relaxed text-ink-400">
+            {breadth.tradeDate} · 快照 {formatDateTime(breadth.fetchedAt)} · {breadth.source}。
+            全 A 股 {breadth.totalCount} 只，仅统计当日有效报价。
+            {breadth.excludedCount > 0 ? ` 排除无当日报价、价格或涨跌幅缺失的 ${breadth.excludedCount} 只。` : ''}
+            {breadthLoading ? ' 正在更新…' : ''}
+          </p>
+          {!error && snapshot?.available && snapshot.sentiment?.limitDownCount != null ? (
+            <p className="text-[11px] leading-relaxed text-ink-400">
+              跌停家数取自 {snapshot.tradeDate} 跌停池 · 快照 {formatDateTime(snapshot.fetchedAt)}。
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <p className="text-xs text-ink-400">{breadthLoading ? '正在获取涨跌家数…' : '涨跌家数暂无数据，请点击刷新。'}</p>
+      )}
+      {breadthError ? (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+          涨跌家数更新失败：{breadthError}{breadth ? '；当前保留上次快照，请注意统计时间。' : ''}
+        </p>
+      ) : null}
       {error ? (
         <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">
           涨停看板获取失败：{error}
@@ -170,16 +249,6 @@ export function LimitUpBoardDetail({ snapshot, loading, error, onRefresh }: Limi
       ) : null}
       {!error && snapshot?.available && snapshot.sentiment ? (
         <>
-          <div className="flex justify-end">
-            <Button
-              variant="secondary"
-              icon={<RefreshCw className="h-4 w-4" />}
-              loading={loading}
-              onClick={onRefresh}
-            >
-              刷新
-            </Button>
-          </div>
           <SentimentSummary
             sentiment={snapshot.sentiment}
             turnover={snapshot.marketTurnover}

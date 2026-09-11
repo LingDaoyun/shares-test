@@ -16,12 +16,28 @@ import java.util.stream.IntStream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ShortTermLimitUpBoardServiceTest {
 
     private static final LocalDate TRADE_DATE = LocalDate.parse("2026-08-21");
     private final ShortTermLimitUpBoardService service =
             new ShortTermLimitUpBoardService(mock(EastMoneyClient.class));
+
+    @Test
+    void limitDownPoolFailureKeepsTheCountUnknownInsteadOfZero() {
+        EastMoneyClient client = mock(EastMoneyClient.class);
+        when(client.fetchLimitUpPool(TRADE_DATE))
+                .thenReturn(List.of(entry("600001", "甲股", "半导体", 1, "09:25:00")));
+        when(client.fetchLimitDownPool(TRADE_DATE)).thenThrow(new IllegalStateException("跌停池超时"));
+
+        ShortTermLimitUpBoardSnapshot snapshot = new ShortTermLimitUpBoardService(client).snapshot(TRADE_DATE);
+
+        assertThat(snapshot.available()).isTrue();
+        assertThat(snapshot.sentiment().limitDownCount()).isNull();
+        assertThat(snapshot.sentiment().explanation()).doesNotContain("跌停 0 家");
+        assertThat(snapshot.dataGaps()).anyMatch(gap -> gap.contains("跌停家数缺失"));
+    }
 
     @Test
     void industryStatsGroupCountBoardDepthAndLeaders() {

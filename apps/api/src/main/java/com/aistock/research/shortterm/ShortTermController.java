@@ -51,6 +51,11 @@ public class ShortTermController {
         return shortTermService.industryLeaderSnapshot(code, name, flow, limit == null ? 20 : limit);
     }
 
+    @GetMapping("/market-breadth")
+    public ShortTermMarketBreadth marketBreadth() {
+        return limitUpBoardService.marketBreadth();
+    }
+
     @GetMapping("/report")
     public ShortTermReport report(
             @RequestParam(required = false) Integer limit,

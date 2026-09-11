@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { ShortTermLimitUpBoardSnapshot } from '../../types'
+import type { ShortTermLimitUpBoardSnapshot, ShortTermMarketBreadth } from '../../types'
 import { LimitUpBoardDetail, LimitUpBoardEntry } from './LimitUpBoardPanel'
 
 const snapshot: ShortTermLimitUpBoardSnapshot = {
@@ -88,6 +88,12 @@ const snapshot: ShortTermLimitUpBoardSnapshot = {
   dataGaps: []
 }
 
+const breadth: ShortTermMarketBreadth = {
+  tradeDate: '2026-08-21', fetchedAt: '2026-08-21T15:26:00Z',
+  advancing: 2500, declining: 3000, unchanged: 50, excludedCount: 10,
+  totalCount: 5560, source: '东方财富行情'
+}
+
 describe('LimitUpBoardEntry', () => {
   it('renders a one-line summary without the full tables', () => {
     const html = renderToStaticMarkup(
@@ -103,6 +109,7 @@ describe('LimitUpBoardEntry', () => {
     expect(html).toContain('涨停看板')
     expect(html).toContain('情绪冰点')
     expect(html).toContain('涨停 2 家')
+    expect(html).toContain('跌停 0 家')
     expect(html).toContain('炸板率')
     expect(html).toContain('33.33%')
     expect(html).toContain('最高 2 连板')
@@ -137,7 +144,9 @@ describe('LimitUpBoardEntry', () => {
     )
 
     expect(html).toContain('当日涨停池为空')
-    expect(html).toContain('<button disabled=""')
+    // 涨跌统计独立于涨停池，仍允许打开详情查看统计或错误原因。
+    expect(html).toContain('查看看板')
+    expect(html).not.toContain('<button disabled=""')
   })
 
   it('surfaces fetch failures inline with a retry entry', () => {
@@ -157,6 +166,31 @@ describe('LimitUpBoardEntry', () => {
 })
 
 describe('LimitUpBoardDetail', () => {
+  it('shows limit-down counts beside breadth and keeps missing counts distinct from zero', () => {
+    const available = renderToStaticMarkup(
+      <LimitUpBoardDetail snapshot={snapshot} breadth={breadth} loading={false} error={null} onRefresh={() => undefined} />
+    )
+    const firstMetrics = available.match(/<dl[^>]*>([\s\S]*?)<\/dl>/)?.[1]
+    expect(firstMetrics).toContain('上涨')
+    expect(firstMetrics).toContain('下跌')
+    expect(firstMetrics).toContain('平盘')
+    expect(firstMetrics).toContain('跌停')
+    expect(firstMetrics).toContain('0 家')
+
+    const missingSnapshot = { ...snapshot, sentiment: { ...snapshot.sentiment!, limitDownCount: null } }
+    const missing = renderToStaticMarkup(
+      <LimitUpBoardDetail snapshot={missingSnapshot} breadth={breadth} loading={false} error={null} onRefresh={() => undefined} />
+    )
+    const missingMetrics = missing.match(/<dl[^>]*>([\s\S]*?)<\/dl>/)?.[1]
+    expect(missingMetrics).toContain('跌停')
+    expect(missingMetrics).toContain('待补充')
+    const entry = renderToStaticMarkup(
+      <LimitUpBoardEntry snapshot={missingSnapshot} loading={false} error={null} onRefresh={() => undefined} onOpen={() => undefined} />
+    )
+    expect(entry).toContain('跌停 待补充')
+    expect(entry).not.toContain('跌停 0 家')
+  })
+
   it('renders the full board metrics, industries and stock rows inside the overlay body', () => {
     const html = renderToStaticMarkup(
       <LimitUpBoardDetail

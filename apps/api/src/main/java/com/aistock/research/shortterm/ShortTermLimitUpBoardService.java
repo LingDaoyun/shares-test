@@ -1,10 +1,12 @@
 package com.aistock.research.shortterm;
 
+import com.aistock.research.integration.eastmoney.AshareQuoteSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyBrokenBoardPoolEntry;
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
 import com.aistock.research.integration.eastmoney.EastMoneyIndexVolumeBar;
 import com.aistock.research.integration.eastmoney.EastMoneyLimitDownPoolEntry;
 import com.aistock.research.integration.eastmoney.EastMoneyLimitUpPoolEntry;
+import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -48,8 +50,12 @@ public class ShortTermLimitUpBoardService {
 
     private final EastMoneyClient eastMoneyClient;
     private final Map<LocalDate, CachedSnapshot> cache = new ConcurrentHashMap<>();
+    private CachedBreadth cachedBreadth;
 
     private record CachedSnapshot(ShortTermLimitUpBoardSnapshot snapshot, Instant expiresAt) {
+    }
+
+    private record CachedBreadth(ShortTermMarketBreadth snapshot, Instant expiresAt) {
     }
 
     public ShortTermLimitUpBoardService(EastMoneyClient eastMoneyClient) {
@@ -66,6 +72,49 @@ public class ShortTermLimitUpBoardService {
         ShortTermLimitUpBoardSnapshot snapshot = fetchSnapshot(tradeDate);
         cache.put(tradeDate, new CachedSnapshot(snapshot, now.plusSeconds(SNAPSHOT_TTL_SECONDS)));
         return snapshot;
+    }
+
+    /** 单独加载并缓存涨跌统计，避免涨停池脉冲和选股扫描重复拉取全市场报价。 */
+    public synchronized ShortTermMarketBreadth marketBreadth() {
+        LocalDate tradeDate = LocalDate.now(CHINA_MARKET_ZONE);
+        Instant now = Instant.now();
+        if (cachedBreadth != null && tradeDate.equals(cachedBreadth.snapshot().tradeDate())
+                && now.isBefore(cachedBreadth.expiresAt())) {
+            return cachedBreadth.snapshot();
+        }
+        AshareQuoteSnapshot quotes = eastMoneyClient.fetchAshareQuoteSnapshot(Integer.MAX_VALUE);
+        if (!quotes.complete() || quotes.expectedCount() <= 0
+                || quotes.quotes().size() != quotes.expectedCount()) {
+            throw new IllegalStateException("全市场行情覆盖不足，暂不展示涨跌家数（已获取 "
+                    + quotes.fetchedCount() + "/" + quotes.expectedCount() + "）");
+        }
+        int advancing = 0;
+        int declining = 0;
+        int unchanged = 0;
+        int excludedCount = 0;
+        for (EastMoneyQuote quote : quotes.quotes()) {
+            if (!tradeDate.equals(quote.tradeDate()) || quote.latestPrice() == null
+                    || quote.latestPrice().signum() <= 0 || quote.changePercent() == null) {
+                excludedCount++;
+                continue;
+            }
+            int direction = quote.changePercent().signum();
+            if (direction > 0) {
+                advancing++;
+            } else if (direction < 0) {
+                declining++;
+            } else {
+                unchanged++;
+            }
+        }
+        if (advancing + declining + unchanged == 0) {
+            throw new IllegalStateException("尚无 " + tradeDate + " 的有效涨跌报价，可能是盘前或非交易日");
+        }
+        ShortTermMarketBreadth breadth = new ShortTermMarketBreadth(
+                tradeDate, quotes.fetchedAt(), advancing, declining, unchanged,
+                excludedCount, quotes.expectedCount(), quotes.source());
+        cachedBreadth = new CachedBreadth(breadth, Instant.now().plusSeconds(SNAPSHOT_TTL_SECONDS));
+        return breadth;
     }
 
     /**
@@ -112,7 +161,7 @@ public class ShortTermLimitUpBoardService {
             logger.warn("炸板池获取失败：{}", rootMessage(exception));
             dataGaps.add("炸板池获取失败，炸板率缺失：" + rootMessage(exception));
         }
-        List<EastMoneyLimitDownPoolEntry> limitDownEntries = List.of();
+        List<EastMoneyLimitDownPoolEntry> limitDownEntries = null;
         try {
             limitDownEntries = eastMoneyClient.fetchLimitDownPool(tradeDate);
         } catch (Exception exception) {
@@ -290,7 +339,7 @@ public class ShortTermLimitUpBoardService {
                 brokenBoardAvailable,
                 brokenStocks,
                 industryStats(limitUpEntries),
-                sentiment(limitUpEntries, brokenEntries.size(), limitDownEntries.size()),
+                sentiment(limitUpEntries, brokenEntries.size(), limitDownEntries == null ? null : limitDownEntries.size()),
                 marketTurnover,
                 dataGaps
         );
