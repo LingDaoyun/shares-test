@@ -785,6 +785,7 @@ CSV 行字段映射：
 | 机制 | 当前实现 |
 | --- | --- |
 | 东方财富 Host 轮询 | 对 `push2.eastmoney.com`、`push2delay.eastmoney.com` 和数字前缀 `*.push2.eastmoney.com` 做候选 Host 轮询。候选包括 `push2delay`、`push2`、`17.push2`、`29.push2`、`73.push2`、`91.push2`。 |
+| 全市场行情备用 | 东方财富无法返回行情时，分页获取新浪 `Market_Center.getHQNodeData?node=hs_a` 的沪深北证券清单，复用腾讯批量行情；清单前后总数一致、实际返回覆盖完整才标记完整。另核验申万证券Ⅱ `sw2_490100` 完整清单并补充证券行业标记，保留原券商排除规则；行业清单不完整则报错。股票缺失、重复冲突或规模变化仍受原覆盖率和交易时间门禁约束。 |
 | 东方财富限速 | 同进程内最小请求间隔 650 ms。 |
 | 东方财富请求方式 | 先 `RestClient`，失败后使用 `curl -L --compressed --ipv4 --http1.1` 兜底。 |
 | 腾讯编码 | `qt.gtimg.cn` 响应按 GB18030 解码。 |

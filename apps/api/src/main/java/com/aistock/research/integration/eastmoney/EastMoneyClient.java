@@ -25,11 +25,14 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
@@ -55,6 +58,8 @@ public class EastMoneyClient {
     private static final String INDUSTRY_BOARD_FILTER = "m:90 t:2 f:!50";
     private static final String INDUSTRY_FUND_FLOW_FILTER = "m:90+t:2+f:!50";
     private static final int MAX_QUOTE_PAGE_SIZE = 100;
+    private static final int SINA_QUOTE_PAGE_SIZE = 80;
+    private static final String SINA_QUOTE_API = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.";
     private static final int SNAPSHOT_PAGE_ATTEMPTS = 2;
     private static final int EASTMONEY_ATTEMPTS = 1;
     private static final int EASTMONEY_REMOTE_ATTEMPTS = 3;
@@ -144,6 +149,100 @@ public class EastMoneyClient {
     }
 
     public AshareQuoteSnapshot fetchAshareQuoteSnapshot(int limit) {
+        try {
+            return fetchEastMoneyQuoteSnapshot(limit);
+        } catch (RuntimeException eastMoneyFailure) {
+            logger.warn("东方财富全市场行情不可用，改用新浪证券清单和腾讯行情：{}", rootMessage(eastMoneyFailure));
+            try {
+                return fetchTencentAshareQuoteSnapshot(limit);
+            } catch (RuntimeException backupFailure) {
+                backupFailure.addSuppressed(eastMoneyFailure);
+                throw new IllegalStateException("A股全市场行情主备数据源均不可用：" + rootMessage(backupFailure), backupFailure);
+            }
+        }
+    }
+
+    private AshareQuoteSnapshot fetchTencentAshareQuoteSnapshot(int limit) {
+        int requestedCount = Math.max(1, limit);
+        try {
+            SinaSymbolList universe = fetchSinaSymbols("hs_a", requestedCount);
+            Set<String> symbols = new java.util.LinkedHashSet<>(universe.symbols());
+            // Tencent quotes have no industry field. Verify Sina's Shenwan securities node
+            // so the existing securities/broker exclusion still works during an EastMoney outage.
+            SinaSymbolList securities = fetchSinaSymbols("sw2_490100", Integer.MAX_VALUE);
+            if (securities.expectedCount() <= 0 || securities.symbols().size() != securities.expectedCount()) {
+                throw new IllegalStateException("新浪证券行业清单不完整，无法保留证券/券商排除规则");
+            }
+            Set<String> securitiesSymbols = new HashSet<>(securities.symbols());
+            int expectedCount = universe.expectedCount();
+            Map<String, EastMoneyQuote> quotes = new LinkedHashMap<>();
+            Set<String> conflicts = new HashSet<>();
+            for (EastMoneyQuote quote : fetchTencentQuotes(new ArrayList<>(symbols), Integer.MAX_VALUE)) {
+                if (!symbols.contains(quote.symbol()) || conflicts.contains(quote.symbol())) continue;
+                EastMoneyQuote previous = quotes.putIfAbsent(quote.symbol(), quote);
+                if (previous != null && !sameExecutionQuote(previous, quote)) {
+                    quotes.remove(quote.symbol());
+                    conflicts.add(quote.symbol());
+                }
+            }
+            if (quotes.isEmpty()) {
+                throw new IllegalStateException("腾讯全市场行情返回空数据");
+            }
+            List<EastMoneyQuote> rows = quotes.values().stream().limit(requestedCount)
+                    .map(quote -> securitiesSymbols.contains(quote.symbol()) ? new EastMoneyQuote(
+                            quote.symbol(), quote.name(), quote.market(), "证券", quote.latestPrice(),
+                            quote.changePercent(), quote.turnoverRate(), quote.volume(), quote.amount(),
+                            quote.peRatio(), quote.pbRatio(), quote.peTtm(), quote.sourceName(), quote.quoteUrl(),
+                            quote.fetchedAt(), quote.tradeDate(), quote.marketTimestamp(), quote.totalMarketValue(),
+                            quote.openPrice(), quote.highPrice(), quote.lowPrice(), quote.realtimeVolumeRatio(),
+                            quote.circulatingMarketValue()) : quote)
+                    .toList();
+            return new AshareQuoteSnapshot(
+                    rows, requestedCount, expectedCount, rows.size(), Math.max(0, expectedCount - rows.size()),
+                    expectedCount > 0 && rows.size() == expectedCount,
+                    "新浪全市场证券列表 + 腾讯行情（东方财富不可用）",
+                    rows.stream().map(EastMoneyQuote::fetchedAt).filter(Objects::nonNull)
+                            .max(Instant::compareTo).orElseGet(Instant::now)
+            );
+        } catch (Exception exception) {
+            throw new IllegalStateException("新浪/腾讯全市场备用行情获取失败", exception);
+        }
+    }
+
+    private SinaSymbolList fetchSinaSymbols(String node, int limit) throws Exception {
+        String countUrl = SINA_QUOTE_API + "getHQNodeStockCount?node=" + node;
+        int initialCount = objectMapper.readTree(fetchBody(countUrl)).asInt(0);
+        if (initialCount <= 0) {
+            throw new IllegalStateException("新浪证券总数无效：" + node);
+        }
+        int target = Math.min(Math.max(1, limit), initialCount);
+        int pageCount = Math.min(160, (target + SINA_QUOTE_PAGE_SIZE - 1) / SINA_QUOTE_PAGE_SIZE);
+        Set<String> symbols = new java.util.LinkedHashSet<>();
+        for (int page = 1; page <= pageCount && symbols.size() < target; page++) {
+            String url = SINA_QUOTE_API + "getHQNodeData?node=" + node + "&page=" + page
+                    + "&num=" + SINA_QUOTE_PAGE_SIZE + "&sort=symbol&asc=1";
+            JsonNode rows = objectMapper.readTree(fetchBody(url));
+            if (rows == null || !rows.isArray()) {
+                throw new IllegalStateException("新浪证券清单结构异常：" + node);
+            }
+            for (JsonNode row : rows) {
+                String symbol = row.path("code").asText("");
+                if (symbol.matches("\\d{6}") && row.path("symbol").asText("").equals(tencentCode(symbol))) {
+                    symbols.add(symbol);
+                }
+                if (symbols.size() >= target) break;
+            }
+        }
+        if (symbols.isEmpty()) {
+            throw new IllegalStateException("新浪证券清单为空：" + node);
+        }
+        int finalCount = objectMapper.readTree(fetchBody(countUrl)).asInt(0);
+        return new SinaSymbolList(finalCount == initialCount ? initialCount : 0, List.copyOf(symbols));
+    }
+
+    private record SinaSymbolList(int expectedCount, List<String> symbols) {}
+
+    private AshareQuoteSnapshot fetchEastMoneyQuoteSnapshot(int limit) {
         int requestedCount = Math.max(1, limit);
         int pageSize = Math.min(MAX_QUOTE_PAGE_SIZE, Math.max(50, requestedCount));
         Map<String, EastMoneyQuote> merged = new LinkedHashMap<>();
@@ -218,6 +317,19 @@ public class EastMoneyClient {
                         .max(Instant::compareTo)
                         .orElseGet(Instant::now)
         );
+    }
+
+    private boolean sameExecutionQuote(EastMoneyQuote first, EastMoneyQuote second) {
+        return sameDecimal(first.latestPrice(), second.latestPrice())
+                && sameDecimal(first.openPrice(), second.openPrice())
+                && sameDecimal(first.changePercent(), second.changePercent())
+                && sameDecimal(first.volume(), second.volume())
+                && Objects.equals(first.tradeDate(), second.tradeDate())
+                && Objects.equals(first.marketTimestamp(), second.marketTimestamp());
+    }
+
+    private boolean sameDecimal(BigDecimal first, BigDecimal second) {
+        return first == second || first != null && second != null && first.compareTo(second) == 0;
     }
 
     private AshareQuotePage fetchSnapshotPage(int pageNumber, int pageSize) {
@@ -1863,6 +1975,14 @@ public class EastMoneyClient {
         if (amount != null) {
             amount = amount.multiply(BigDecimal.valueOf(10000));
         }
+        BigDecimal totalMarketValue = positiveOrNull(decimal(fields[45]));
+        BigDecimal circulatingMarketValue = positiveOrNull(decimal(fields[44]));
+        if (totalMarketValue != null) {
+            totalMarketValue = totalMarketValue.multiply(BigDecimal.valueOf(100000000));
+        }
+        if (circulatingMarketValue != null) {
+            circulatingMarketValue = circulatingMarketValue.multiply(BigDecimal.valueOf(100000000));
+        }
         Instant marketTimestamp = parseTencentQuoteTimestamp(fields[30]);
         return java.util.Optional.of(new EastMoneyQuote(
                 symbol,
@@ -1882,10 +2002,12 @@ public class EastMoneyClient {
                 fetchedAt,
                 tradeDate(marketTimestamp),
                 marketTimestamp,
-                null,
+                totalMarketValue,
                 positiveOrNull(decimal(fields[5])),
                 positiveOrNull(decimal(fields[33])),
-                positiveOrNull(decimal(fields[34]))
+                positiveOrNull(decimal(fields[34])),
+                fields.length > 49 ? positiveOrNull(decimal(fields[49])) : null,
+                circulatingMarketValue
         ));
     }
 

@@ -1461,6 +1461,20 @@ class ShortTermServiceTest {
     }
 
     @Test
+    void shouldExcludeClassifiedSecuritiesWithoutTheDynamicBoardOrSecuritiesInTheirName() {
+        eastMoneyClient.unstableIndustrySymbols = Set.of();
+        eastMoneyClient.quotes = List.of(
+                quoteWithIndustry("601995", "中金公司", "证券", "31.20", "1.10", "26.00", "3.20", "300000000")
+        );
+
+        ShortTermReport report = service.report(5, 100, 5, null, null, null, null, null, null, true);
+
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).doesNotContain("601995");
+        assertThat(report.exclusions()).filteredOn(exclusion -> "601995".equals(exclusion.symbol()))
+                .singleElement().satisfies(exclusion -> assertThat(exclusion.category()).isEqualTo("UNSTABLE_INDUSTRY"));
+    }
+
+    @Test
     void shouldExcludeQuotesAboveConfiguredEntryRiseLimitFromRecommendations() {
         eastMoneyClient.quotes = List.of(
                 quote("600002", "急拉股份", "12.90", "6.60", "18.00", "1.80", "260000000")
