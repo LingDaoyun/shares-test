@@ -1164,9 +1164,29 @@ public class EastMoneyClient {
             if (expectedCount > 0 && quotes.size() >= expectedCount) break;
         }
         List<EastMoneyQuote> rows = List.copyOf(quotes.values());
+        boolean complete = consistent && expectedCount > 0 && rows.size() == expectedCount;
+        String source = "东方财富行业行情";
+        if (complete && rows.stream().noneMatch(quote -> quote.latestPrice() != null
+                && quote.latestPrice().signum() > 0 && quote.changePercent() != null)) {
+            // 行业接口可能只返回成分代码；保留已确认的行业范围，用腾讯报价的真实时间补齐行情。
+            Set<String> symbols = new java.util.LinkedHashSet<>(quotes.keySet());
+            quotes.clear();
+            conflicts.clear();
+            for (EastMoneyQuote quote : fetchTencentQuotes(new ArrayList<>(symbols), Integer.MAX_VALUE)) {
+                if (!symbols.contains(quote.symbol()) || conflicts.contains(quote.symbol())) continue;
+                EastMoneyQuote previous = quotes.putIfAbsent(quote.symbol(), quote);
+                if (previous != null && !sameExecutionQuote(previous, quote)) {
+                    quotes.remove(quote.symbol());
+                    conflicts.add(quote.symbol());
+                }
+            }
+            rows = List.copyOf(quotes.values());
+            complete = rows.size() == expectedCount;
+            source = "东方财富行业成分 + 腾讯行情";
+        }
         return new AshareQuoteSnapshot(rows, Integer.MAX_VALUE, expectedCount, rows.size(),
-                Math.max(0, expectedCount - rows.size()), consistent && expectedCount > 0 && rows.size() == expectedCount,
-                "东方财富行业行情", rows.stream().map(EastMoneyQuote::fetchedAt).filter(Objects::nonNull)
+                Math.max(0, expectedCount - rows.size()), complete,
+                source, rows.stream().map(EastMoneyQuote::fetchedAt).filter(Objects::nonNull)
                 .max(Instant::compareTo).orElseGet(Instant::now));
     }
 
