@@ -6,6 +6,7 @@ import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { Spinner } from '../ui/Loader'
 import { Tag } from '../ui/Badge'
+import { LimitUpIndustryOverlay, type LimitUpIndustrySelection } from './LimitUpIndustryOverlay'
 import { formatAmount, formatDateTime, formatPercent, formatSignedPercent } from '../../lib/format'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment, ShortTermMarketBreadth, ShortTermMarketTurnover } from '../../types'
 
@@ -33,6 +34,7 @@ export function LimitUpBoardPanel() {
   const [breadthLoading, setBreadthLoading] = useState(false)
   const [breadthError, setBreadthError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
+  const [industrySelection, setIndustrySelection] = useState<LimitUpIndustrySelection | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -80,7 +82,7 @@ export function LimitUpBoardPanel() {
             ? `${snapshot.tradeDate} · 快照 ${formatDateTime(snapshot.fetchedAt)}（盘中口径随时变化）`
             : undefined
         }
-        onClose={() => setOpen(false)}
+        onClose={() => industrySelection ? setIndustrySelection(null) : setOpen(false)}
       >
         <LimitUpBoardDetail
           snapshot={snapshot}
@@ -90,8 +92,17 @@ export function LimitUpBoardPanel() {
           breadthLoading={breadthLoading}
           breadthError={breadthError}
           onRefresh={() => void refresh()}
+          onSelectIndustry={(industry) => {
+            if (!snapshot) return
+            setIndustrySelection({ industry, tradeDate: snapshot.tradeDate,
+              limitUpStocks: snapshot.stocks.filter(stock => (stock.industry?.trim() || '未分类') === industry) })
+          }}
         />
       </DetailOverlay>
+      {industrySelection ? (
+        <LimitUpIndustryOverlay key={`${industrySelection.tradeDate}:${industrySelection.industry}`}
+          selection={industrySelection} onClose={() => setIndustrySelection(null)} />
+      ) : null}
     </>
   )
 }
@@ -183,10 +194,11 @@ interface LimitUpBoardDetailProps extends MarketBreadthProps {
   loading: boolean
   error: string | null
   onRefresh: () => void
+  onSelectIndustry?: (industry: string) => void
 }
 
 /** 浮层内的完整看板内容。 */
-export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthLoading, breadthError, onRefresh }: LimitUpBoardDetailProps) {
+export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthLoading, breadthError, onRefresh, onSelectIndustry }: LimitUpBoardDetailProps) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-2">
@@ -254,7 +266,7 @@ export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthL
             turnover={snapshot.marketTurnover}
             stockCount={snapshot.stocks.length}
           />
-          <IndustryBoard snapshot={snapshot} />
+          <IndustryBoard snapshot={snapshot} onSelectIndustry={onSelectIndustry} />
           <LimitUpTable snapshot={snapshot} />
           <p className="text-[11px] leading-relaxed text-ink-400">
             {snapshot.sentiment.explanation}
@@ -344,7 +356,7 @@ function SealBucket({ label, count, total }: { label: string; count: number; tot
   )
 }
 
-function IndustryBoard({ snapshot }: { snapshot: ShortTermLimitUpBoardSnapshot }) {
+function IndustryBoard({ snapshot, onSelectIndustry }: { snapshot: ShortTermLimitUpBoardSnapshot; onSelectIndustry?: (industry: string) => void }) {
   if (!snapshot.industryStats.length) {
     return <p className="text-xs leading-relaxed text-ink-500">行业聚合暂无数据。</p>
   }
@@ -357,9 +369,13 @@ function IndustryBoard({ snapshot }: { snapshot: ShortTermLimitUpBoardSnapshot }
           <div key={stat.industry} className="rounded-xl border border-line-soft bg-white/80 px-3 py-2">
             <div className="flex items-center justify-between gap-2">
               <span className="truncate text-sm font-semibold text-ink-900">{stat.industry}</span>
-              <Tag tone={stat.maxConsecutiveBoards >= 3 ? 'danger' : 'warning'}>
-                {stat.limitUpCount} 家 · 最高 {stat.maxConsecutiveBoards} 板
-              </Tag>
+              <button type="button" aria-label={`查看${stat.industry}涨停及上涨股票`}
+                className="rounded-md outline-none transition hover:bg-amber-50 focus-visible:ring-2 focus-visible:ring-brand-300"
+                onClick={() => onSelectIndustry?.(stat.industry)}>
+                <Tag tone={stat.maxConsecutiveBoards >= 3 ? 'danger' : 'warning'}>
+                  {stat.limitUpCount} 家 · 最高 {stat.maxConsecutiveBoards} 板
+                </Tag>
+              </button>
             </div>
             <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-line">
               <div

@@ -26,6 +26,7 @@ import type {
   ShortTermScanJobStatus,
   ShortTermIndustryLeaderSnapshot,
   ShortTermLimitUpBoardSnapshot,
+  ShortTermLimitUpIndustrySnapshot,
   ShortTermMarketBreadth,
   ShortTermValidationBatchRequest,
   ShortTermValidationSummary,
@@ -191,6 +192,12 @@ export function fetchShortTermLimitUpBoard(date?: string) {
       params: date ? { date } : undefined
     })
     .then((res) => res.data)
+}
+
+export function fetchShortTermLimitUpIndustry(industry: string, date: string) {
+  return http.get<ShortTermLimitUpIndustrySnapshot>('/short-term/limit-up-board/industry', {
+    params: { industry, date }
+  }).then((res) => res.data)
 }
 
 export function fetchShortTermMarketBreadth() {

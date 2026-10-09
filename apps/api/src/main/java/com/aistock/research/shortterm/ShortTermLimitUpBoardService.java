@@ -24,7 +24,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * 涨停看板服务：拉取东方财富涨停池/炸板池/跌停池，聚合行业分布、连板梯队、
@@ -72,6 +74,56 @@ public class ShortTermLimitUpBoardService {
         ShortTermLimitUpBoardSnapshot snapshot = fetchSnapshot(tradeDate);
         cache.put(tradeDate, new CachedSnapshot(snapshot, now.plusSeconds(SNAPSHOT_TTL_SECONDS)));
         return snapshot;
+    }
+
+    public ShortTermLimitUpIndustrySnapshot industrySnapshot(String industry, LocalDate date) {
+        if (industry == null || industry.isBlank()) throw new IllegalArgumentException("行业名称不能为空");
+        String industryName = industry.trim();
+        ShortTermLimitUpBoardSnapshot board = snapshot(date);
+        if (!board.available()) throw new IllegalStateException(board.unavailableReason());
+        List<ShortTermLimitUpStock> sealed = board.stocks().stream()
+                .filter(stock -> industryName.equals(stock.industry() == null || stock.industry().isBlank()
+                        ? UNCLASSIFIED_INDUSTRY : stock.industry()))
+                .toList();
+        List<String> gaps = new ArrayList<>();
+        List<ShortTermIndustryRisingStock> rising = List.of();
+        boolean risingAvailable = false;
+        String source = null;
+        if (UNCLASSIFIED_INDUSTRY.equals(industryName)) {
+            gaps.add("未分类股票无法匹配行业成分，未涨停上涨股暂缺。");
+        } else {
+            try {
+                AshareQuoteSnapshot quotes = eastMoneyClient.fetchIndustryBoardQuoteSnapshot(industryName);
+                source = quotes.source();
+                if (!quotes.complete()) throw new IllegalStateException("行业行情覆盖不足，无法确认涨幅排名");
+                List<EastMoneyQuote> dated = quotes.quotes().stream()
+                        .filter(quote -> board.tradeDate().equals(quote.tradeDate()))
+                        .filter(quote -> quote.latestPrice() != null && quote.latestPrice().signum() > 0
+                                && quote.changePercent() != null)
+                        .toList();
+                if (dated.isEmpty()) throw new IllegalStateException("行业行情日期与看板日期不匹配或有效报价缺失");
+                Set<String> sealedSymbols = board.stocks().stream().map(ShortTermLimitUpStock::symbol)
+                        .collect(Collectors.toSet());
+                Map<String, EastMoneyQuote> unique = new LinkedHashMap<>();
+                for (EastMoneyQuote quote : dated) {
+                    if (quote.symbol() != null && !quote.symbol().isBlank() && quote.changePercent().signum() > 0
+                            && !sealedSymbols.contains(quote.symbol())) unique.putIfAbsent(quote.symbol(), quote);
+                }
+                rising = unique.values().stream()
+                        .sorted(Comparator.comparing(EastMoneyQuote::changePercent).reversed()
+                                .thenComparing(EastMoneyQuote::amount, Comparator.nullsLast(Comparator.reverseOrder()))
+                                .thenComparing(EastMoneyQuote::symbol))
+                        .limit(30)
+                        .map(quote -> new ShortTermIndustryRisingStock(quote.symbol(), quote.name(), quote.latestPrice(),
+                                quote.changePercent(), quote.amount(), quote.turnoverRate(), quote.marketTimestamp()))
+                        .toList();
+                risingAvailable = true;
+            } catch (RuntimeException exception) {
+                gaps.add("行业未涨停上涨股暂缺：" + rootMessage(exception));
+            }
+        }
+        return new ShortTermLimitUpIndustrySnapshot(board.tradeDate(), industryName, board.fetchedAt(),
+                sealed.size(), sealed, rising, risingAvailable, gaps, source);
     }
 
     /** 单独加载并缓存涨跌统计，避免涨停池脉冲和选股扫描重复拉取全市场报价。 */

@@ -1116,26 +1116,14 @@ public class EastMoneyClient {
         int pageSize = 100;
         int maxPages = 8;
         List<EastMoneyIndustryBoard> boards = new ArrayList<>();
-        Exception lastException = null;
         for (int pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
-            String url = "https://17.push2.eastmoney.com/api/qt/clist/get"
-                    + "?pn=" + pageNumber
-                    + "&pz=" + pageSize
-                    + "&po=1"
-                    + "&np=1"
-                    + "&ut=bd1d9ddb04089700cf9c27f6f7426281"
-                    + "&fltt=2"
-                    + "&invt=2"
-                    + "&fid=f3"
-                    + "&fs=" + encodeQueryValue(INDUSTRY_BOARD_FILTER)
-                    + "&fields=" + INDUSTRY_BOARD_FIELDS;
             try {
-                JsonNode root = fetchQuoteRoot(url);
-                JsonNode diff = root.path("data").path("diff");
-                if (!diff.isArray() || diff.isEmpty()) {
+                JsonNode root = fetchIndustryBoardPage(pageNumber, pageSize);
+                List<JsonNode> items = diffItems(root.path("data").path("diff"));
+                if (items.isEmpty()) {
                     break;
                 }
-                for (JsonNode item : diff) {
+                for (JsonNode item : items) {
                     readIndustryBoard(item).ifPresent(boards::add);
                 }
                 int total = root.path("data").path("total").asInt(boards.size());
@@ -1143,16 +1131,72 @@ public class EastMoneyClient {
                     break;
                 }
             } catch (Exception exception) {
-                lastException = exception;
-                if (!boards.isEmpty()) {
-                    break;
-                }
+                throw new IllegalStateException("东方财富行业板块列表获取失败", exception);
             }
         }
-        if (boards.isEmpty() && lastException != null) {
-            throw new IllegalStateException("东方财富行业板块列表获取失败", lastException);
-        }
         return boards.stream().distinct().toList();
+    }
+
+    public AshareQuoteSnapshot fetchIndustryBoardQuoteSnapshot(String industryName) {
+        String boardCode = resolveIndustryBoardCode(industryName);
+        if (boardCode == null) {
+            throw new IllegalStateException("未找到行业板块：" + industryName);
+        }
+        Map<String, EastMoneyQuote> quotes = new LinkedHashMap<>();
+        Set<String> conflicts = new HashSet<>();
+        int expectedCount = 0;
+        boolean consistent = true;
+        for (int pageNumber = 1; pageNumber <= 160; pageNumber++) {
+            AshareQuotePage page = fetchIndustryBoardQuotePage(boardCode, pageNumber, MAX_QUOTE_PAGE_SIZE);
+            if (page.quotes().isEmpty()) break;
+            if (page.totalCount() <= 0) consistent = false;
+            else if (expectedCount == 0) expectedCount = page.totalCount();
+            else if (expectedCount != page.totalCount()) consistent = false;
+            for (EastMoneyQuote quote : page.quotes()) {
+                String symbol = quote.symbol();
+                if (symbol == null || symbol.isBlank() || conflicts.contains(symbol)) continue;
+                EastMoneyQuote previous = quotes.putIfAbsent(symbol, quote);
+                if (previous != null && !sameExecutionQuote(previous, quote)) {
+                    quotes.remove(symbol);
+                    conflicts.add(symbol);
+                }
+            }
+            if (expectedCount > 0 && quotes.size() >= expectedCount) break;
+        }
+        List<EastMoneyQuote> rows = List.copyOf(quotes.values());
+        return new AshareQuoteSnapshot(rows, Integer.MAX_VALUE, expectedCount, rows.size(),
+                Math.max(0, expectedCount - rows.size()), consistent && expectedCount > 0 && rows.size() == expectedCount,
+                "东方财富行业行情", rows.stream().map(EastMoneyQuote::fetchedAt).filter(Objects::nonNull)
+                .max(Instant::compareTo).orElseGet(Instant::now));
+    }
+
+    AshareQuotePage fetchIndustryBoardQuotePage(String boardCode, int pageNumber, int pageSize) {
+        JsonNode data = fetchQuoteRoot(industryQuotePageUrl(boardCode, pageNumber, pageSize)).path("data");
+        List<EastMoneyQuote> quotes = new ArrayList<>();
+        Instant fetchedAt = Instant.now();
+        for (JsonNode item : diffItems(data.path("diff"))) readQuote(item, fetchedAt).ifPresent(quotes::add);
+        return new AshareQuotePage(data.path("total").asInt(0), quotes);
+    }
+
+    JsonNode fetchIndustryBoardPage(int pageNumber, int pageSize) {
+        String url = "https://17.push2.eastmoney.com/api/qt/clist/get"
+                + "?pn=" + pageNumber
+                + "&pz=" + pageSize
+                + "&po=1"
+                + "&np=1"
+                + "&ut=bd1d9ddb04089700cf9c27f6f7426281"
+                + "&fltt=2"
+                + "&invt=2"
+                + "&fid=f3"
+                + "&fs=" + encodeQueryValue(INDUSTRY_BOARD_FILTER)
+                + "&fields=" + INDUSTRY_BOARD_FIELDS;
+        return fetchQuoteRoot(url);
+    }
+
+    String industryQuotePageUrl(String boardCode, int pageNumber, int pageSize) {
+        return "https://29.push2.eastmoney.com/api/qt/clist/get?pn=" + pageNumber
+                + "&pz=" + pageSize + "&po=1&np=1&fltt=0&invt=2&fid=f3"
+                + "&fs=" + encodeQueryValue("b:" + boardCode + " f:!50") + "&fields=" + QUOTE_FIELDS;
     }
 
     public List<EastMoneyQuote> fetchIndustryBoardConstituents(String industryName, int limit) {

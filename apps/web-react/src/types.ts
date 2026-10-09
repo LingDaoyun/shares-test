@@ -1409,6 +1409,28 @@ export interface ShortTermLimitUpIndustryStat {
   leaders: string[]
 }
 
+export interface ShortTermIndustryRisingStock {
+  symbol: string
+  name: string
+  latestPrice: number
+  changePercent: number
+  amount: number | null
+  turnoverRate: number | null
+  marketTimestamp: string | null
+}
+
+export interface ShortTermLimitUpIndustrySnapshot {
+  tradeDate: string
+  industry: string
+  fetchedAt: string
+  limitUpCount: number
+  limitUpStocks: ShortTermLimitUpStock[]
+  risingStocks: ShortTermIndustryRisingStock[]
+  risingAvailable: boolean
+  dataGaps: string[]
+  quoteSource: string | null
+}
+
 export interface ShortTermLimitUpSentiment {
   limitUpCount: number
   brokenCount: number | null

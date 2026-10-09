@@ -41,6 +41,14 @@ public class ShortTermController {
         return limitUpBoardService.snapshot(date);
     }
 
+    @GetMapping("/limit-up-board/industry")
+    public ShortTermLimitUpIndustrySnapshot limitUpIndustry(
+            @RequestParam String industry,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+    ) {
+        return limitUpBoardService.industrySnapshot(industry, date);
+    }
+
     @GetMapping("/industry-fund-leaders")
     public ShortTermIndustryLeaderSnapshot industryFundLeaders(
             @RequestParam String code,
