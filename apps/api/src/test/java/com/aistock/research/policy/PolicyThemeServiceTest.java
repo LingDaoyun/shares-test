@@ -35,6 +35,75 @@ class PolicyThemeServiceTest {
     private final PolicyThemeService service = new PolicyThemeService(govPolicyClient, companyService, eastMoneyClient, CLOCK);
 
     @Test
+    void discoversSolidStateBatteriesInPlanningBodyAndShowsTheSupportingPassage() {
+        stubPolicies(List.of(new GovPolicyItem("工业部门", "plan", "新型电池产业发展十五五规划解读",
+                "https://policy.example/battery-plan", "2026-09-28", 95,
+                "一、发展目标。\n到2030年，我国新型电池产业规模实现稳步增长。全链条创新能力持续增强，全固态电池初步实现规模化应用。\n二、保障措施。", true)));
+        when(companyService.listCompanies()).thenReturn(List.of(
+                profileWithoutFinance("600001", "电池样本", "电池", "GREEN_TRANSITION", "48", "5000000000"),
+                profileWithoutFinance("600002", "固态电池概念银行", "银行", "GREEN_TRANSITION", "90", "8000000000")));
+
+        PolicyTheme batteries = theme(service, "SOLID_STATE_BATTERY");
+
+        assertThat(batteries.strengthScore()).isPositive();
+        assertThat(batteries.signals()).singleElement().satisfies(signal -> {
+            assertThat(signal.summary()).isEqualTo("新型电池产业发展十五五规划解读");
+            assertThat(signal.excerpt()).contains("2030", "全固态电池", "规模化应用").doesNotContain("保障措施");
+            assertThat(signal.signalType()).contains("正文片段", "长期规划");
+            assertThat(signal.planningBaseline()).isTrue();
+            assertThat(signal.publishedAt()).isEqualTo("2026-09-28");
+        });
+        assertThat(batteries.companyPool()).extracting(PolicyCompanyCandidate::symbol).containsExactly("600001");
+        assertThat(batteries.risks()).anyMatch(risk -> risk.contains("固态电池业务"));
+    }
+
+    @Test
+    void titleOnlyOriginalDoesNotDiscardAnExplicitPlanningDocumentWithItsOwnProvenance() {
+        stubPolicies(List.of(
+                policy("新型电池产业发展规划", "2026-09-14"),
+                new GovPolicyItem("规划转载来源", "plan", "新型电池产业发展规划",
+                        "https://repost.example/planning", "2026-09-29", 90, "到2030年，全固态电池实现规模化应用。", true)));
+        when(companyService.listCompanies()).thenReturn(List.of());
+
+        assertThat(theme(service, "SOLID_STATE_BATTERY").signals()).singleElement().satisfies(signal -> {
+            assertThat(signal.source()).isEqualTo("规划转载来源");
+            assertThat(signal.url()).isEqualTo("https://repost.example/planning");
+            assertThat(signal.publishedAt()).isEqualTo("2026-09-29");
+            assertThat(signal.planningBaseline()).isTrue();
+            assertThat(signal.excerpt()).contains("2030", "全固态电池");
+        });
+    }
+
+    @Test
+    void ordinaryBatteryPolicyDoesNotBecomeASolidStateBatteryTheme() {
+        stubPolicies(List.of(new GovPolicyItem("工业部门", "document", "新型电池产业发展规划",
+                "https://policy.example/ordinary", "2026-09-28", 95, "完善锂电池回收体系。", false)));
+        when(companyService.listCompanies()).thenReturn(List.of());
+
+        assertThat(service.listThemes()).extracting(PolicyTheme::themeCode).doesNotContain("SOLID_STATE_BATTERY");
+        assertThat(theme(service, "GREEN_TRANSITION").signals()).hasSize(1);
+    }
+
+    @Test
+    void keepsLongTermPlanningEvidenceAlongsideRecentCatalystsWithoutRefreshingItsDate() {
+        List<GovPolicyItem> policies = new java.util.ArrayList<>();
+        for (int i = 0; i < 8; i++) policies.add(policy("固态电池投产项目" + i, TODAY.minusDays(i).toString()));
+        policies.add(new GovPolicyItem("工业部门", "plan", "新型电池五年规划",
+                "https://policy.example/old-plan", "2025-01-01", 95, "推动全固态电池技术研发。", true));
+        stubPolicies(policies);
+        when(companyService.listCompanies()).thenReturn(List.of());
+
+        List<PolicySignal> signals = theme(service, "SOLID_STATE_BATTERY").signals();
+
+        assertThat(signals).hasSize(6);
+        assertThat(signals).filteredOn(PolicySignal::planningBaseline).singleElement().satisfies(signal -> {
+            assertThat(signal.publishedAt()).isEqualTo("2025-01-01");
+            assertThat(signal.signalType()).contains("90天前发布");
+        });
+        assertThat(signals).anyMatch(signal -> signal.summary().equals("固态电池投产项目0"));
+    }
+
+    @Test
     void corePoolsRequireIndustryEvidenceInsteadOfDefaultThemeOrCompanyName() {
         stubPolicies(List.of(
                 policy("高端制造和算力基础设施、绿色能源建设方案", TODAY.toString())));

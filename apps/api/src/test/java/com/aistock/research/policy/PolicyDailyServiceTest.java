@@ -39,6 +39,24 @@ class PolicyDailyServiceTest {
     }
 
     @Test
+    void reviewsAnExplicitLongTermPlanningPassageWithoutCallingItARecentCatalyst() {
+        PolicyTheme original = theme("SOLID_STATE_BATTERY", "2025-01-01", 80);
+        PolicyTheme planning = new PolicyTheme(original.themeCode(), original.name(), original.policyLevel(),
+                original.timeHorizon(), original.strengthScore(), original.chainSegments(), List.of(new PolicySignal(
+                "工业部门", "长期规划", "新型电池规划", 80, "https://policy.example/plan", "2025-01-01",
+                "加快全固态电池技术研发。", true)), original.risks(), original.companyPool());
+        when(themes.listThemesWithStatus()).thenReturn(collection(planning, theme("OLD_NEWS", "2025-01-01", 80)));
+
+        service.refresh();
+        executor.runNext();
+
+        assertThat(service.current().reviewedThemeCodes()).containsExactly("SOLID_STATE_BATTERY");
+        assertThat(service.current().themes().get(0).signals().get(0).publishedAt()).isEqualTo("2025-01-01");
+        verify(reviews).review(planning);
+        verify(reviews, times(1)).review(any(PolicyTheme.class));
+    }
+
+    @Test
     void getOnlyReadsSnapshotAndRefreshDeduplicatesWhileRunning() {
         when(themes.listThemesWithStatus()).thenReturn(collection(theme("A", "2026-10-16", 80)));
         assertThat(service.current().status()).isEqualTo("IDLE");

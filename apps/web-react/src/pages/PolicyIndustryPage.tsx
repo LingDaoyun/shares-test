@@ -132,7 +132,7 @@ export function PolicyIndustryPage() {
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><Tag tone={snapshot?.status === 'FAILED' ? 'warning' : 'brand'}>{snapshot ? statusLabel[snapshot.status] : '暂无结果'}</Tag><span className="text-ink-400">{snapshot?.completedAt ? `最近完成 ${formatDateTime(snapshot.completedAt)}` : '完成后将自动保存结果'}</span><span className="ml-auto inline-flex items-center gap-1 text-ink-500"><Bot className="h-3.5 w-3.5" />{llmConfig?.apiKeyConfigured ? `${llmConfig.provider} / ${llmConfig.model}` : '模型待配置'}</span></div>
       <div className="mt-4 grid grid-cols-3 gap-2"><Stat label="产业方向" value={themes.length} /><Stat label="去重后的政策线索" value={uniqueSources.size} /><Stat label="本轮已研判" value={snapshot?.reviewedThemeCodes.length ?? 0} /></div>
-      <p className="mt-3 text-[11px] leading-relaxed text-ink-500">官方来源优先。当前为标题级采集，原文可点击核验；Agent 负责提出产业逻辑与验证条件，实际资金与订单兑现需另外验证。</p>
+      <p className="mt-3 text-[11px] leading-relaxed text-ink-500">官方来源优先。已取得正文的来源展示对应片段，部分来源仅有标题，原文可点击核验；长期规划按来源发布日期展示。Agent 负责提出产业逻辑与验证条件，实际资金与订单兑现需另外验证。</p>
       {snapshot?.dataGaps.length ? <details className="mt-3 text-xs text-amber-700"><summary className="cursor-pointer">本轮采集说明 · {snapshot.dataGaps.length} 项</summary><ul className="mt-2 space-y-1">{snapshot.dataGaps.map((gap, index) => <li key={index}>{gap}</li>)}</ul></details> : null}
       {error ? <p role="alert" className="mt-3 text-xs text-amber-700">{error}</p> : null}
     </Card>
@@ -141,11 +141,12 @@ export function PolicyIndustryPage() {
     </div>
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{cards.map(({ theme, evidence }) => {
       const latest = history[theme.themeCode]?.[0]
+      const planningCount = evidence.signals.filter(signal => signal.planningBaseline).length
       return <article key={theme.themeCode} className="card flex min-w-0 flex-col p-5">
         <div className="flex items-start justify-between gap-3"><div><h3 className="text-base font-semibold text-ink-900">{theme.name}</h3><div className="mt-2 flex flex-wrap gap-1.5">{theme.chainSegments.slice(0, 4).map(segment => <Tag key={segment}>{segment}</Tag>)}</div></div><button type="button" aria-label={`${tracked.includes(theme.themeCode) ? '取消关注' : '关注'}${theme.name}`} aria-pressed={tracked.includes(theme.themeCode)} onClick={() => toggleTracked(theme.themeCode)} className="rounded-lg p-2 text-amber-500 hover:bg-amber-50"><Star className="h-4 w-4" fill={tracked.includes(theme.themeCode) ? 'currentColor' : 'none'} /></button></div>
-        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-ink-400"><Tag tone={latest ? 'brand' : 'neutral'}>{latest ? `AI · ${latest.phaseLabel ?? '阶段待定'}` : '待 Agent 研判'}</Tag><span>近30天 {evidence.recent30} 条 · {evidence.sources} 个来源</span></div>
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-ink-400"><Tag tone={latest ? 'brand' : 'neutral'}>{latest ? `AI · ${latest.phaseLabel ?? '阶段待定'}` : '待 Agent 研判'}</Tag>{planningCount ? <Tag>长期规划 {planningCount} 篇</Tag> : null}<span>近30天 {evidence.recent30} 条 · {evidence.sources} 个来源</span></div>
         <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-ink-600">{latest?.trendPlan?.thesis || latest?.logicSummary || (evidence.signals.length ? '已采集相关政策线索，等待 Agent 提炼产业传导与后续验证节点。' : '本次没有直接匹配的产业政策线索。')}</p>
-        <div className="my-4 space-y-2 border-t border-line-soft pt-3">{evidence.signals.slice(0, 2).map((signal, index) => <p key={index} className="truncate text-xs text-ink-500" title={signal.summary}>{signal.publishedAt?.slice(0, 10) ?? '日期未知'} · {signal.summary}</p>)}</div>
+        <div className="my-4 space-y-2 border-t border-line-soft pt-3">{evidence.signals.slice(0, 2).map((signal, index) => <p key={index} className="truncate text-xs text-ink-500" title={signal.summary}>{signal.planningBaseline ? '长期规划 · ' : ''}{signal.publishedAt?.slice(0, 10) ?? '日期未知'} · {signal.summary}</p>)}</div>
         <div className="mt-auto flex flex-wrap items-center justify-between gap-2"><span className="text-[11px] text-ink-400">关联公司 {theme.companyPool.length} 家{latest?.reviewedAt ? ` · 研判 ${formatDateTime(latest.reviewedAt)}` : ''}</span><Button variant="ghost" onClick={() => setSelected(theme.themeCode)} aria-label={`查看${theme.name}趋势详情`}>查看趋势<ChevronRight className="h-4 w-4" /></Button></div>
       </article>
     })}</div>

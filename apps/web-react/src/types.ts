@@ -259,6 +259,8 @@ export interface PolicySignal {
   confidence: number
   url: string | null
   publishedAt: string | null
+  excerpt?: string | null
+  planningBaseline?: boolean
 }
 
 export interface PolicyTheme {

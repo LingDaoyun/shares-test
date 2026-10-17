@@ -101,10 +101,15 @@ public class PolicyThemeService {
                         List.of("估值波动大", "技术迭代快", "海外限制"),
                         List.of("软件", "通信", "计算机", "互联网", "数据", "信息技术", "电子信息", "网络", "光模块", "电子元件", "半导体")),
                 new ThemeDefinition("GREEN_TRANSITION", "绿色低碳与能源转型",
-                        List.of("低碳", "能源", "电网", "储能", "节能", "循环经济", "碳中和", "光伏", "风电"),
+                        List.of("低碳", "能源", "电网", "储能", "电池", "节能", "循环经济", "碳中和", "光伏", "风电"),
                         List.of("储能", "电网设备", "新能源运营", "节能改造", "循环经济"),
                         List.of("产能过剩", "价格战", "补贴退坡"),
                         List.of("电力", "电池", "光伏", "风电", "新能源", "环保", "储能", "电网", "电源", "节能")),
+                new ThemeDefinition("SOLID_STATE_BATTERY", "固态电池",
+                        List.of("固态电池", "固态动力电池", "固体电解质", "固态电解质"),
+                        List.of("固态电解质", "正负极材料", "电池制造设备", "电芯与系统集成"),
+                        List.of("技术路线和量产良率待验证", "成本与规模化应用进度不确定", "电池行业候选不代表已具备固态电池业务，需核验公告及主营"),
+                        List.of("电池", "电解质", "电池材料", "锂电", "储能")),
                 new ThemeDefinition("CONSUMPTION", "消费与以旧换新",
                         List.of("消费", "以旧换新", "家电", "商贸"),
                         List.of("家电", "零售", "消费服务"), List.of("补贴落地节奏", "终端需求兑现"),
@@ -152,7 +157,10 @@ public class PolicyThemeService {
                                    List<CompanyProfile> companies) {
         List<PolicySignal> signals = signalsFor(policies, definition.keywords());
         List<String> risks = new ArrayList<>(definition.risks());
-        risks.add("仅依据本次采集的政策标题线索，尚未核验全文条款；样本不代表完整90天政策覆盖");
+        risks.add(signals.stream().anyMatch(signal -> signal.excerpt() != null && !signal.excerpt().isBlank())
+                ? "依据已采集的标题及正文片段匹配，需结合完整文件核验适用范围与实施条件；样本不代表完整政策覆盖"
+                : "仅依据本次采集的政策标题线索，尚未核验全文条款；样本不代表完整90天政策覆盖");
+        if (signals.stream().anyMatch(PolicySignal::planningBaseline)) risks.add("长期规划是趋势背景，来源发布日期不变，不代表近期新增催化或已兑现订单");
         if (policies.isEmpty()) risks.add("政策源未取得有效数据");
         if (signals.isEmpty()) risks.add("当前采集样本未匹配到本主题政策线索");
         List<PolicyCompanyCandidate> pool = signals.isEmpty() ? List.of()
@@ -421,7 +429,7 @@ public class PolicyThemeService {
 
     private BigDecimal scoreFor(List<GovPolicyItem> policies, List<String> keywords) {
         List<GovPolicyItem> matched = policies.stream()
-                .filter(policy -> containsAny(policy.title(), keywords))
+                .filter(policy -> matchesPolicy(policy, keywords))
                 .toList();
         if (matched.isEmpty()) {
             return new BigDecimal("0.00");
@@ -444,21 +452,44 @@ public class PolicyThemeService {
     }
 
     private List<PolicySignal> signalsFor(List<GovPolicyItem> policies, List<String> keywords) {
-        return policies.stream()
-                .filter(policy -> containsAny(policy.title(), keywords))
-                .sorted(Comparator.comparing((GovPolicyItem policy) -> publication(policy).date(),
+        Comparator<GovPolicyItem> order = Comparator.comparing((GovPolicyItem policy) -> publication(policy).date(),
                                 Comparator.nullsLast(Comparator.reverseOrder()))
-                        .thenComparing(Comparator.comparingInt((GovPolicyItem policy) -> signalConfidence(policy, keywords)).reversed()))
-                .limit(6)
+                        .thenComparing(Comparator.comparingInt((GovPolicyItem policy) -> signalConfidence(policy, keywords)).reversed());
+        List<GovPolicyItem> matched = policies.stream().filter(policy -> matchesPolicy(policy, keywords)).sorted(order).toList();
+        // Reserve space for explicitly configured planning documents even after recent headlines accumulate.
+        List<GovPolicyItem> selected = new ArrayList<>(matched.stream().filter(GovPolicyItem::planningBaseline).limit(2).toList());
+        selected.addAll(matched.stream().filter(policy -> !selected.contains(policy)).limit(6 - selected.size()).toList());
+        return selected.stream().sorted(order)
                 .map(policy -> new PolicySignal(
                         policy.source(),
-                        evidenceLabel(policy),
+                        evidenceLabel(policy, keywords),
                         policy.title(),
                         signalConfidence(policy, keywords),
                         policy.url(),
-                        policy.publishedAt()
+                        policy.publishedAt(),
+                        matchingExcerpt(policy, keywords),
+                        policy.planningBaseline()
                 ))
                 .toList();
+    }
+
+    private boolean matchesPolicy(GovPolicyItem policy, List<String> keywords) {
+        return containsAny(policy.title(), keywords) || containsAny(policy.bodyText(), keywords);
+    }
+
+    private String matchingExcerpt(GovPolicyItem policy, List<String> keywords) {
+        if (policy.bodyText() == null || policy.bodyText().isBlank()) return null;
+        // Keep complete paragraphs: a target year or condition often precedes the keyword sentence.
+        String excerpt = java.util.Arrays.stream(policy.bodyText().split("\\n+"))
+                .map(String::trim).filter(sentence -> containsAny(sentence, keywords)).distinct().limit(4)
+                .map(sentence -> {
+                    if (sentence.length() <= 1600) return sentence;
+                    int match = keywords.stream().mapToInt(sentence::indexOf).filter(index -> index >= 0).min().orElse(0);
+                    if (match < 1300) return sentence.substring(0, 1600) + "…";
+                    int start = Math.max(300, match - 200);
+                    return sentence.substring(0, 300) + "…\n" + sentence.substring(start, Math.min(sentence.length(), start + 1300)) + "…";
+                }).collect(Collectors.joining("\n"));
+        return excerpt.isBlank() ? null : excerpt;
     }
 
     private boolean containsAny(String text, List<String> keywords) {
@@ -469,8 +500,8 @@ public class PolicyThemeService {
     }
 
     private int signalConfidence(GovPolicyItem policy, List<String> keywords) {
-        String title = policy.title() == null ? "" : policy.title();
-        int keywordHits = (int) keywords.stream().filter(title::contains).count();
+        String text = (policy.title() == null ? "" : policy.title()) + "\n" + (policy.bodyText() == null ? "" : policy.bodyText());
+        int keywordHits = (int) keywords.stream().filter(text::contains).count();
         int confidence = 35
                 + Math.min(policy.sourceWeight() / 3, 30)
                 + Math.min(keywordHits * 8, 24);
@@ -485,10 +516,12 @@ public class PolicyThemeService {
         return Math.max(35, Math.min(confidence, 96));
     }
 
-    private String evidenceLabel(GovPolicyItem policy) {
+    private String evidenceLabel(GovPolicyItem policy, List<String> keywords) {
         String timing = publication(policy).date() == null ? "发布时间待核验"
                 : recencyPoints(policy) > 0 ? "90天内发布" : "90天前发布";
-        return "标题关键词匹配 / 来源权重 " + policy.sourceWeight() + " / " + timing;
+        return (matchingExcerpt(policy, keywords) == null ? "标题关键词匹配" : "正文片段关键词匹配")
+                + (policy.planningBaseline() ? " / 长期规划" : "")
+                + " / 来源权重 " + policy.sourceWeight() + " / " + timing;
     }
 
     private int recencyPoints(GovPolicyItem policy) {
@@ -543,6 +576,11 @@ public class PolicyThemeService {
     }
 
     private GovPolicyItem representativePolicy(GovPolicyItem first, GovPolicyItem second) {
+        // A configured planning body carries evidence that an earlier title-only list entry cannot replace.
+        // Preserve that document's own source URL and webpage publication date together.
+        boolean firstPlan = first.planningBaseline() && first.bodyText() != null && !first.bodyText().isBlank();
+        boolean secondPlan = second.planningBaseline() && second.bodyText() != null && !second.bodyText().isBlank();
+        if (firstPlan != secondPlan) return firstPlan ? first : second;
         LocalDate firstDate = publication(first).date();
         LocalDate secondDate = publication(second).date();
         // A repost must not make an old policy appear newly published.
@@ -551,6 +589,10 @@ public class PolicyThemeService {
         if (firstDate != null && !firstDate.equals(secondDate)) {
             return firstDate.isBefore(secondDate) ? first : second;
         }
+        if (first.planningBaseline() != second.planningBaseline()) return first.planningBaseline() ? first : second;
+        boolean firstBody = first.bodyText() != null && !first.bodyText().isBlank();
+        boolean secondBody = second.bodyText() != null && !second.bodyText().isBlank();
+        if (firstBody != secondBody) return firstBody ? first : second;
         return second.sourceWeight() > first.sourceWeight() ? second : first;
     }
 }

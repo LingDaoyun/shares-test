@@ -147,7 +147,7 @@ public class PolicyDailyService {
                     .toList();
             if (!hasEvidence) gaps.add("本次未采集到可核验的政策标题与原文链接，未调用 AI 研判。");
             int skipped = collected.size() - eligible.size();
-            if (skipped > 0) gaps.add(skipped + " 个主题没有近90天或日期待核验的有效信号，未进入每日研判。");
+            if (skipped > 0) gaps.add(skipped + " 个主题没有长期规划正文、近90天或日期待核验的有效信号，未进入每日研判。");
             if (eligible.size() > maxReviewThemes) gaps.add("每日 AI 预算最多 " + maxReviewThemes + " 个主题，另有 "
                     + (eligible.size() - maxReviewThemes) + " 个有证据主题未研判，可单独复核。");
             List<PolicyTheme> planned = eligible.stream().limit(maxReviewThemes).toList();
@@ -238,6 +238,8 @@ public class PolicyDailyService {
     private boolean eligibleSignal(PolicySignal signal, LocalDate today) {
         if (!realSignal(signal)) return false;
         LocalDate date = signalDate(signal);
+        if (date != null && date.isAfter(today)) return false;
+        if (signal.planningBaseline() && signal.excerpt() != null && !signal.excerpt().isBlank()) return true;
         return date == null || (!date.isBefore(today.minusDays(90)) && !date.isAfter(today));
     }
 

@@ -50,7 +50,7 @@ describe('daily policy research board', () => {
     expect(host.textContent).toContain('每日产业情报')
     expect(host.textContent).toContain('每天08:30')
     expect(host.textContent).toContain('观察设备订单能否逐步兑现')
-    expect(host.textContent).toContain('标题级采集')
+    expect(host.textContent).toContain('部分来源仅有标题')
     expect(reviewPolicyTheme).not.toHaveBeenCalled()
     expect(refreshPolicyDaily).not.toHaveBeenCalled()
     expect(document.querySelector('[role="dialog"]')).toBeNull()
@@ -59,12 +59,49 @@ describe('daily policy research board', () => {
   it('opens source articles and validated company assessments in separate detail tabs', async () => {
     await render(); await detail(); await click('政策与新闻')
     expect(document.querySelector<HTMLAnchorElement>('[role="dialog"] a')?.href).toBe('https://www.gov.cn/policy-test')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('仅标题线索')
+    expect(document.querySelector('[role="dialog"] blockquote')).toBeNull()
     await click('上市公司')
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('浪潮信息')
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('设备行业相关')
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('核验主营收入')
     await click('研判记录 · 1')
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('研判时的政策来源')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('仅标题线索')
+  })
+
+  it('shows collected excerpts as plain text and keeps old planning evidence separate from new catalysts', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-17T04:00:00Z'))
+    const excerpt = '推进算力与先进制造业协同发展。\n<img src=x onerror="alert(1)">'
+    const signals = [theme.signals[0], {
+      ...theme.signals[0], summary: '制造业长期发展规划', publishedAt: '2021-03-12',
+      url: 'https://www.gov.cn/long-term-plan', excerpt, planningBaseline: true
+    }]
+    vi.mocked(fetchPolicyDaily).mockResolvedValue({ ...daily, themes: [{ ...theme, signals }] })
+    vi.mocked(fetchPolicyReviewHistory).mockResolvedValue([{ ...review, evidenceSnapshot: signals }])
+
+    await render()
+    const card = host.querySelector('article')!
+    expect(card.textContent).toContain('长期规划')
+    expect(card.textContent).toContain('近30天 1 条')
+    expect(card.textContent).toContain('2021-03-12')
+    await detail(); await click('政策与新闻')
+    const dialog = document.querySelector('[role="dialog"]')!
+    const link = dialog.querySelector<HTMLAnchorElement>('a[href="https://www.gov.cn/long-term-plan"]')!
+    expect(link.textContent).toContain('制造业长期发展规划')
+    expect(link.target).toBe('_blank')
+    expect(link.rel).toContain('noopener')
+    expect(dialog.querySelector('blockquote')?.textContent).toBe(excerpt)
+    expect(dialog.querySelector('img')).toBeNull()
+    expect(dialog.textContent).toContain('正文片段')
+    expect(dialog.textContent).toContain('仅标题线索')
+    expect(dialog.textContent).toContain('不代表新增催化')
+
+    await click('研判记录 · 1')
+    expect(document.querySelector('[role="dialog"] details blockquote')?.textContent).toBe(excerpt)
+    expect(document.querySelector('[role="dialog"] details')?.textContent).toContain('2021-03-12')
+    expect(document.querySelector('[role="dialog"] details')?.textContent).toContain('长期规划')
   })
 
   it('keeps the last successful analysis when a manual update fails', async () => {

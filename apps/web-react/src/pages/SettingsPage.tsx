@@ -273,12 +273,13 @@ export function SettingsPage() {
           </div>
         }
       >
+        <p className="mb-3 text-xs leading-relaxed text-ink-500">单篇正文用于采集指定文章；长期规划正文每天重新采集，仍以来源发布日期展示，不会因重新采集而作为新政策。</p>
         <div className="flex flex-col gap-2">
           {form.policySources.length === 0 ? (
             <span className="text-sm text-ink-400">暂无政策源，点击「新增来源」添加</span>
           ) : (
             form.policySources.map((source, index) => (
-              <div key={index} className="grid grid-cols-1 items-center gap-2 rounded-lg border border-line-soft p-3 sm:grid-cols-[32px_1fr_120px_2fr_100px_40px]">
+              <div key={index} className="grid grid-cols-1 items-center gap-2 rounded-lg border border-line-soft p-3 sm:grid-cols-[32px_1fr_150px_2fr_100px_40px]">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-50 text-xs font-bold text-brand-600">
                   {index + 1}
                 </span>
@@ -290,11 +291,14 @@ export function SettingsPage() {
                 />
                 <select
                   className="field"
+                  aria-label={`政策源 ${index + 1} 类型`}
                   value={source.type}
                   onChange={(e) => patchPolicySource(index, { type: e.target.value })}
                 >
                   <option value="html">HTML</option>
                   <option value="json">JSON</option>
+                  <option value="document">单篇正文</option>
+                  <option value="plan">长期规划正文</option>
                 </select>
                 <input
                   className="field"

@@ -33,7 +33,7 @@ export function PolicyResearchDetail({ theme, history, aiEnabled, reviewing, err
       <ResearchList title="产业观察风险" items={theme.risks} />
     </> : null}
     {tab === '政策与新闻' ? <>
-      <p className="text-xs leading-relaxed text-ink-500">当前采集的是官方列表标题与发布日期；点击原文核对条款、适用对象及落实时间。近 7 / 30 / 90 天数字仅统计本次采集样本，不代表政策发布总量。</p>
+      <p className="text-xs leading-relaxed text-ink-500">已取得正文的来源展示对应片段，部分来源仅有标题；请点击原文核对完整条款、适用对象及落实时间。近 7 / 30 / 90 天数字按来源发布日期统计本次采集样本，不代表政策发布总量。</p>
       <div className="flex flex-wrap gap-2"><Tag>近7天 {evidence.recent7}</Tag><Tag>近30天 {evidence.recent30}</Tag><Tag>近90天 {evidence.recent90}</Tag><Tag>日期未知 {evidence.unknown}</Tag></div>
       <PolicySources signals={evidence.signals} />
     </> : null}
@@ -86,9 +86,13 @@ export function PolicySources({ signals }: { signals: PolicySignal[] }) {
   if (!signals.length) return <Empty text="本次采集未找到直接匹配的政策或产业新闻。" />
   return <div className="flex flex-col gap-3">{signals.map((signal, index) => {
     const url = policySourceUrl(signal.url)
+    const excerpt = signal.excerpt?.trim()
     return <article key={`${signal.url}-${index}`} className="rounded-xl border border-line-soft p-4">
-      <div className="mb-2 flex flex-wrap justify-between gap-2 text-xs text-ink-400"><span>{signal.source}</span><span>{signal.publishedAt || '发布日期未知'}</span></div>
+      <div className="mb-2 flex flex-wrap justify-between gap-2 text-xs text-ink-400"><span>{signal.source}</span><span>{signal.planningBaseline ? '来源发布日期：' : ''}{signal.publishedAt || '发布日期未知'}</span></div>
+      <div className="mb-2 flex flex-wrap gap-2"><Tag tone={excerpt ? 'brand' : 'neutral'}>{excerpt ? '已取得正文片段' : '仅标题线索'}</Tag>{signal.planningBaseline ? <Tag>长期规划</Tag> : null}</div>
       {url ? <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium leading-relaxed text-brand-700 hover:underline">{signal.summary}<ExternalLink aria-hidden="true" className="ml-1 inline h-3.5 w-3.5" /><span className="sr-only">（查看原文）</span></a> : <p className="text-sm text-ink-700">{signal.summary}</p>}
+      {excerpt ? <blockquote className="mt-3 whitespace-pre-wrap break-words rounded-lg border-l-2 border-brand-200 bg-brand-50/40 p-3 text-xs leading-relaxed text-ink-700">{excerpt}</blockquote> : <p className="mt-2 text-xs text-ink-400">尚未取得正文片段，请点击原文核验。</p>}
+      {signal.planningBaseline ? <p className="mt-2 text-xs leading-relaxed text-ink-500">长期规划作为产业背景，按来源发布日期展示；转载日期不等于文件印发日，转载也可能有删减。每日重新采集不代表新增催化。</p> : null}
       <p className="mt-2 text-[11px] text-ink-400">{signal.signalType}</p>
     </article>
   })}</div>

@@ -27,6 +27,24 @@ class PolicyAiReviewServiceTest {
     private final PolicyAiReviewService service = new PolicyAiReviewService(llmChatClient, themeService, objectMapper);
 
     @Test
+    void sendsPlanningPassagesToTheModelAndReadsOlderSavedSignals() throws Exception {
+        PolicyTheme original = digitalInfraTheme();
+        PolicyTheme planning = new PolicyTheme(original.themeCode(), original.name(), original.policyLevel(),
+                original.timeHorizon(), original.strengthScore(), original.chainSegments(), List.of(new PolicySignal(
+                "工业部门", "正文片段关键词匹配", "新型电池规划", 80, "https://policy.example/battery", "2026-09-28",
+                "到2030年，全固态电池初步实现规模化应用。", true)), original.risks(), original.companyPool());
+
+        assertThat(service.userPrompt(planning)).contains("全固态电池", "excerpt", "planning_baseline");
+        assertThat(service.modelInstruction()).contains("长期规划", "新催化", "正文片段");
+        PolicySignal old = objectMapper.readValue("""
+                {"source":"部门","signalType":"标题","summary":"旧标题","confidence":65,
+                 "url":"https://policy.example/old","publishedAt":"2026-09-01"}
+                """, PolicySignal.class);
+        assertThat(old.excerpt()).isNull();
+        assertThat(old.planningBaseline()).isFalse();
+    }
+
+    @Test
     void doesNotChargeForAThemeWithoutEvidence() {
         PolicyTheme original = digitalInfraTheme();
         when(themeService.themeIndex()).thenReturn(Map.of("DIGITAL_INFRA", new PolicyTheme(

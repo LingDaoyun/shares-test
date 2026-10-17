@@ -28,6 +28,7 @@ public class RuntimeConfigDefaults {
                 source("国家发展改革委", "html", "https://www.ndrc.gov.cn/xxgk/zcfb/ghwb/", 92),
                 source("国家发展改革委产业动态", "html", "https://www.ndrc.gov.cn/fggz/", 88),
                 source("工业和信息化部", "html", "https://www.miit.gov.cn/zwgk/zcwj/", 90),
+                source("工业和信息化部·新型电池十五五规划解读", "plan", "https://www.miit.gov.cn/zwgk/zcjd/art/2026/art_2d166bf3c90e45dfbdcd5fbaae9c9b17.html", 95),
                 source("科学技术部", "html", "https://www.most.gov.cn/xxgk/xinxifenlei/fdzdgknr/fgzc/gfxwj/", 86),
                 source("财政部", "html", "https://www.mof.gov.cn/zhengwuxinxi/caizhengxinwen/", 82),
                 source("国家能源局", "html", "https://www.nea.gov.cn/zcfb/", 84),

@@ -126,6 +126,18 @@ describe('SettingsPage section actions', () => {
     expect(toast.success).toHaveBeenCalledWith('大模型配置已保存并生效')
   })
 
+  it.each(['document', 'plan'])('saves the %s source type without changing its URL or weight', async type => {
+    const sourceType = section('政策源配置').querySelector<HTMLSelectElement>('select')!
+    await changeSelect(sourceType, type)
+    await click(buttonIn('政策源配置', '保存配置'))
+
+    expect(mockedUpdatePolicies).toHaveBeenCalledWith([
+      { name: '当前政策源', type, url: 'https://current.example', weight: 80 }
+    ])
+    expect(section('政策源配置').textContent).toContain('每天重新采集')
+    expect(section('政策源配置').textContent).toContain('来源发布日期')
+  })
+
   it('switches provider credentials and endpoint as one safe preset', async () => {
     const provider = selectIn('大模型配置', '模型供应商')
 
