@@ -26,7 +26,7 @@ export function NavRail() {
   const counts: Record<PageKey, string> = {
     market: '长投',
     shortTerm: '盘中',
-    potentialLeader: '双通道',
+    potentialLeader: '5交易日',
     overseas: '美日韩',
     policy: '产业',
     watchlist: '自选',

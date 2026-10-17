@@ -5,10 +5,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.time.LocalDate;
 
 @Component
+@ConditionalOnProperty(name = "research.legacy-leader-learning-enabled", havingValue = "true")
 class LeaderLearningScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(LeaderLearningScheduler.class);

@@ -18,9 +18,9 @@ export const pageMeta: Record<PageKey, PageMeta> = {
     description: '用 K 线右侧早期、量能和财报质量共同筛选价值回归候选。'
   },
   potentialLeader: {
-    eyebrow: 'POTENTIAL LEADER',
-    title: '潜力龙头',
-    description: '用主线共振、板块辨识度与资金容量形成潜龙、竞龙双通道正式排名。'
+    eyebrow: 'FIVE TRADING DAYS',
+    title: '五日观察',
+    description: '从横盘、换手与资金证据选出观察股，按五个交易日跟踪日线情景与真实成交。'
   },
   overseas: {
     eyebrow: 'GLOBAL MARKETS',
@@ -56,7 +56,7 @@ export const pageMeta: Record<PageKey, PageMeta> = {
 
 export const navItems: { key: PageKey; label: string }[] = [
   { key: 'shortTerm', label: '短线右侧' },
-  { key: 'potentialLeader', label: '潜力龙头' },
+  { key: 'potentialLeader', label: '五日观察' },
   { key: 'market', label: '长期价投' },
   { key: 'overseas', label: '外围市场' },
   { key: 'policy', label: '政策解读' },
@@ -71,6 +71,7 @@ export const pathToPage: Record<string, PageKey> = {
   market: 'market',
   'short-term': 'shortTerm',
   'potential-leader': 'potentialLeader',
+  'five-day': 'potentialLeader',
   'first-board-alert': 'potentialLeader',
   backtest: 'shortTerm',
   overseas: 'overseas',

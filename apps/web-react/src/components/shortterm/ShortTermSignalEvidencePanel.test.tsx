@@ -82,6 +82,45 @@ const summaries: ShortTermValidationSummary[] = [{
 }]
 
 describe('ShortTermSignalEvidencePanel', () => {
+  it('shows a near chip pressure deduction as a signed ranking contribution', () => {
+    const html = renderToStaticMarkup(
+      <ShortTermSignalEvidencePanel
+        candidate={{ ...candidate, score: { ...candidate.score, chipPressureAdjustment: -1.25 } }}
+        marketRegime={marketRegime}
+        summaries={summaries}
+        validationState="READY"
+      />
+    )
+
+    expect(html).toContain('近端筹码</span><strong class="text-emerald-700">-1.25</strong>')
+  })
+
+  it('shows an evaluated zero near chip pressure adjustment', () => {
+    const html = renderToStaticMarkup(
+      <ShortTermSignalEvidencePanel
+        candidate={{ ...candidate, score: { ...candidate.score, chipPressureAdjustment: 0 } }}
+        marketRegime={marketRegime}
+        summaries={summaries}
+        validationState="READY"
+      />
+    )
+
+    expect(html).toContain('近端筹码</span><strong class="text-brand-700">0.00</strong>')
+  })
+
+  it.each([null, undefined])('does not invent a near chip contribution for %s history', (chipPressureAdjustment) => {
+    const html = renderToStaticMarkup(
+      <ShortTermSignalEvidencePanel
+        candidate={{ ...candidate, score: { ...candidate.score, chipPressureAdjustment } }}
+        marketRegime={marketRegime}
+        summaries={summaries}
+        validationState="READY"
+      />
+    )
+
+    expect(html).not.toContain('近端筹码')
+  })
+
   it('shows the signal family, regime and every active ranking contribution', () => {
     const html = renderToStaticMarkup(
       <ShortTermSignalEvidencePanel
@@ -102,7 +141,7 @@ describe('ShortTermSignalEvidencePanel', () => {
     expect(html).toContain('结构分 80.00 + 可见调整 +5.40 = 排序分 85.40')
     expect(html).toContain('资金流')
     expect(html).toContain('相对强度')
-    expect(html).toContain('行业地位')
+    expect(html).toContain('行业成交额地位')
     expect(html).toContain('热门方向')
     expect(html).toContain('波动质量')
     expect(html).toContain('可见调整合计')

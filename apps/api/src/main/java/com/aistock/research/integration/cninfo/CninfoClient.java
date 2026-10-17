@@ -48,6 +48,8 @@ public class CninfoClient {
                 if (!announcements.isEmpty()) {
                     return announcements;
                 }
+            } catch (IllegalArgumentException exception) {
+                throw new IllegalStateException("巨潮公告原始字段无法确认：" + company.symbol(), exception);
             } catch (Exception exception) {
                 lastException = exception;
             }
@@ -108,26 +110,30 @@ public class CninfoClient {
         }
         List<CninfoAnnouncement> announcements = new ArrayList<>();
         for (JsonNode item : items) {
-            readAnnouncement(company, item).ifPresent(announcements::add);
+            announcements.add(readAnnouncement(company, item));
         }
         return announcements;
     }
 
-    private Optional<CninfoAnnouncement> readAnnouncement(CompanyProfile company, JsonNode item) {
+    private CninfoAnnouncement readAnnouncement(CompanyProfile company, JsonNode item) {
+        if (item == null || !item.isObject()) {
+            throw new IllegalArgumentException("公告条目不是有效对象，不能确认本页覆盖完整");
+        }
         String announcementId = text(item, "announcementId");
         String title = text(item, "announcementTitle");
-        if (announcementId == null || title == null) {
-            return Optional.empty();
+        String symbol = text(item, "secCode");
+        if (announcementId == null || title == null || symbol == null || !symbol.matches("\\d{6}")) {
+            throw new IllegalArgumentException("公告ID、标题或原始证券代码缺失或无效，不能确认本页覆盖完整");
         }
-        return Optional.of(new CninfoAnnouncement(
+        return new CninfoAnnouncement(
                 announcementId,
-                defaultText(text(item, "secCode"), company.symbol()),
+                symbol,
                 defaultText(text(item, "secName"), company.name()),
                 text(item, "orgId"),
                 title.replaceAll("<[^>]+>", ""),
                 item.path("announcementTime").asLong(0L),
                 text(item, "adjunctUrl")
-        ));
+        );
     }
 
     private List<RequestCandidate> requestCandidates(CompanyProfile company) {

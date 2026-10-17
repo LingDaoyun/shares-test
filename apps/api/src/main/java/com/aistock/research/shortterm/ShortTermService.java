@@ -57,6 +57,7 @@ public class ShortTermService {
     private static final int MAX_SCAN_LIMIT = 6000;
     private static final int DEFAULT_KLINE_LIMIT = 120;
     private static final int MAX_KLINE_LIMIT = 160;
+    private static final int FUND_FLOW_BATCH_SIZE = 100;
     private static final BigDecimal DEFAULT_MIN_AMOUNT = new BigDecimal("80000000");
     private static final BigDecimal DEFAULT_MAX_PRICE_PER_SHARE = new BigDecimal("100");
     private static final BigDecimal DEFAULT_MIN_VOLUME_RATIO = new BigDecimal("1.20");
@@ -133,7 +134,7 @@ public class ShortTermService {
                     List.of("煤炭", "煤业", "能源", "电力", "石油", "油气")
             )
     );
-    private static final String QUOTE_NOTE = "短线右侧模块先做全 A 股行情漏斗，再对候选拉取近一年 K 线、最近年报和同日资金流；影子实验因子不进入生产排序或推荐证据。";
+    private static final String QUOTE_NOTE = "短线右侧模块先做全 A 股行情漏斗，再对候选拉取近一年 K 线、最近年报和同日资金流；近端筹码压力使用本地模型估算，并保留日期、价格区间与扣分依据。";
 
     private final EastMoneyClient eastMoneyClient;
     private final EvidenceCompletenessService evidenceCompletenessService;
@@ -347,7 +348,9 @@ public class ShortTermService {
                 request.allowChiNext()
         );
 
-        AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(ruleSet.scanLimit());
+        boolean allCandidates = Integer.valueOf(0).equals(request.limit());
+        AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(
+                ruleSet.scanLimit() == 0 ? Integer.MAX_VALUE : ruleSet.scanLimit());
         LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
         boolean allowClosedMarketCachePreview = Boolean.TRUE.equals(request.allowStaticCachePreview())
                 && tradingClockService.isMarketClosedDay(decisionAt.toLocalDate());
@@ -387,7 +390,7 @@ public class ShortTermService {
                 marketSentiment,
                 limitUpPulse
         );
-        ShortTermMarketFundDirection marketFundDirection = marketFundDirection(marketContextUniverse);
+        ShortTermMarketFundDirection marketFundDirection = marketFundDirection(marketQuotes);
         List<ShortTermHotDirection> hotDirections = resolveHotDirections(marketContextUniverse);
         if (marketRegime.riskOff() || isExtremeRiskOffMarket(marketSentiment)) {
             return extremeRiskOffReport(
@@ -413,7 +416,7 @@ public class ShortTermService {
         List<EastMoneyQuote> reviewPool = preFilteredQuotes;
         List<EastMoneyQuote> tradableQuotes = reviewPool.stream()
                 .sorted(Comparator.comparing((EastMoneyQuote quote) -> preliminaryScore(quote, ruleSet, hotDirectionMap)).reversed())
-                .limit(ruleSet.klineLimit())
+                .limit(ruleSet.klineLimit() == 0 ? Long.MAX_VALUE : ruleSet.klineLimit())
                 .toList();
         List<String> reviewedSymbols = tradableQuotes.stream()
                 .map(EastMoneyQuote::symbol)
@@ -422,6 +425,15 @@ public class ShortTermService {
         Map<String, List<EastMoneyKLine>> klineMap = tradableQuotes.isEmpty()
                 ? Map.of()
                 : fetchKLinesWithSourceGuard(tradableQuotes);
+        if (isAfterRegularClose(decisionAt)) {
+            // A previous-day MA is not a completed review of today's closing structure.
+            for (EastMoneyQuote quote : tradableQuotes) {
+                klineMap.computeIfPresent(quote.symbol(), (symbol, rows) -> rows.stream()
+                        .anyMatch(row -> row != null && row.close() != null
+                                && quote.tradeDate() != null && quote.tradeDate().equals(row.tradeDate()))
+                        ? rows : List.of());
+            }
+        }
 
         ShortTermCrossSectionAnalysis crossSection = crossSectionAnalyzer.analyze(
                 marketContextUniverse,
@@ -444,7 +456,7 @@ public class ShortTermService {
                         .thenComparing(Comparator.comparing(
                                 (TechnicalCandidate item) -> item.coreSignalScore().finalScore()
                         ).reversed()))
-                .limit(Math.max(resolveLimit(request.limit()) * 4L, 28L))
+                .limit(allCandidates ? Long.MAX_VALUE : Math.max(resolveLimit(request.limit()) * 4L, 28L))
                 .toList();
 
         Map<String, ShortTermFinancialSnapshot> financialMap = technicalCandidates.parallelStream()
@@ -507,8 +519,11 @@ public class ShortTermService {
                 .limit(80)
                 .toList();
 
-        int safeLimit = Math.min(resolveLimit(request.limit()), scored.size());
-        List<ShortTermCandidate> candidates = IntStream.range(0, safeLimit)
+        int safeLimit = allCandidates ? scored.size() : Math.min(resolveLimit(request.limit()), scored.size());
+        IntStream candidateIndexes = IntStream.range(0, safeLimit);
+        // Reuse the bounded common pool used by K-line/financial review. Ordered collection keeps ranks stable.
+        if (allCandidates) candidateIndexes = candidateIndexes.parallel();
+        List<ShortTermCandidate> candidates = candidateIndexes
                 .mapToObj(index -> {
                     ShortTermCandidate enriched = enrichTailSignal(
                             rerank(scored.get(index).candidate(), index + 1)
@@ -546,8 +561,11 @@ public class ShortTermService {
                         "波动质量使用 ATR 归一化衡量距 20 日线位置、近期真实波幅收缩与突破扩张，独立贡献限制在 -3 至 +3 分并完整展示。",
                         "市场状态由点时全市场上涨广度、收益中位数、绝对波动、涨跌停近似比例和上涨侧成交额共同划分；退潮不推荐，修复或拥挤高波动只允许轻仓。",
                         "金叉动量、下影承接反转和波动收缩突破保持为独立信号族，页面与历史快照保留主信号族和全部激活证据。",
-                        "影子实验因子只保留后台诊断，不进入候选解释、风险理由、证据链、生产排序或动作建议。",
-                        "默认输出八个短线候选：可执行层在前、观察层补足展示，但不会为了凑数制造加仓建议。",
+                        "近端筹码压力统计现价上方 0～5% 与 5～10% 的估算筹码，按距离加权；启用后在原有入选层级内扣减排序分，数据不足时标记未评估，参数效果待验证。",
+                        "原有综合筹码评分保留后台诊断；近端压力的观察模式只展示估算，不扣分，关闭时不参与排序。",
+                        allCandidates
+                                ? "输出全部合格候选：保留可执行层与观察层的原有排序，不按候选数量截断，也不会为了凑数制造加仓建议。"
+                                : "默认输出八个短线候选：可执行层在前、观察层补足展示，但不会为了凑数制造加仓建议。",
                         "普通财务质量只作上下文与风险说明；热门方向、5/10/20 日相对强度与行业成交额地位仅作有界排序修正。",
                         "热门方向可帮助全市场预选，但不能覆盖金叉、放量、换手、上影线和硬风险门禁。",
                         "涨幅过大、距离 20 日线过远、120 日位置过高、量能过度放大会被视为追涨风险，宁可等待回踩确认。",
@@ -615,40 +633,53 @@ public class ShortTermService {
             }
 
             List<String> dataGaps = new ArrayList<>();
-            LocalDate tradeDate = snapshots.stream()
-                    .map(EastMoneyIndustryFundFlowSnapshot::tradeDate)
-                    .filter(java.util.Objects::nonNull)
-                    .max(LocalDate::compareTo)
-                    .orElse(null);
-            LocalDate quoteDate = (quoteUniverse == null ? List.<EastMoneyQuote>of() : quoteUniverse).stream()
+            List<EastMoneyQuote> quotes = quoteUniverse == null ? List.of() : quoteUniverse;
+            Set<LocalDate> quoteDates = quotes.stream()
                     .map(EastMoneyQuote::tradeDate)
                     .filter(java.util.Objects::nonNull)
-                    .max(LocalDate::compareTo)
-                    .orElse(null);
-            if (tradeDate == null) {
-                dataGaps.add("行业资金流缺少数据日，无法确认是否为今日快照。");
-            } else if (quoteDate != null && !tradeDate.equals(quoteDate)) {
-                dataGaps.add("行业资金流数据日 " + tradeDate + " 与行情日 " + quoteDate + " 不一致。");
+                    .collect(Collectors.toSet());
+            LocalDate quoteDate = null;
+            if (quoteDates.size() != 1 || quotes.stream().anyMatch(quote -> quote.tradeDate() == null
+                    || quote.marketTimestamp() == null
+                    || !quote.tradeDate().equals(quote.marketTimestamp().atZone(SHANGHAI).toLocalDate()))) {
+                dataGaps.add("行情日缺失、混合或时间戳不一致，无法核实今日行业资金排名。");
+            } else {
+                LocalDate onlyDate = quoteDates.iterator().next();
+                if (onlyDate.equals(tradingClockService.currentMarketDateTime().toLocalDate())) {
+                    quoteDate = onlyDate;
+                } else {
+                    dataGaps.add("历史行情日 " + onlyDate + " 不能作为今日行业资金排名。");
+                }
             }
-
-            long coveredCount = snapshots.stream()
-                    .filter(snapshot -> snapshot.mainNetInflow() != null)
-                    .count();
+            long missingDates = snapshots.stream().filter(snapshot -> snapshot.tradeDate() == null).count();
+            if (missingDates > 0) {
+                dataGaps.add("返回行业中 " + missingDates + " 行缺少数据日，未进入今日资金排名。");
+            }
+            LocalDate verifiedQuoteDate = quoteDate;
+            long mismatchedDates = snapshots.stream().filter(snapshot -> snapshot.tradeDate() != null)
+                    .filter(snapshot -> verifiedQuoteDate != null && !verifiedQuoteDate.equals(snapshot.tradeDate())).count();
+            if (mismatchedDates > 0) {
+                dataGaps.add("返回行业中 " + mismatchedDates + " 行与行情日 " + quoteDate + " 不一致，未进入今日资金排名。");
+            }
+            List<EastMoneyIndustryFundFlowSnapshot> rankedSnapshots = snapshots.stream()
+                    .filter(snapshot -> verifiedQuoteDate != null && verifiedQuoteDate.equals(snapshot.tradeDate()))
+                    .filter(snapshot -> snapshot.mainNetInflow() != null).toList();
+            int coveredCount = rankedSnapshots.size();
             int expectedCount = snapshots.size();
             BigDecimal coverageRatio = BigDecimal.valueOf(coveredCount)
                     .divide(BigDecimal.valueOf(expectedCount), 4, RoundingMode.HALF_UP);
+            dataGaps.add("覆盖率仅针对本次返回行业范围，无法核实全市场行业全集。");
             if (coverageRatio.compareTo(MIN_RELIABLE_INDUSTRY_FUND_FLOW_COVERAGE) < 0) {
                 dataGaps.add("行业资金流覆盖不足，当前覆盖率 " + coverageRatio.multiply(new BigDecimal("100"))
                         .setScale(2, RoundingMode.HALF_UP) + "%。");
             }
 
-            BigDecimal totalAbsoluteFlow = snapshots.stream()
+            BigDecimal totalAbsoluteFlow = rankedSnapshots.stream()
                     .map(EastMoneyIndustryFundFlowSnapshot::mainNetInflow)
                     .filter(java.util.Objects::nonNull)
                     .map(BigDecimal::abs)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            List<ShortTermIndustryFundDirection> directions = snapshots.stream()
-                    .filter(snapshot -> snapshot.mainNetInflow() != null)
+            List<ShortTermIndustryFundDirection> directions = rankedSnapshots.stream()
                     .map(snapshot -> industryFundDirection(snapshot, totalAbsoluteFlow))
                     .toList();
             Instant fetchedAt = snapshots.stream()
@@ -674,10 +705,10 @@ public class ShortTermService {
                             .sorted(Comparator.comparing(ShortTermIndustryFundDirection::mainNetInflow))
                             .limit(3)
                             .toList(),
-                    (int) coveredCount,
+                    coveredCount,
                     expectedCount,
                     coverageRatio,
-                    tradeDate,
+                    verifiedQuoteDate,
                     fetchedAt,
                     sourceName,
                     dataGaps
@@ -801,8 +832,8 @@ public class ShortTermService {
         String gapNote = direction.dataGaps().isEmpty()
                 ? ""
                 : " 数据缺口：" + String.join("；", direction.dataGaps()) + "。";
-        return " 今日资金去向为独立市场背景，覆盖 " + direction.coveredIndustryCount()
-                + "/" + direction.expectedIndustryCount() + " 个行业板块，数据日 "
+        return " 今日资金去向为独立市场背景，本次返回行业范围的有效资金覆盖 " + direction.coveredIndustryCount()
+                + "/" + direction.expectedIndustryCount() + "，数据日 "
                 + (direction.tradeDate() == null ? "待确认" : direction.tradeDate()) + "。" + gapNote;
     }
 
@@ -927,21 +958,21 @@ public class ShortTermService {
                 technical.goldenCross(),
                 technical.supportReversal()
         );
+        ShortTermVolatilityQuality volatilityQuality = item.volatilityQuality() == null
+                ? ShortTermVolatilityQuality.unavailable("波动质量快照缺失，不参与排序")
+                : item.volatilityQuality();
+        BigDecimal volatilityContribution = zeroIfNull(volatilityQuality.contribution());
         ShortTermSupplyDemandScore supplyDemand = supplyDemandScorer.score(
                 fundFlow,
                 quote.tradeDate(),
                 technical,
                 stageScore.rankingScore(),
                 chip,
-                chipSettings.activationMode()
+                chipSettings.activationMode(),
+                chipSettings.nearOverheadMaxPenalty(),
+                crossSectionAdjustment.add(volatilityContribution)
         );
-        ShortTermVolatilityQuality volatilityQuality = item.volatilityQuality() == null
-                ? ShortTermVolatilityQuality.unavailable("波动质量快照缺失，不参与排序")
-                : item.volatilityQuality();
-        BigDecimal volatilityContribution = zeroIfNull(volatilityQuality.contribution());
-        BigDecimal rankingScore = clamp(supplyDemand.rankingScore()
-                .add(crossSectionAdjustment)
-                .add(volatilityContribution));
+        BigDecimal rankingScore = supplyDemand.rankingScore();
         ActionDecision decision = decide(
                 quote,
                 technical,
@@ -1005,7 +1036,9 @@ public class ShortTermService {
                         scale(crossSectionAdjustment),
                         rankingScore,
                         scale(volatilityContribution),
-                        scale(rankingScore.subtract(supplyDemand.technicalRankingScore()))
+                        scale(rankingScore.subtract(supplyDemand.technicalRankingScore())),
+                        supplyDemand.chipPressurePenalty() == null
+                                ? null : supplyDemand.chipPressurePenalty().negate()
                 ),
                 technical,
                 financial,
@@ -2738,6 +2771,13 @@ public class ShortTermService {
             ShortTermSupplyDemandScore supplyDemand
     ) {
         List<String> risks = new ArrayList<>(base == null ? List.of() : base);
+        if (supplyDemand.chipPressurePenalty() != null && supplyDemand.chipPressurePenalty().signum() > 0) {
+            risks.add(0, "现价附近上方存在估算筹码压力，排序扣分 "
+                    + valueText(supplyDemand.chipPressurePenalty()) + " 分；详见近端筹码证据。");
+        } else if (supplyDemand.chipPressureSummary() != null
+                && supplyDemand.chipPressureSummary().contains("未评估")) {
+            risks.add(0, supplyDemand.chipPressureSummary());
+        }
         if (supplyDemand.mainNetInflowRatio() != null
                 && supplyDemand.mainNetInflowRatio().compareTo(BigDecimal.ZERO) < 0) {
             risks.add("主力净流入占比 " + valueText(supplyDemand.mainNetInflowRatio())
@@ -2898,6 +2938,10 @@ public class ShortTermService {
             ShortTermSupplyDemandScore supplyDemand
     ) {
         List<ShortTermEvidence> evidence = new ArrayList<>(base == null ? List.of() : base);
+        if (supplyDemand.chipPressureSummary() != null) {
+            evidence.add(new ShortTermEvidence(
+                    "近端筹码压力", supplyDemand.chipPressureSummary(), null, 25));
+        }
         evidence.add(new ShortTermEvidence(
                 "主力买盘",
                 "主力净流入占比 " + valueText(supplyDemand.mainNetInflowRatio())
@@ -3286,12 +3330,17 @@ public class ShortTermService {
         if (symbols == null || symbols.isEmpty()) {
             return Map.of();
         }
-        try {
-            return eastMoneyClient.fetchFundFlowSnapshots(symbols);
-        } catch (RuntimeException exception) {
-            logger.warn("短线候选批量资金流获取失败，本轮按资金流待补处理：{}", rootMessage(exception));
-            return Map.of();
+        Map<String, EastMoneyFundFlowSnapshot> snapshots = new LinkedHashMap<>();
+        for (int start = 0; start < symbols.size(); start += FUND_FLOW_BATCH_SIZE) {
+            List<String> batch = symbols.subList(start, Math.min(start + FUND_FLOW_BATCH_SIZE, symbols.size()));
+            try {
+                snapshots.putAll(eastMoneyClient.fetchFundFlowSnapshots(batch));
+            } catch (RuntimeException exception) {
+                logger.warn("短线候选批量资金流获取失败，本批{}只按资金流待补处理：{}",
+                        batch.size(), rootMessage(exception));
+            }
         }
+        return snapshots;
     }
 
     private Map<String, ShortTermChipSnapshot> fetchChipSnapshots(
@@ -3342,8 +3391,10 @@ public class ShortTermService {
             Boolean allowChiNext
     ) {
         return new ShortTermRuleSet(
-                Math.max(50, Math.min(scanLimit == null ? DEFAULT_SCAN_LIMIT : scanLimit, MAX_SCAN_LIMIT)),
-                Math.max(10, Math.min(klineLimit == null ? DEFAULT_KLINE_LIMIT : klineLimit, MAX_KLINE_LIMIT)),
+                Integer.valueOf(0).equals(scanLimit) ? 0
+                        : Math.max(50, Math.min(scanLimit == null ? DEFAULT_SCAN_LIMIT : scanLimit, MAX_SCAN_LIMIT)),
+                Integer.valueOf(0).equals(klineLimit) ? 0
+                        : Math.max(10, Math.min(klineLimit == null ? DEFAULT_KLINE_LIMIT : klineLimit, MAX_KLINE_LIMIT)),
                 RecommendationQuality.requiredAmount(positiveOrDefault(minAmount, DEFAULT_MIN_AMOUNT)),
                 positiveOrDefault(maxPricePerShare, DEFAULT_MAX_PRICE_PER_SHARE),
                 approvedVolumeRatioThreshold(minVolumeRatio),
@@ -3411,7 +3462,8 @@ public class ShortTermService {
                 v2Rank, v3Rank, rankDelta,
                 score.relativeStrengthContribution(), score.industryLeadershipContribution(),
                 score.marketHeatContribution(), score.crossSectionAdjustment(),
-                score.rankingScore(), score.volatilityContribution(), score.visibleRankingAdjustment()
+                score.rankingScore(), score.volatilityContribution(), score.visibleRankingAdjustment(),
+                score.chipPressureAdjustment()
         );
     }
 
@@ -3613,7 +3665,16 @@ public class ShortTermService {
         if (quote.tradeDate() != null && !quote.tradeDate().equals(marketDate)) {
             return false;
         }
+        if (isAfterRegularClose(decisionAt) && quote.marketTimestamp().isBefore(
+                decisionAt.toLocalDate().atTime(TradingClockService.REGULAR_CLOSE).atZone(SHANGHAI).toInstant())) {
+            return false;
+        }
         return !quote.marketTimestamp().isAfter(decisionInstant);
+    }
+
+    private boolean isAfterRegularClose(LocalDateTime decisionAt) {
+        return !tradingClockService.isMarketClosedDay(decisionAt.toLocalDate())
+                && !decisionAt.toLocalTime().isBefore(TradingClockService.REGULAR_CLOSE);
     }
 
     private boolean isTradableCommonShare(EastMoneyQuote quote, boolean allowChiNext) {

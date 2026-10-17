@@ -1,6 +1,8 @@
 package com.aistock.research.integration.eastmoney;
 
 import com.aistock.research.config.LiveDataProperties;
+import com.aistock.research.shortterm.ShortTermRuleSet;
+import com.aistock.research.shortterm.ShortTermTechnicalSignalEvaluator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -10,12 +12,17 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 class EastMoneyClientTest {
@@ -175,6 +182,92 @@ class EastMoneyClientTest {
 
         assertThat(quote.marketTimestamp()).isEqualTo(Instant.parse("2026-07-11T07:20:30Z"));
         assertThat(quote.tradeDate()).isEqualTo(LocalDate.parse("2026-07-11"));
+    }
+
+    @Test
+    void normalizesTencentStarDailyShareVolumeToHands() throws Exception {
+        EastMoneyKLine row = tencentVolumeBar("688696", LocalDate.of(2026, 10, 16), "1527513");
+
+        assertThat(row.volume()).isEqualByComparingTo("15275.13");
+        assertThat(row.close()).isEqualByComparingTo("86.93");
+    }
+
+    @Test
+    void normalizesTencentStarQuotesButKeepsMainBoardVolumesInHands() {
+        assertThat(tencentVolumeQuote("688696", "1527513").volume()).isEqualByComparingTo("15275.13");
+        assertThat(tencentVolumeQuote("688297", "13612442").volume()).isEqualByComparingTo("136124.42");
+        assertThat(tencentVolumeQuote("600435", "452628").volume()).isEqualByComparingTo("452628");
+        assertThat(tencentVolumeQuote("000768", "353216").volume()).isEqualByComparingTo("353216");
+    }
+
+    @Test
+    void keepsTencentMainBoardDailyVolumeInHands() throws Exception {
+        LocalDate date = LocalDate.of(2026, 10, 16);
+        assertThat(tencentVolumeBar("600435", date, "452628").volume()).isEqualByComparingTo("452628");
+        assertThat(tencentVolumeBar("000768", date, "353216").volume()).isEqualByComparingTo("353216");
+    }
+
+    @Test
+    void eastMoneyStarQuotesAndDailyBarsAreAlreadyInHands() throws Exception {
+        JsonNode quote = objectMapper.createObjectNode()
+                .put("f12", "688696").put("f14", "极米科技").put("f13", 1)
+                .put("f2", 8693).put("f5", 15275);
+        assertThat(client.readQuote(quote, Instant.parse("2026-10-16T07:30:00Z")).orElseThrow().volume())
+                .isEqualByComparingTo("15275");
+        java.lang.reflect.Method read = EastMoneyClient.class.getDeclaredMethod("readKLine", String.class, String.class);
+        read.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Optional<EastMoneyKLine> row = (Optional<EastMoneyKLine>) read.invoke(client, "688696",
+                "2026-10-16,84.85,86.93,89.89,84.32,15275,133303909.00,6.63,3.55,2.98,2.18");
+        assertThat(row.orElseThrow().volume()).isEqualByComparingTo("15275");
+    }
+
+    @Test
+    void normalizedTencentStarVolumeMatchesTheThreeDayQuoteComparison() throws Exception {
+        LocalDate date = LocalDate.of(2026, 10, 16);
+        List<EastMoneyKLine> bars = new ArrayList<>();
+        for (int daysAgo = 60; daysAgo >= 0; daysAgo--) {
+            String volume = switch (daysAgo) {
+                case 3 -> "986100";
+                case 2 -> "1575989";
+                case 1 -> "861067";
+                case 0 -> "1527513";
+                default -> "1000000";
+            };
+            bars.add(tencentVolumeBar("688696", date.minusDays(daysAgo), volume));
+        }
+        ShortTermRuleSet rules = new ShortTermRuleSet(0, 0, bd("80000000"), bd("1.20"),
+                bd("6.50"), bd("8.00"), bd("55"));
+        // EastMoney's current quote is in hands; Tencent fallback must now use that same unit.
+        for (BigDecimal quoteVolume : List.of(bd("15275"), tencentVolumeQuote("688696", "1527513").volume())) {
+            var technical = new ShortTermTechnicalSignalEvaluator().evaluate(
+                    bars, bd("86.93"), date, quoteVolume, true, rules).snapshot();
+            assertThat(technical.averageVolume3()).isEqualByComparingTo("11410.52");
+            assertThat(technical.volumeRatio3()).isEqualByComparingTo("1.34");
+            assertThat(technical.todayVolume()).isEqualByComparingTo(quoteVolume);
+        }
+    }
+
+    private EastMoneyKLine tencentVolumeBar(String symbol, LocalDate date, String volume) throws Exception {
+        java.lang.reflect.Method read = EastMoneyClient.class.getDeclaredMethod("readTencentKLine", String.class, JsonNode.class);
+        read.setAccessible(true);
+        JsonNode raw = objectMapper.valueToTree(List.of(date.toString(), "84.85", "86.93", "89.89", "84.32", volume));
+        @SuppressWarnings("unchecked")
+        Optional<EastMoneyKLine> row = (Optional<EastMoneyKLine>) read.invoke(client, symbol, raw);
+        return row.orElseThrow();
+    }
+
+    private EastMoneyQuote tencentVolumeQuote(String symbol, String volume) {
+        String[] fields = new String[49];
+        Arrays.fill(fields, "");
+        fields[1] = "成交量口径测试";
+        fields[2] = symbol;
+        fields[3] = "86.93";
+        fields[30] = "20261016161445";
+        fields[36] = volume;
+        fields[37] = "13330.3909";
+        return client.readTencentQuote("v_quote=\"" + String.join("~", fields) + "\"",
+                Instant.parse("2026-10-16T08:30:00Z")).orElseThrow();
     }
 
     @Test
@@ -420,6 +513,33 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void industryFundFlowRetainsMissingAmountsInTheReturnedCoverageUniverse() throws Exception {
+        JsonNode diff = objectMapper.readTree("""
+                [{"f12":"BK1201","f14":"电子","f62":"-"},
+                 {"f12":"BK1036","f14":"半导体","f62":0},
+                 {"f12":"BKbad","f14":"无效板块","f62":100}]
+                """);
+
+        List<EastMoneyIndustryFundFlowSnapshot> snapshots = client.readIndustryFundFlows(
+                diff, Instant.parse("2026-08-07T06:15:00Z"), "fixture");
+
+        assertThat(snapshots).extracting(EastMoneyIndustryFundFlowSnapshot::code)
+                .containsExactly("BK1201", "BK1036");
+        assertThat(snapshots.get(0).mainNetInflow()).isNull();
+        assertThat(snapshots.get(0).tradeDate()).isNull();
+        assertThat(snapshots.get(1).mainNetInflow()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void missingBrokenPoolStructureIsNotAConfirmedZeroBrokenBoards() throws Exception {
+        assertThat(client.readBrokenBoardPoolEntries(objectMapper.readTree("[]"))).isEmpty();
+        assertThatThrownBy(() -> client.readBrokenBoardPoolEntries(objectMapper.readTree("{}")))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("炸板池");
+        assertThatThrownBy(() -> client.readBrokenBoardPoolEntries(null))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("炸板池");
+    }
+
+    @Test
     void shouldParseBoardStockFundFlowRanksFromBoardConstituentResponse() throws Exception {
         JsonNode diff = objectMapper.readTree("""
                 [
@@ -608,6 +728,119 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void currentDailySliceIncludesTodayWhichTencentOmitsForAFixedEnd() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
+        LocalDate begin = today.minusDays(3);
+        List<String> urls = new ArrayList<>();
+        EastMoneyClient history = tencentDailyClient(url -> tencentDailyBody(List.of(
+                tencentBar(begin), tencentBar(url.contains(",,500,qfq") ? today : today.minusDays(1)))), urls);
+
+        EastMoneyKLineSeries series = history.fetchDailyKLineSeries("600893", begin, today);
+
+        assertThat(series.complete()).isTrue();
+        assertThat(series.sourceName()).isEqualTo("TENCENT_QFQ_DAILY");
+        assertThat(series.rows()).extracting(EastMoneyKLine::tradeDate).containsExactly(begin, today);
+        assertThat(urls).singleElement().asString().contains(",day," + begin + ",,500,qfq");
+    }
+
+    @Test
+    void onlyTheCurrentLastSliceUsesAnOpenEnd() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
+        LocalDate begin = today.minusYears(1).minusDays(3);
+        LocalDate firstEnd = begin.plusYears(1).minusDays(1);
+        List<String> urls = new ArrayList<>();
+        EastMoneyClient history = tencentDailyClient(url -> {
+            String[] fields = url.substring(url.indexOf("?param=") + 7).split(",", -1);
+            LocalDate start = LocalDate.parse(fields[2]);
+            LocalDate end = fields[3].isEmpty() ? today : LocalDate.parse(fields[3]);
+            // The rolling endpoint can also return rows belonging to the previous slice.
+            return tencentDailyBody(fields[3].isEmpty()
+                    ? List.of(tencentBar(firstEnd), tencentBar(start), tencentBar(end))
+                    : List.of(tencentBar(start), tencentBar(end)));
+        }, urls);
+
+        EastMoneyKLineSeries series = history.fetchDailyKLineSeries("600893", begin, today);
+
+        assertThat(series.complete()).isTrue();
+        assertThat(series.rows()).extracting(EastMoneyKLine::tradeDate)
+                .containsExactly(begin, firstEnd, firstEnd.plusDays(1), today);
+        assertThat(urls).hasSize(2);
+        assertThat(urls.get(0)).contains(",day," + begin + "," + firstEnd + ",500,qfq");
+        assertThat(urls.get(1)).contains(",day," + firstEnd.plusDays(1) + ",,500,qfq");
+    }
+
+    @Test
+    void historicalDailyRequestsKeepTheirExplicitEnd() {
+        LocalDate end = LocalDate.now(ZoneId.of("Asia/Shanghai")).minusDays(2);
+        LocalDate begin = end.minusDays(3);
+        List<String> urls = new ArrayList<>();
+        EastMoneyClient history = tencentDailyClient(
+                url -> tencentDailyBody(List.of(tencentBar(begin), tencentBar(end))), urls);
+
+        EastMoneyKLineSeries series = history.fetchDailyKLineSeries("600893", begin, end);
+
+        assertThat(series.complete()).isTrue();
+        assertThat(urls).singleElement().asString().contains(",day," + begin + "," + end + ",500,qfq");
+    }
+
+    @Test
+    void rollingDailyResponseIsCroppedToRequestedDatesWithExcludedRowsDisclosed() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
+        LocalDate begin = today.minusDays(3);
+        EastMoneyClient history = tencentDailyClient(url -> tencentDailyBody(List.of(
+                tencentBar(begin.minusDays(1)), tencentBar(begin), tencentBar(today),
+                tencentBar(today.plusDays(1)))), new ArrayList<>());
+
+        EastMoneyKLineSeries series = history.fetchDailyKLineSeries("600893", begin, today);
+
+        assertThat(series.complete()).isTrue();
+        assertThat(series.rows()).extracting(EastMoneyKLine::tradeDate).containsExactly(begin, today);
+        assertThat(series.detail()).contains("解析 4/4", "排除 2 行区间外数据");
+    }
+
+    @Test
+    void croppingCannotHideMalformedDuplicateOrInvalidOhlcRows() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
+        LocalDate begin = today.minusDays(3);
+        LocalDate outside = begin.minusDays(1);
+        for (List<List<String>> extras : List.of(
+                List.of(List.of(outside.toString(), "broken")),
+                List.of(List.of(outside.toString(), "10", "11", "9", "8", "100")),
+                List.of(tencentBar(outside), tencentBar(outside)),
+                List.of(tencentBar(today)))) {
+            List<List<String>> rows = new ArrayList<>(List.of(tencentBar(begin), tencentBar(today)));
+            rows.addAll(extras);
+            EastMoneyClient history = tencentDailyClient(url -> tencentDailyBody(rows), new ArrayList<>());
+
+            EastMoneyKLineSeries series = history.fetchDailyKLineSeries("600893", begin, today);
+
+            assertThat(series.complete()).as("invalid raw rows %s", extras).isFalse();
+            assertThat(series.sourceName()).isEqualTo("HISTORICAL_KLINE_PARTIAL");
+            assertThat(series.detail()).contains("拒绝使用部分数据");
+            if (extras.get(0).size() < 6) assertThat(series.detail()).contains("解析 2/3");
+        }
+    }
+
+    private EastMoneyClient tencentDailyClient(Function<String, String> response, List<String> urls) {
+        return new EastMoneyClient(null, objectMapper, properties()) {
+            @Override
+            String fetchBodyWithCurl(String url, Exception failure, String referer) {
+                if (!url.contains("/fqkline/get")) return "{\"data\":{\"klines\":[]}}";
+                urls.add(url);
+                return response.apply(url);
+            }
+        };
+    }
+
+    private String tencentDailyBody(List<List<String>> rows) {
+        return objectMapper.valueToTree(Map.of("data", Map.of("sh600893", Map.of("qfqday", rows)))).toString();
+    }
+
+    private List<String> tencentBar(LocalDate date) {
+        return List.of(date.toString(), "10", "11", "12", "9", "100");
+    }
+
+    @Test
     void quotePageUrlUsesStableSecurityCodeSort() {
         String url = client.ashareQuotePageUrl(2, 100);
 
@@ -620,7 +853,7 @@ class EastMoneyClientTest {
     void snapshotContinuesPastADuplicatePageToCollectLaterUniqueRows() {
         DuplicateMiddlePageStubClient snapshotClient = new DuplicateMiddlePageStubClient();
 
-        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(3);
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(3);
 
         assertThat(snapshot.complete()).isTrue();
         assertThat(snapshot.expectedCount()).isEqualTo(3);
@@ -631,10 +864,82 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void conflictingQuoteCannotKeepAnEarlierInRangePriceFromTheSamePage() {
+        Instant marketAt = Instant.parse("2026-09-08T02:00:00Z");
+        LocalDate day = LocalDate.parse("2026-09-08");
+        EastMoneyQuote inside = snapshotQuote("600001", "10.10", "10", "1", "100", day, marketAt, marketAt);
+        EastMoneyQuote outside = snapshotQuote("600001", "10.30", "10", "3", "100", day, marketAt, marketAt);
+        EastMoneyQuote other = snapshotQuote("600002", "10", "10", "0", "100", day, marketAt, marketAt);
+
+        AshareQuoteSnapshot snapshot = quotePages(2, List.of(List.of(inside, outside, other)))
+                .fetchEastMoneyQuoteSnapshot(10000);
+
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("600002");
+        assertThat(snapshot.expectedCount()).isEqualTo(2);
+        assertThat(snapshot.fetchedCount()).isEqualTo(1);
+        assertThat(snapshot.missingCount()).isEqualTo(1);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void aConflictingSymbolCannotReturnThroughALaterDuplicatePage() {
+        Instant marketAt = Instant.parse("2026-09-08T02:00:00Z");
+        LocalDate day = LocalDate.parse("2026-09-08");
+        EastMoneyQuote inside = snapshotQuote("600001", "10.10", "10", "1", "100", day, marketAt, marketAt);
+        EastMoneyQuote outside = snapshotQuote("600001", "10.30", "10", "3", "100", day, marketAt, marketAt);
+        EastMoneyQuote other = snapshotQuote("600002", "10", "10", "0", "100", day, marketAt, marketAt);
+
+        AshareQuoteSnapshot snapshot = quotePages(2, List.of(List.of(inside), List.of(outside), List.of(inside, other)))
+                .fetchEastMoneyQuoteSnapshot(10000);
+
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("600002");
+        assertThat(snapshot.missingCount()).isEqualTo(1);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void everyExecutionBusinessFieldMustAgreeAcrossDuplicateQuotes() {
+        Instant marketAt = Instant.parse("2026-09-08T02:00:00Z");
+        LocalDate day = LocalDate.parse("2026-09-08");
+        EastMoneyQuote first = snapshotQuote("600001", "10.10", "10", "1", "100", day, marketAt, marketAt);
+        EastMoneyQuote other = snapshotQuote("600002", "10", "10", "0", "100", day, marketAt, marketAt);
+        for (EastMoneyQuote conflict : List.of(
+                snapshotQuote("600001", "10.30", "10", "1", "100", day, marketAt, marketAt),
+                snapshotQuote("600001", "10.10", "10.30", "1", "100", day, marketAt, marketAt),
+                snapshotQuote("600001", "10.10", "10", "3", "100", day, marketAt, marketAt),
+                snapshotQuote("600001", "10.10", "10", "1", "101", day, marketAt, marketAt),
+                snapshotQuote("600001", "10.10", "10", "1", "100", day.minusDays(1), marketAt, marketAt),
+                snapshotQuote("600001", "10.10", "10", "1", "100", day, marketAt.plusSeconds(1), marketAt))) {
+            AshareQuoteSnapshot snapshot = quotePages(2, List.of(List.of(first, conflict, other)))
+                    .fetchEastMoneyQuoteSnapshot(10000);
+
+            assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("600002");
+            assertThat(snapshot.missingCount()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void matchingBusinessQuotesIgnoreFetchTimeAndDecimalScale() {
+        Instant marketAt = Instant.parse("2026-09-08T02:00:00Z");
+        LocalDate day = LocalDate.parse("2026-09-08");
+        EastMoneyQuote first = snapshotQuote("600001", "10.10", "10", "1", "100", day, marketAt, marketAt);
+        EastMoneyQuote later = snapshotQuote("600001", "10.100", "10.0", "1.00", "100.0", day, marketAt, marketAt.plusSeconds(20));
+        EastMoneyQuote other = snapshotQuote("600002", "10", "10", "0", "100", day, marketAt, marketAt);
+
+        AshareQuoteSnapshot snapshot = quotePages(2, List.of(List.of(first), List.of(later, other)))
+                .fetchEastMoneyQuoteSnapshot(10000);
+
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("600001", "600002");
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.missingCount()).isZero();
+        assertThat(snapshot.complete()).isTrue();
+    }
+
+    @Test
     void snapshotRetriesOnlyTheFailedPageAfterATransientProviderError() {
         TransientPageFailureStubClient snapshotClient = new TransientPageFailureStubClient();
 
-        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(2);
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(2);
 
         assertThat(snapshot.complete()).isTrue();
         assertThat(snapshot.expectedCount()).isEqualTo(2);
@@ -649,7 +954,7 @@ class EastMoneyClientTest {
     void snapshotUsesLivePaginationAsCanonicalUniverse() {
         SnapshotStubClient snapshotClient = new SnapshotStubClient();
 
-        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(3);
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(3);
 
         assertThat(snapshot.complete()).isTrue();
         assertThat(snapshot.expectedCount()).isEqualTo(3);
@@ -662,7 +967,7 @@ class EastMoneyClientTest {
     void snapshotDoesNotRestrictLiveQuotesToBundledSecurityMaster() {
         DynamicFallbackStubClient snapshotClient = new DynamicFallbackStubClient();
 
-        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(6000);
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(6000);
 
         assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("688999");
         assertThat(snapshot.expectedCount()).isEqualTo(1);
@@ -673,7 +978,7 @@ class EastMoneyClientTest {
     void snapshotContinuesWhenRemoteCapsRowsBelowRequestedPageSize() {
         CappedPageStubClient snapshotClient = new CappedPageStubClient();
 
-        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(250);
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(250);
 
         assertThat(snapshot.complete()).isTrue();
         assertThat(snapshot.expectedCount()).isEqualTo(250);
@@ -687,7 +992,7 @@ class EastMoneyClientTest {
     void snapshotKeepsSourceReportedUniverseWhenRequestIsOnlyASample() {
         SampledUniverseStubClient snapshotClient = new SampledUniverseStubClient();
 
-        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(100);
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(100);
 
         assertThat(snapshot.requestedCount()).isEqualTo(100);
         assertThat(snapshot.expectedCount()).isEqualTo(5000);
@@ -700,7 +1005,7 @@ class EastMoneyClientTest {
     void snapshotMarksChangingSourceReportedUniverseAsUnknown() {
         InconsistentUniverseStubClient snapshotClient = new InconsistentUniverseStubClient();
 
-        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(Integer.MAX_VALUE);
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
 
         assertThat(snapshot.expectedCount()).isZero();
         assertThat(snapshot.fetchedCount()).isEqualTo(2);
@@ -711,7 +1016,7 @@ class EastMoneyClientTest {
     void snapshotRejectsZeroReportedTotalOnLaterNonEmptyPage() {
         MissingLaterTotalStubClient snapshotClient = new MissingLaterTotalStubClient();
 
-        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(Integer.MAX_VALUE);
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
 
         assertThat(snapshot.expectedCount()).isZero();
         assertThat(snapshot.fetchedCount()).isEqualTo(2);
@@ -722,7 +1027,7 @@ class EastMoneyClientTest {
     void snapshotAllowsZeroReportedTotalOnEmptyTerminalPage() {
         EmptyTerminalPageStubClient snapshotClient = new EmptyTerminalPageStubClient();
 
-        AshareQuoteSnapshot snapshot = snapshotClient.fetchAshareQuoteSnapshot(Integer.MAX_VALUE);
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
 
         assertThat(snapshot.expectedCount()).isEqualTo(2);
         assertThat(snapshot.fetchedCount()).isEqualTo(1);
@@ -750,6 +1055,22 @@ class EastMoneyClientTest {
 
     private BigDecimal bd(String value) {
         return new BigDecimal(value);
+    }
+
+    private EastMoneyClient quotePages(int total, List<List<EastMoneyQuote>> pages) {
+        return new EastMoneyClient(null, objectMapper, null) {
+            @Override
+            AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+                return new AshareQuotePage(total, pageNumber <= pages.size() ? pages.get(pageNumber - 1) : List.of());
+            }
+        };
+    }
+
+    private EastMoneyQuote snapshotQuote(String symbol, String latest, String open, String change, String volume,
+                                         LocalDate day, Instant marketAt, Instant fetchedAt) {
+        return new EastMoneyQuote(symbol, "示例公司", "上交所", "示例行业", bd(latest), bd(change), null,
+                bd(volume), null, null, null, null, "页面夹具", "https://quote.example/" + symbol,
+                fetchedAt, day, marketAt, null, bd(open), null, null);
     }
 
     private static final class SnapshotStubClient extends EastMoneyClient {

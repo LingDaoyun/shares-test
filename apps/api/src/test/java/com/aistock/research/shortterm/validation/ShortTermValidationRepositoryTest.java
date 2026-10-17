@@ -35,6 +35,7 @@ class ShortTermValidationRepositoryTest {
 
     @Test
     void storesStrategyObservationsWithoutCreatingUserHoldings() {
+        Long tradeCaseCountBefore = jdbcTemplate.queryForObject("select count(*) from strategy_trade_case", Long.class);
         ShortTermSignalObservationEntity observation = observation(
                 "obs-1", "scheduled-final-1", true, true,
                 "GOLDEN_CROSS_VOLUME", "TREND_EXPANSION");
@@ -45,7 +46,8 @@ class ShortTermValidationRepositoryTest {
         assertThat(observations.findById("obs-1")).isPresent();
         assertThat(outcomes.findByObservationIdOrderByHorizonAsc("obs-1")).hasSize(1);
         assertThat(jdbcTemplate.queryForObject("select count(*) from strategy_trade_case", Long.class))
-                .isZero();
+                .as("保存策略观察及其结果不能创建或删除用户交易记录")
+                .isEqualTo(tradeCaseCountBefore);
     }
 
     @Test

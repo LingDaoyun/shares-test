@@ -4,6 +4,7 @@ import { fetchShortTermLimitUpIndustry } from '../../api/client'
 import { Button } from '../ui/Button'
 import { DetailOverlay } from '../ui/DetailOverlay'
 import { Loader } from '../ui/Loader'
+import { LeaderCatchUpPanel } from './LeaderCatchUpPanel'
 import { changeClass, formatAmount, formatDateTime, formatPercent, formatPerSharePrice, formatSignedPercent } from '../../lib/format'
 import type { ShortTermIndustryRisingStock, ShortTermLimitUpIndustrySnapshot, ShortTermLimitUpStock } from '../../types'
 
@@ -85,6 +86,7 @@ export function LimitUpIndustryOverlay({ selection, onClose }: {
             )
           ) : null}
         </section>
+        <LeaderCatchUpPanel key={`${selection.tradeDate}:${selection.industry}`} industry={selection.industry} tradeDate={selection.tradeDate} sealedStocks={sealed} />
       </div>
     </DetailOverlay>
   )

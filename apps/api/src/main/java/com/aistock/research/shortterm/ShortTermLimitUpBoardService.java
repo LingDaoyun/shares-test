@@ -144,11 +144,21 @@ public class ShortTermLimitUpBoardService {
         int declining = 0;
         int unchanged = 0;
         int excludedCount = 0;
+        Instant marketTimestampFrom = null;
+        Instant marketTimestampTo = null;
+        int missingTimestampCount = 0;
         for (EastMoneyQuote quote : quotes.quotes()) {
             if (!tradeDate.equals(quote.tradeDate()) || quote.latestPrice() == null
                     || quote.latestPrice().signum() <= 0 || quote.changePercent() == null) {
                 excludedCount++;
                 continue;
+            }
+            Instant marketTimestamp = quote.marketTimestamp();
+            if (marketTimestamp == null) {
+                missingTimestampCount++;
+            } else {
+                if (marketTimestampFrom == null || marketTimestamp.isBefore(marketTimestampFrom)) marketTimestampFrom = marketTimestamp;
+                if (marketTimestampTo == null || marketTimestamp.isAfter(marketTimestampTo)) marketTimestampTo = marketTimestamp;
             }
             int direction = quote.changePercent().signum();
             if (direction > 0) {
@@ -163,7 +173,8 @@ public class ShortTermLimitUpBoardService {
             throw new IllegalStateException("尚无 " + tradeDate + " 的有效涨跌报价，可能是盘前或非交易日");
         }
         ShortTermMarketBreadth breadth = new ShortTermMarketBreadth(
-                tradeDate, quotes.fetchedAt(), advancing, declining, unchanged,
+                tradeDate, quotes.fetchedAt(), marketTimestampFrom, marketTimestampTo, missingTimestampCount,
+                advancing, declining, unchanged,
                 excludedCount, quotes.expectedCount(), quotes.source());
         cachedBreadth = new CachedBreadth(breadth, Instant.now().plusSeconds(SNAPSHOT_TTL_SECONDS));
         return breadth;
@@ -204,10 +215,11 @@ public class ShortTermLimitUpBoardService {
             );
         }
         List<String> dataGaps = new ArrayList<>();
-        List<EastMoneyBrokenBoardPoolEntry> brokenEntries = List.of();
+        List<EastMoneyBrokenBoardPoolEntry> brokenEntries = null;
         boolean brokenBoardAvailable = true;
         try {
             brokenEntries = eastMoneyClient.fetchBrokenBoardPool(tradeDate);
+            if (brokenEntries == null) throw new IllegalStateException("炸板池未返回");
         } catch (Exception exception) {
             brokenBoardAvailable = false;
             logger.warn("炸板池获取失败：{}", rootMessage(exception));
@@ -357,7 +369,7 @@ public class ShortTermLimitUpBoardService {
             List<String> dataGaps
     ) {
         return buildSnapshot(
-                tradeDate, fetchedAt, limitUpEntries, brokenEntries, true,
+                tradeDate, fetchedAt, limitUpEntries, brokenEntries, brokenEntries != null,
                 limitDownEntries, marketTurnover, dataGaps);
     }
 
@@ -375,7 +387,8 @@ public class ShortTermLimitUpBoardService {
                 .sorted(boardDepthThenSealTime())
                 .map(ShortTermLimitUpBoardService::toStock)
                 .toList();
-        List<ShortTermBrokenBoardStock> brokenStocks = brokenEntries.stream()
+        List<ShortTermBrokenBoardStock> brokenStocks = (brokenEntries == null
+                ? List.<EastMoneyBrokenBoardPoolEntry>of() : brokenEntries).stream()
                 .sorted(Comparator
                         .comparing(EastMoneyBrokenBoardPoolEntry::firstSealTime,
                                 Comparator.nullsLast(Comparator.naturalOrder()))
@@ -391,7 +404,8 @@ public class ShortTermLimitUpBoardService {
                 brokenBoardAvailable,
                 brokenStocks,
                 industryStats(limitUpEntries),
-                sentiment(limitUpEntries, brokenEntries.size(), limitDownEntries == null ? null : limitDownEntries.size()),
+                sentiment(limitUpEntries, brokenBoardAvailable && brokenEntries != null ? brokenEntries.size() : null,
+                        limitDownEntries == null ? null : limitDownEntries.size()),
                 marketTurnover,
                 dataGaps
         );
@@ -534,12 +548,10 @@ public class ShortTermLimitUpBoardService {
     }
 
     private static String tone(int limitUpCount, BigDecimal sealBreakRatioPercent, BigDecimal earlySealSharePercent) {
-        boolean heavyBreak = sealBreakRatioPercent != null
-                && sealBreakRatioPercent.compareTo(HEAVY_BREAK_RATIO) >= 0;
-        boolean lightBreak = sealBreakRatioPercent == null
-                || sealBreakRatioPercent.compareTo(LIGHT_BREAK_RATIO) <= 0;
-        boolean moderateBreak = sealBreakRatioPercent == null
-                || sealBreakRatioPercent.compareTo(MODERATE_BREAK_RATIO) <= 0;
+        if (sealBreakRatioPercent == null) return "情绪待确认";
+        boolean heavyBreak = sealBreakRatioPercent.compareTo(HEAVY_BREAK_RATIO) >= 0;
+        boolean lightBreak = sealBreakRatioPercent.compareTo(LIGHT_BREAK_RATIO) <= 0;
+        boolean moderateBreak = sealBreakRatioPercent.compareTo(MODERATE_BREAK_RATIO) <= 0;
         boolean earlyDominant = earlySealSharePercent != null
                 && earlySealSharePercent.compareTo(EARLY_DOMINANT_SHARE) >= 0;
         if (heavyBreak) {
@@ -575,6 +587,8 @@ public class ShortTermLimitUpBoardService {
             if (sealBreakRatioPercent != null) {
                 text.append("（炸板率 ").append(sealBreakRatioPercent).append("%）");
             }
+        } else {
+            text.append("，炸板率缺失，情绪待确认");
         }
         if (limitDownCount != null) {
             text.append("，跌停 ").append(limitDownCount).append(" 家");

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CandlestickChart, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import type { ShortTermParams } from '../api/client'
+import type { UpperShadowCandidate } from '../api/dailyShortTerm'
 import { fetchShortTermValidationSummaries } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -9,6 +10,8 @@ import { Card } from '../components/ui/Card'
 import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOverlay'
 import { Loader } from '../components/ui/Loader'
 import { LimitUpBoardPanel } from '../components/shortterm/LimitUpBoardPanel'
+import { DailyShortTermPanel } from '../components/shortterm/DailyShortTermPanel'
+import { UpperShadowCandidateDetail, UpperShadowCandidateRow } from '../components/shortterm/UpperShadowCandidateView'
 import { IndustryLeaderOverlay, type IndustryLeaderSelection } from '../components/shortterm/IndustryLeaderOverlay'
 import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
 import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
@@ -44,16 +47,16 @@ interface DraftParams {
 }
 
 const DEFAULT_DRAFT: DraftParams = {
-  limit: 8,
-  scanLimit: 6000,
-  klineLimit: 120,
+  limit: 0,
+  scanLimit: 0,
+  klineLimit: 0,
   minAmountYi: 0.8,
   maxPricePerShare: 100,
   minVolumeRatio: 1.2,
   maxEntryRise: 6.5,
   maxDistanceToMa20: 8,
   minFinancialScore: 55,
-  allowStaticCachePreview: true,
+  allowStaticCachePreview: false,
   allowChiNext: false
 }
 
@@ -72,6 +75,7 @@ export function ShortTermPage() {
   const [draft, setDraft] = useState<DraftParams>(DEFAULT_DRAFT)
   const [viewPreferences, setViewPreferences] = useState<ShortTermViewPreferences>(() => loadShortTermViewPreferences())
   const report = useShortTermScanStore((state) => state.report)
+  const savedUpperShadow = useShortTermScanStore((state) => state.upperShadow)
   const loading = useShortTermScanStore((state) => state.loading)
   const error = useShortTermScanStore((state) => state.error)
   const scanMessage = useShortTermScanStore((state) => state.scanMessage)
@@ -83,19 +87,41 @@ export function ShortTermPage() {
   const [validationState, setValidationState] = useState<ShortTermValidationViewState>('IDLE')
   const validationRequests = useRef(new Map<string, Promise<ShortTermValidationSummary[]>>())
 
+  const upperShadow = savedUpperShadow && (!report || savedUpperShadow.tradeDate === formatDateTime(
+    report.dataCutoffAt ?? report.generatedAt
+  ).slice(0, 10)) ? savedUpperShadow : null
+  const candidates = useMemo(() => {
+    const merged = new Map<string, { symbol: string; name: string; industry: string; rightSide: ShortTermCandidate | null; shadow: UpperShadowCandidate | null }>()
+    for (const candidate of orderByRankingScoreDesc(report?.candidates ?? [])) {
+      if (!merged.has(candidate.symbol)) merged.set(candidate.symbol, {
+        symbol: candidate.symbol, name: candidate.name, industry: candidate.industry || '', rightSide: candidate, shadow: null
+      })
+    }
+    for (const shadow of upperShadow?.candidates ?? []) {
+      const existing = merged.get(shadow.symbol)
+      if (existing) {
+        existing.shadow = shadow
+        existing.industry ||= shadow.industry || ''
+      } else {
+        merged.set(shadow.symbol, { symbol: shadow.symbol, name: shadow.name, industry: shadow.industry || '', rightSide: null, shadow })
+      }
+    }
+    return [...merged.values()]
+  }, [report, upperShadow])
+
   useEffect(() => {
-    if (selectedSymbol && !report?.candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
+    if (selectedSymbol && !candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
       setSelectedSymbol(null)
     }
-  }, [report, selectedSymbol])
+  }, [candidates, selectedSymbol])
 
   const selected = useMemo(() => {
     return resolveDetailSelection(
-      orderByRankingScoreDesc(report?.candidates ?? []),
+      candidates,
       selectedSymbol,
       (candidate) => candidate.symbol
     )
-  }, [report, selectedSymbol])
+  }, [candidates, selectedSymbol])
 
   useEffect(() => {
     saveShortTermViewPreferences(viewPreferences)
@@ -178,15 +204,15 @@ export function ShortTermPage() {
         }
       >
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-          <NumberField label="候选数量" value={draft.limit} min={3} max={12} onChange={(value) => setDraft({ ...draft, limit: value })} />
-          <NumberField label="扫描数量" value={draft.scanLimit} min={50} max={6000} step={100} onChange={(value) => setDraft({ ...draft, scanLimit: value })} />
-          <NumberField label="K线复核数" value={draft.klineLimit} min={10} max={160} step={10} onChange={(value) => setDraft({ ...draft, klineLimit: value })} />
+          <NumberField label="候选数量（0=全部）" value={draft.limit} min={0} max={12} onChange={(value) => setDraft({ ...draft, limit: value })} />
+          <NumberField label="扫描数量（0=全部）" value={draft.scanLimit} min={0} max={6000} step={100} onChange={(value) => setDraft({ ...draft, scanLimit: value })} />
+          <NumberField label="K线复核数（0=全部）" value={draft.klineLimit} min={0} max={160} step={10} onChange={(value) => setDraft({ ...draft, klineLimit: value })} />
           <NumberField label="成交额下限(亿)" value={draft.minAmountYi} min={0.8} max={30} step={0.05} onChange={(value) => setDraft({ ...draft, minAmountYi: value })} />
           <NumberField label="每股价格上限(元)" value={draft.maxPricePerShare} min={1} max={2000} step={1} onChange={(value) => setDraft({ ...draft, maxPricePerShare: value })} />
           <NumberField label="量比下限" value={draft.minVolumeRatio} min={1} max={3.2} step={0.05} onChange={(value) => setDraft({ ...draft, minVolumeRatio: value })} />
           <NumberField label="追涨上限%" value={draft.maxEntryRise} min={1} max={10} step={0.1} onChange={(value) => setDraft({ ...draft, maxEntryRise: value })} />
           <NumberField label="距20日线%" value={draft.maxDistanceToMa20} min={2} max={20} step={0.5} onChange={(value) => setDraft({ ...draft, maxDistanceToMa20: value })} />
-          <NumberField label="财报分下限" value={draft.minFinancialScore} min={30} max={90} onChange={(value) => setDraft({ ...draft, minFinancialScore: value })} />
+          <NumberField label="财报风险提示线" value={draft.minFinancialScore} min={30} max={90} onChange={(value) => setDraft({ ...draft, minFinancialScore: value })} />
         </div>
         <label className="mt-3 flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-line-soft bg-white px-3 py-2 text-sm">
           <span>
@@ -220,6 +246,8 @@ export function ShortTermPage() {
         </label>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
           <p className="text-xs leading-relaxed text-ink-500">
+            默认完整复核并展示全部；这些参数用于手动扫描，定时任务使用默认参数。
+            {' '}
             低流动性、长期横盘、急拉和离均线过远仍受约束。
           </p>
         </div>
@@ -238,6 +266,7 @@ export function ShortTermPage() {
           <ResultViewControls
             preferences={viewPreferences}
             onChange={updateViewPreference}
+            collectedAt={report.coverage?.fetchedAt}
           />
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3" data-testid="short-term-horizontal-summary">
@@ -259,49 +288,65 @@ export function ShortTermPage() {
             ) : null}
           </div>
 
-          <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧候选</span>} flush>
-            {report.candidates.length ? (
-              <div className="divide-y divide-line-soft">
-                {orderByRankingScoreDesc(report.candidates).map((candidate) => (
-                  <CandidateRow
-                    key={candidate.symbol}
-                    candidate={candidate}
-                    selected={selected?.symbol === candidate.symbol}
-                    onSelect={() => setSelectedSymbol(candidate.symbol)}
-                    marketRegimeLabel={report.marketRegime?.label}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="p-5"><Loader text="暂无候选" /></div>
-            )}
-          </Card>
-
-          <DetailOverlay
-            open={selected !== null}
-            title={selected ? `${selected.name} ${selected.symbol}` : '短线候选详情'}
-            subtitle={selected ? `${selected.market ?? 'A股'} · ${selected.industry ?? '行业待补'} · 排名 #${selected.rank}` : undefined}
-            onClose={() => setSelectedSymbol(null)}
-          >
-            {selected ? (
-              <CandidateDetail
-                candidate={selected}
-                weightProfile={report.weightProfile}
-                generatedAt={report.generatedAt}
-                tradeCaptureToken={report.tradeCaptureTokens?.[selected.symbol] ?? null}
-                marketRegime={report.marketRegime}
-                validationSummaries={validationSummaries}
-                validationState={validationState}
-              />
-            ) : null}
-          </DetailOverlay>
-
-          <IndustryLeaderOverlay
-            selection={leaderSelection}
-            onClose={() => setLeaderSelection(null)}
-          />
         </>
       ) : null}
+
+        <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />短线候选</span>}
+          extra={<span className="text-xs text-ink-500">{candidates.length} 只</span>} flush>
+          <DailyShortTermPanel />
+          <div aria-label="短线候选列表" className="divide-y divide-line-soft">
+            {candidates.length ? candidates.map((candidate) => candidate.rightSide ? (
+              <CandidateRow
+                key={candidate.symbol}
+                candidate={candidate.rightSide}
+                industry={candidate.industry}
+                hasUpperShadow={candidate.shadow !== null}
+                selected={selected?.symbol === candidate.symbol}
+                onSelect={() => setSelectedSymbol(candidate.symbol)}
+                marketRegimeLabel={report?.marketRegime?.label}
+              />
+            ) : candidate.shadow ? (
+              <UpperShadowCandidateRow
+                key={candidate.symbol}
+                candidate={candidate.shadow}
+                selected={selected?.symbol === candidate.symbol}
+                onSelect={() => setSelectedSymbol(candidate.symbol)}
+              />
+            ) : null) : (
+              <p className="p-5 text-sm text-ink-500">{upperShadow?.status === 'DATA_BLOCKED'
+                ? '暂无可展示候选，形态扫描数据不足。'
+                : upperShadow?.status === 'PARTIAL' ? '已检查范围暂无候选，其余数据缺口尚未判断。'
+                  : report || upperShadow ? '暂无候选' : '尚无已加载候选'}</p>
+            )}
+          </div>
+        </Card>
+
+      <DetailOverlay
+        open={selected !== null}
+        title={selected ? `${selected.name} ${selected.symbol}` : '短线候选详情'}
+        subtitle={selected ? `${selected.rightSide?.market ?? 'A股'} · ${selected.industry || '行业待补'} · ${selected.rightSide ? `排名 #${selected.rightSide.rank}` : '横盘长上影观察'}` : undefined}
+        onClose={() => setSelectedSymbol(null)}
+      >
+        <div className="flex flex-col gap-5">
+          {selected?.shadow && upperShadow ? <UpperShadowCandidateDetail candidate={selected.shadow} scan={upperShadow} /> : null}
+          {selected?.rightSide && report ? (
+            <CandidateDetail
+              candidate={selected.rightSide}
+              weightProfile={report.weightProfile}
+              generatedAt={report.generatedAt}
+              tradeCaptureToken={report.tradeCaptureTokens?.[selected.symbol] ?? null}
+              marketRegime={report.marketRegime}
+              validationSummaries={validationSummaries}
+              validationState={validationState}
+            />
+          ) : null}
+        </div>
+      </DetailOverlay>
+
+      <IndustryLeaderOverlay
+        selection={leaderSelection}
+        onClose={() => setLeaderSelection(null)}
+      />
     </div>
   )
 }
@@ -311,17 +356,19 @@ const resultViewOptions: Array<{
   label: string
   description: string
 }> = [
-  { key: 'marketSentimentVisible', label: '市场情绪', description: '今日宽度' },
-  { key: 'fundFlowVisible', label: '今日资金去向', description: '行业流向' },
-  { key: 'hotDirectionsVisible', label: '热门方向', description: '方向热度' }
+  { key: 'marketSentimentVisible', label: '市场情绪', description: '扫描时宽度' },
+  { key: 'fundFlowVisible', label: '今日资金去向', description: '扫描时行业流向' },
+  { key: 'hotDirectionsVisible', label: '热门方向', description: '扫描时热度' }
 ]
 
 function ResultViewControls({
   preferences,
-  onChange
+  onChange,
+  collectedAt
 }: {
   preferences: ShortTermViewPreferences
   onChange: (key: keyof ShortTermViewPreferences, checked: boolean) => void
+  collectedAt?: string | null
 }) {
   const visibleCount = resultViewOptions.filter((option) => preferences[option.key]).length
   return (
@@ -332,6 +379,9 @@ function ResultViewControls({
           <h3 className="text-base font-semibold text-ink-900">结果视图</h3>
           <p className="mt-1 text-xs leading-relaxed text-ink-500">
             已展示 {visibleCount}/{resultViewOptions.length} 个模块，勾选状态会在本机浏览器记住。
+          </p>
+          <p aria-label="扫描结果时间" className="mt-2 text-xs leading-relaxed text-amber-700">
+            行情采集 {collectedAt ? formatDateTime(collectedAt) : '时间未知'}。下方情绪、资金方向、热门方向及候选为扫描时结果；最新大盘涨跌见上方看板。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -367,7 +417,8 @@ function MarketSentimentSummaryCard({ report }: { report: ShortTermReport }) {
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="eyebrow mb-1 text-red-600">MARKET MOOD</div>
-            <h3 className="text-base font-semibold text-ink-900">市场情绪</h3>
+            <h3 className="text-base font-semibold text-ink-900">扫描时市场情绪</h3>
+            <p className="mt-1 text-xs text-ink-500">行情采集 {report.coverage?.fetchedAt ? formatDateTime(report.coverage.fetchedAt) : '时间未知'}</p>
           </div>
           <Tag tone={sentiment.score >= 70 ? 'success' : sentiment.score >= 50 ? 'brand' : 'warning'}>
             {sentiment.phase}
@@ -476,7 +527,7 @@ function MarketFundDirectionCard({
         )}
         {hasRows ? (
           <p className="text-[11px] leading-relaxed text-ink-400">
-            点击行业板块可查看板块内个股当日主力净流入 / 流出前 20 的龙头股。
+            点击行业板块可查看板块内个股当日主力净流入 / 流出前 20 的资金排名。
           </p>
         ) : null}
         {direction?.dataGaps?.length ? (
@@ -563,11 +614,15 @@ function orderByRankingScoreDesc(candidates: ShortTermCandidate[]): ShortTermCan
 
 function CandidateRow({
   candidate,
+  industry,
+  hasUpperShadow,
   selected,
   onSelect,
   marketRegimeLabel
 }: {
   candidate: ShortTermCandidate
+  industry: string
+  hasUpperShadow: boolean
   selected: boolean
   onSelect: () => void
   marketRegimeLabel: string | undefined
@@ -587,6 +642,8 @@ function CandidateRow({
           <span className="tabular text-xs font-semibold text-ink-400">#{candidate.rank}</span>
           <h3 className="truncate text-base font-semibold text-ink-900">{candidate.name}</h3>
           <span className="font-mono text-xs text-ink-400">{candidate.symbol}</span>
+          <Tag tone="brand">右侧候选</Tag>
+          {hasUpperShadow ? <Tag tone="warning">横盘长上影</Tag> : null}
           <Tag tone="sky">{candidate.phaseLabel}</Tag>
           {supportReversal?.state === 'CONFIRMED' ? (
             <Tag tone="success">{supportReversal.stateLabel}</Tag>
@@ -595,6 +652,7 @@ function CandidateRow({
             <Tag tone="brand">{candidate.signalProfile.primaryLabel}</Tag>
           ) : null}
         </div>
+        <p className="mt-1 text-xs text-ink-500">行业：{industry || '行业待补'}</p>
         <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-ink-500">{candidate.reason}</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
           <RightSideSignalTag signal={candidate.technical.rightSideSignal} />
@@ -744,7 +802,7 @@ function CandidateDetail({
                 <ScoreMetric label="相对强度修正（最多±4）" value={candidate.score.relativeStrengthContribution} />
               ) : null}
               {candidate.score.industryLeadershipContribution != null ? (
-                <ScoreMetric label="行业地位修正（最多±2）" value={candidate.score.industryLeadershipContribution} />
+                <ScoreMetric label="行业成交额地位修正（最多±2）" value={candidate.score.industryLeadershipContribution} />
               ) : null}
               {candidate.score.crossSectionAdjustment != null ? (
                 <ScoreMetric label="横截面合计（最多±8）" value={candidate.score.crossSectionAdjustment} />

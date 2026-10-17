@@ -8,7 +8,8 @@ import { LimitUpBoardPanel } from './LimitUpBoardPanel'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpStock } from '../../types'
 
 vi.mock('../../api/client', () => ({
-  fetchShortTermLimitUpBoard: vi.fn(), fetchShortTermMarketBreadth: vi.fn(), fetchShortTermLimitUpIndustry: vi.fn()
+  fetchShortTermLimitUpBoard: vi.fn(), fetchShortTermMarketBreadth: vi.fn(), fetchShortTermLimitUpIndustry: vi.fn(),
+  fetchShortTermCatchUp: vi.fn(), fetchShortTermCatchUpFollowUp: vi.fn()
 }))
 
 const sealed: ShortTermLimitUpStock = {

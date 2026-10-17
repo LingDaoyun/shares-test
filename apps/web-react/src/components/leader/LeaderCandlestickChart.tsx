@@ -32,7 +32,7 @@ export function LeaderCandlestickChart({ bars }: LeaderCandlestickChartProps) {
     <div className="overflow-x-auto rounded-xl border border-line-soft bg-white p-2">
       <svg
         role="img"
-        aria-label="最近二十个交易日 K 线和成交量"
+        aria-label={`最近 ${bars.length} 个交易日 K 线和成交量`}
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         className="min-w-[760px] w-full"
       >

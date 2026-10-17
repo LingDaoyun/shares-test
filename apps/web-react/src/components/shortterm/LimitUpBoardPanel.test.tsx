@@ -94,6 +94,41 @@ const breadth: ShortTermMarketBreadth = {
   totalCount: 5560, source: '东方财富行情'
 }
 
+describe.each(['entry', 'detail'] as const)('Market breadth timing in %s', (view) => {
+  function renderBreadth(value: ShortTermMarketBreadth) {
+    const props = { snapshot, breadth: value, loading: false, error: null, onRefresh: () => undefined }
+    return renderToStaticMarkup(view === 'entry'
+      ? <LimitUpBoardEntry {...props} onOpen={() => undefined} />
+      : <LimitUpBoardDetail {...props} />)
+  }
+
+  it('shows the quote timestamp range separately from the fetch time and labels missing timestamps', () => {
+    const html = renderBreadth({ ...breadth,
+      marketTimestampFrom: '2026-08-21T06:58:00Z', marketTimestampTo: '2026-08-21T07:00:00Z', missingTimestampCount: 3
+    } as ShortTermMarketBreadth)
+    expect(html).toContain('最新可用涨跌数据')
+    expect(html).toContain('源时间 2026-08-21 14:58:00 至 2026-08-21 15:00:00')
+    expect(html).toContain('获取时间 2026-08-21 23:26:00')
+    expect(html).toContain('3 只缺少源时间')
+  })
+
+  it('labels a missing source timestamp as unknown instead of using the fetch time', () => {
+    const html = renderBreadth(breadth)
+    expect(html).toContain('源时间 未知')
+    expect(html).toContain('获取时间 2026-08-21 23:26:00')
+    expect(html).not.toContain('源时间 2026-08-21 23:26:00')
+  })
+
+  it('shows a single source timestamp when the endpoints are the same', () => {
+    const html = renderBreadth({ ...breadth,
+      marketTimestampFrom: '2026-08-21T07:00:00Z', marketTimestampTo: '2026-08-21T07:00:00Z', missingTimestampCount: 0
+    } as ShortTermMarketBreadth)
+    expect(html).toContain('源时间 2026-08-21 15:00:00')
+    expect(html).not.toContain(' 至 ')
+    expect(html).not.toContain('只缺少源时间')
+  })
+})
+
 describe('LimitUpBoardEntry', () => {
   it('renders a one-line summary without the full tables', () => {
     const html = renderToStaticMarkup(

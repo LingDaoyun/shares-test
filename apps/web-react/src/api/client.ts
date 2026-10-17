@@ -1,4 +1,5 @@
 import axios from 'axios'
+import type { ShortTermCatchUpFollowUpObservation, ShortTermCatchUpFollowUpSnapshot, ShortTermCatchUpSnapshot } from '../types/shortTermCatchUp'
 import type {
   BacktestReport,
   LeaderAiReview,
@@ -198,6 +199,17 @@ export function fetchShortTermLimitUpIndustry(industry: string, date: string) {
   return http.get<ShortTermLimitUpIndustrySnapshot>('/short-term/limit-up-board/industry', {
     params: { industry, date }
   }).then((res) => res.data)
+}
+
+export function fetchShortTermCatchUp(industry: string, date: string, leaderSymbol: string, boardCode?: string) {
+  return http.get<ShortTermCatchUpSnapshot>('/short-term/limit-up-board/industry/catch-up', {
+    params: { industry, date, leaderSymbol, ...(boardCode ? { boardCode } : {}) }
+  }).then((res) => res.data)
+}
+
+export function fetchShortTermCatchUpFollowUp(observations: ShortTermCatchUpFollowUpObservation[]) {
+  return http.post<ShortTermCatchUpFollowUpSnapshot>('/short-term/catch-up/follow-up', { observations })
+    .then((res) => res.data)
 }
 
 export function fetchShortTermMarketBreadth() {

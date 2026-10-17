@@ -3,6 +3,8 @@ package com.aistock.research.shortterm;
 import com.aistock.research.integration.eastmoney.AshareQuoteSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -59,6 +61,56 @@ class ShortTermMarketBreadthTest {
     }
 
     @Test
+    void publishesOnlyCountedQuotesSourceTimeRangeSeparatelyFromRetrievalTime() {
+        Instant early = today.atTime(14, 29).atZone(ZoneId.of("Asia/Shanghai")).toInstant();
+        Instant late = today.atTime(15, 0).atZone(ZoneId.of("Asia/Shanghai")).toInstant();
+        Instant retrieved = late.plusSeconds(3600);
+        List<EastMoneyQuote> quotes = List.of(
+                quote("600001", today, "10", "2", early),
+                quote("600002", today, "10", "-1", late),
+                quote("600003", today, "10", "0", null),
+                quote("600004", today, null, "2", early.minusSeconds(3600)),
+                quote("600005", today, "10", null, retrieved),
+                quote("600006", today.minusDays(1), "10", "2", early.minusSeconds(86400)));
+        when(client.fetchAshareQuoteSnapshot(Integer.MAX_VALUE)).thenReturn(new AshareQuoteSnapshot(
+                quotes, Integer.MAX_VALUE, 6, 6, 0, true, "东方财富行情", retrieved));
+
+        ShortTermMarketBreadth result = service.marketBreadth();
+        var json = new ObjectMapper().findAndRegisterModules()
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS).valueToTree(result);
+
+        assertThat(json.path("marketTimestampFrom").asText(null)).isEqualTo(early.toString());
+        assertThat(json.path("marketTimestampTo").asText(null)).isEqualTo(late.toString());
+        assertThat(json.path("missingTimestampCount").asInt(-1)).isEqualTo(1);
+        assertThat(result.fetchedAt()).isEqualTo(retrieved);
+        assertThat(result.advancing()).isEqualTo(1);
+        assertThat(result.declining()).isEqualTo(1);
+        assertThat(result.unchanged()).isEqualTo(1);
+        assertThat(result.excludedCount()).isEqualTo(3);
+        verifyNoMoreInteractionsAfterQuoteFetch();
+    }
+
+    @Test
+    void leavesSourceTimeUnknownWhenEveryCountedQuoteLacksATimestamp() {
+        List<EastMoneyQuote> quotes = List.of(
+                quote("600001", today, "10", "2", null),
+                quote("600002", today, "10", "-1", null),
+                quote("600003", today, null, "2", Instant.now()));
+        when(client.fetchAshareQuoteSnapshot(Integer.MAX_VALUE)).thenReturn(snapshot(quotes, 3, true));
+
+        ShortTermMarketBreadth result = service.marketBreadth();
+        var json = new ObjectMapper().findAndRegisterModules().valueToTree(result);
+
+        assertThat(json.path("marketTimestampFrom").isNull()).isTrue();
+        assertThat(json.path("marketTimestampTo").isNull()).isTrue();
+        assertThat(json.path("missingTimestampCount").asInt(-1)).isEqualTo(2);
+        assertThat(result.advancing()).isEqualTo(1);
+        assertThat(result.declining()).isEqualTo(1);
+        assertThat(result.excludedCount()).isEqualTo(1);
+        verifyNoMoreInteractionsAfterQuoteFetch();
+    }
+
+    @Test
     void rejectsIncompleteCoverageAndAllowsRetry() {
         List<EastMoneyQuote> quotes = List.of(quote("600001", today, "10", "2"));
         when(client.fetchAshareQuoteSnapshot(Integer.MAX_VALUE))
@@ -109,10 +161,14 @@ class ShortTermMarketBreadthTest {
     }
 
     private EastMoneyQuote quote(String symbol, LocalDate date, String price, String change) {
+        return quote(symbol, date, price, change, Instant.now());
+    }
+
+    private EastMoneyQuote quote(String symbol, LocalDate date, String price, String change, Instant marketTimestamp) {
         return new EastMoneyQuote(symbol, "样本", "SH", null,
                 price == null ? null : new BigDecimal(price),
                 change == null ? null : new BigDecimal(change),
                 null, null, null, null, null, null,
-                "东方财富行情", null, Instant.now(), date, Instant.now());
+                "东方财富行情", null, Instant.now(), date, marketTimestamp);
     }
 }

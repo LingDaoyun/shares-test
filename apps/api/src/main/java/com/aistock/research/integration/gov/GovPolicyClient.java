@@ -104,7 +104,7 @@ public class GovPolicyClient {
                                 source.type(),
                                 cleanTitle(title),
                                 normalizeUrl(source.url(), url),
-                                normalizeDate(publishedAt),
+                                publishedAt == null ? null : publishedAt.trim(),
                                 sourceWeight(source)
                         ));
                     }
@@ -247,11 +247,6 @@ public class GovPolicyClient {
             return null;
         }
         return matcher.group(1) + "-" + pad(matcher.group(2)) + "-" + pad(matcher.group(3));
-    }
-
-    private String normalizeDate(String text) {
-        String extracted = extractDate(text);
-        return extracted == null ? text : extracted;
     }
 
     private String pad(String value) {

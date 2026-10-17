@@ -199,8 +199,9 @@ function activeContributions(candidate: ShortTermCandidate): ContributionItem[] 
   const score = candidate.score
   return [
     contribution('资金流', score.fundFlowAdjustment),
+    contribution('近端筹码', score.chipPressureAdjustment, false, true),
     contribution('相对强度', score.relativeStrengthContribution),
-    contribution('行业地位', score.industryLeadershipContribution),
+    contribution('行业成交额地位', score.industryLeadershipContribution),
     contribution('热门方向', score.marketHeatContribution),
     contribution('波动质量', score.volatilityContribution),
     contribution('横截面小计', score.crossSectionAdjustment, true),
@@ -215,8 +216,8 @@ export function hasClosedShortTermScoreSnapshot(candidate: ShortTermCandidate) {
     && Number.isFinite(score.visibleRankingAdjustment)
 }
 
-function contribution(label: string, value: number | null | undefined, subtotal = false): ContributionItem | null {
-  if (value === null || value === undefined || Math.abs(value) < 0.005) return null
+function contribution(label: string, value: number | null | undefined, subtotal = false, includeZero = false): ContributionItem | null {
+  if (value === null || value === undefined || (!includeZero && Math.abs(value) < 0.005)) return null
   return { label, value, subtotal }
 }
 

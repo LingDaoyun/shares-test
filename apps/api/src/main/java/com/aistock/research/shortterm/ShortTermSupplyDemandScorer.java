@@ -2,6 +2,10 @@ package com.aistock.research.shortterm;
 
 import com.aistock.research.integration.eastmoney.EastMoneyFundFlowSnapshot;
 import com.aistock.research.shortterm.chip.ChipActivationMode;
+import com.aistock.research.shortterm.chip.ChipCalculationMode;
+import com.aistock.research.shortterm.chip.ChipDataQuality;
+import com.aistock.research.shortterm.chip.ChipOverheadPressure;
+import com.aistock.research.shortterm.chip.ChipVerificationStatus;
 import com.aistock.research.shortterm.chip.ShortTermChipSnapshot;
 import org.springframework.stereotype.Component;
 
@@ -44,6 +48,33 @@ public class ShortTermSupplyDemandScorer {
             ShortTermChipSnapshot chip,
             ChipActivationMode activationMode
     ) {
+        return score(fundFlow, quoteTradeDate, technical, technicalRankingScore,
+                chip, activationMode, new BigDecimal("10"));
+    }
+
+    public ShortTermSupplyDemandScore score(
+            EastMoneyFundFlowSnapshot fundFlow,
+            LocalDate quoteTradeDate,
+            ShortTermTechnicalSnapshot technical,
+            BigDecimal technicalRankingScore,
+            ShortTermChipSnapshot chip,
+            ChipActivationMode activationMode,
+            BigDecimal nearOverheadMaxPenalty
+    ) {
+        return score(fundFlow, quoteTradeDate, technical, technicalRankingScore,
+                chip, activationMode, nearOverheadMaxPenalty, BigDecimal.ZERO);
+    }
+
+    public ShortTermSupplyDemandScore score(
+            EastMoneyFundFlowSnapshot fundFlow,
+            LocalDate quoteTradeDate,
+            ShortTermTechnicalSnapshot technical,
+            BigDecimal technicalRankingScore,
+            ShortTermChipSnapshot chip,
+            ChipActivationMode activationMode,
+            BigDecimal nearOverheadMaxPenalty,
+            BigDecimal additionalRankingAdjustment
+    ) {
         List<String> dataGaps = new ArrayList<>();
         FlowScore flowScore = buyingPressure(fundFlow, quoteTradeDate, dataGaps);
         BigDecimal pressureRelief = overheadPressureRelief(technical, dataGaps);
@@ -66,7 +97,12 @@ public class ShortTermSupplyDemandScorer {
                 .add(flowScore.available()
                         ? flowScore.score().multiply(V3_BUY_WEIGHT)
                         : BigDecimal.ZERO);
-        BigDecimal rankingScore = v2RankingScore;
+        BigDecimal rankingBase = clamp(v2RankingScore.add(additionalRankingAdjustment == null
+                ? BigDecimal.ZERO : additionalRankingAdjustment));
+        ChipPressureScore chipPressure = chipPressure(
+                chip, quoteTradeDate, activationMode, nearOverheadMaxPenalty, rankingBase, dataGaps);
+        BigDecimal rankingScore = chipPressure.penalty() == null
+                ? rankingBase : rankingBase.subtract(chipPressure.penalty());
         return new ShortTermSupplyDemandScore(
                 scale(flowScore.mainRatio()),
                 scale(flowScore.largeOrderRatio()),
@@ -78,8 +114,69 @@ public class ShortTermSupplyDemandScorer {
                 scale(chipContribution),
                 scale(clamp(v3RankingScore)),
                 scale(clamp(rankingScore)),
-                dataGaps
+                dataGaps,
+                scale(chipPressure.penalty()),
+                chipPressure.summary()
         );
+    }
+
+    private ChipPressureScore chipPressure(
+            ShortTermChipSnapshot chip,
+            LocalDate quoteTradeDate,
+            ChipActivationMode activationMode,
+            BigDecimal maxPenalty,
+            BigDecimal availableScore,
+            List<String> dataGaps
+    ) {
+        if (activationMode == null || activationMode == ChipActivationMode.OFF
+                || maxPenalty == null || maxPenalty.signum() <= 0) {
+            return new ChipPressureScore(null, "近端筹码压力扣分已关闭，未参与本次排序。");
+        }
+        String unavailable = null;
+        if (chip == null || chip.dataQuality() != ChipDataQuality.VALID || chip.shortTermPressure() == null) {
+            unavailable = "近端筹码压力未评估：本地有效筹码分布不足";
+        } else if (quoteTradeDate == null || !quoteTradeDate.equals(chip.localTradeDate())) {
+            unavailable = "近端筹码压力未评估：筹码日期与行情日期不一致";
+        } else if ((chip.verificationStatus() != ChipVerificationStatus.VERIFIED
+                && chip.verificationStatus() != ChipVerificationStatus.SINGLE_SOURCE)
+                || chip.verificationCoefficient() == null || chip.verificationCoefficient().signum() <= 0) {
+            unavailable = "近端筹码压力未评估：模型校验未通过或数据已过期";
+        }
+        if (unavailable != null) {
+            dataGaps.add(unavailable);
+            return new ChipPressureScore(null, unavailable + "；未扣分，不代表上方压力低。");
+        }
+        ChipOverheadPressure pressure = chip.shortTermPressure();
+        if (pressure.referencePrice() == null || pressure.referencePrice().signum() <= 0
+                || pressure.nearChipRatioPercent() == null || pressure.fartherChipRatioPercent() == null
+                || pressure.weightedChipRatioPercent() == null) {
+            String gap = "近端筹码压力未评估：近端价格桶指标缺失";
+            dataGaps.add(gap);
+            return new ChipPressureScore(null, gap + "；未扣分，不代表上方压力低。");
+        }
+        BigDecimal estimatedPenalty = clamp(pressure.weightedChipRatioPercent())
+                .multiply(maxPenalty.max(BigDecimal.ZERO).min(HUNDRED))
+                .divide(HUNDRED, 6, RoundingMode.HALF_UP);
+        BigDecimal appliedPenalty = activationMode == ChipActivationMode.ACTIVE
+                ? scale(estimatedPenalty.min(availableScore.max(BigDecimal.ZERO))) : BigDecimal.ZERO;
+        String source = chip.calculationMode() == ChipCalculationMode.INTRADAY_ESTIMATE
+                ? "本地盘中估算" : "本地收盘估算";
+        String calibration = chip.verificationStatus() == ChipVerificationStatus.SINGLE_SOURCE
+                ? "未交叉验证" : "汇总指标已交叉核验";
+        String effect = activationMode == ChipActivationMode.ACTIVE
+                ? "排序扣分 " + scale(appliedPenalty).toPlainString() + " 分"
+                : "仅观察，估算扣分 " + scale(estimatedPenalty).toPlainString() + " 分，未参与排序";
+        return new ChipPressureScore(appliedPenalty,
+                source + "（" + chip.localTradeDate() + "，" + calibration + "），参考价 "
+                        + pressure.referencePrice().toPlainString()
+                        + " 元；上方 0～5% 筹码 " + scale(pressure.nearChipRatioPercent()).toPlainString()
+                        + "%，5～10% 筹码 " + scale(pressure.fartherChipRatioPercent()).toPlainString()
+                        + "%，距离加权占比 " + scale(pressure.weightedChipRatioPercent()).toPlainString()
+                        + "%；扣分上限 " + scale(maxPenalty.max(BigDecimal.ZERO).min(HUNDRED)).toPlainString()
+                        + " 分，" + effect + "。10% 以外筹码不计入此项，区间与权重为待验证规则。");
+    }
+
+    private record ChipPressureScore(BigDecimal penalty, String summary) {
     }
 
     private FlowScore buyingPressure(

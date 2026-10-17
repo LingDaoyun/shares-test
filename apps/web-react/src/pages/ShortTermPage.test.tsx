@@ -6,24 +6,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchOvernightBacktest,
   fetchShortTermIndustryLeaders,
+  fetchShortTermMarketBreadth,
   fetchShortTermScanJob,
   fetchShortTermValidationSummaries,
   startShortTermScanJob
 } from '../api/client'
 import { toast } from '../components/ui/Toast'
+import { CATCH_UP_STORAGE_KEY } from '../lib/shortTermCatchUpStorage'
 import { SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY } from '../lib/shortTermViewPreferences'
 import { resetShortTermScanStoreForTest, useShortTermScanStore } from '../store/shortTermScanStore'
 import type { ShortTermReport } from '../types'
+import { fetchDailyShortTermSnapshot, fetchShortTermResultCache, type ShortTermDailySnapshot, type UpperShadowScan } from '../api/dailyShortTerm'
 import { ShortTermPage } from './ShortTermPage'
 
 vi.mock('../api/client', () => ({
   fetchOvernightBacktest: vi.fn(),
   fetchShortTermIndustryLeaders: vi.fn(),
+  fetchShortTermCatchUp: vi.fn(),
+  fetchShortTermCatchUpFollowUp: vi.fn(),
+  fetchShortTermLimitUpBoard: vi.fn().mockResolvedValue(null),
+  fetchShortTermMarketBreadth: vi.fn().mockResolvedValue(null),
   fetchShortTermScanJob: vi.fn(),
   fetchShortTermValidationSummaries: vi.fn(),
   startShortTermScanJob: vi.fn(),
   fetchV2StrategyBundle: vi.fn().mockRejectedValue(new Error('测试中不加载 V2 策略束'))
 }))
+
+vi.mock('../api/dailyShortTerm', () => ({ fetchDailyShortTermSnapshot: vi.fn(), fetchShortTermResultCache: vi.fn(), retryDailyShortTermSnapshot: vi.fn() }))
 
 vi.mock('../components/ui/Toast', () => ({
   toast: {
@@ -361,6 +370,21 @@ function reportWithFundDirection(): ShortTermReport {
   } as unknown as ShortTermReport
 }
 
+function shadowScan(symbols = ['600001'], tradeDate = '2026-07-23'): UpperShadowScan {
+  return {
+    tradeDate, assessedAt: `${tradeDate}T06:00:00Z`, status: 'READY', source: '已保存行情',
+    expectedCount: 5500, validQuoteCount: 5500, shapeCount: symbols.length, historyMissingCount: 0,
+    matchedCount: symbols.length, omittedCount: 0, dataGaps: [], ruleDescription: '20日箱体与长上影规则',
+    candidates: symbols.map(symbol => ({
+      symbol, name: `形态${symbol}`, industry: '专用设备', label: '横盘长上影', latestPrice: 12.34,
+      changePercent: 1.5, amount: 450000000, turnoverRate: 4.1, marketTimestamp: `${tradeDate}T06:00:00Z`,
+      boxRangePercent: 11.2, boxNetChangePercent: 2.1, boxHigh: 13.1, boxLow: 11.8,
+      upperShadowRatioPercent: 68.5, upperShadowPercent: 3.4,
+      evidence: ['20日箱体窄幅整理'], counterEvidence: ['冲高回落，也可能存在抛压']
+    }))
+  }
+}
+
 describe('ShortTermPage manual scan flow', () => {
   it('keeps raw quote acquisition audit fields in the report contract', () => {
     expect(emptyReport.coverage.rawExpectedCount).toBe(5895)
@@ -375,10 +399,21 @@ describe('ShortTermPage manual scan flow', () => {
   beforeEach(() => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     window.localStorage.removeItem(SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY)
+    window.localStorage.removeItem(CATCH_UP_STORAGE_KEY)
     host = document.createElement('div')
     document.body.append(host)
     root = createRoot(host)
     resetShortTermScanStoreForTest()
+    vi.mocked(fetchDailyShortTermSnapshot).mockReset().mockResolvedValue({
+      tradeDate: '2026-07-23', scheduledAt: '2026-07-23T06:00:00Z', startedAt: null,
+      finishedAt: null, status: 'NOT_STARTED', message: '当日结果尚未生成',
+      report: null, upperShadow: null, dataGaps: []
+    })
+    vi.mocked(fetchShortTermResultCache).mockReset().mockResolvedValue({
+      tradeDate: '2026-07-23', scheduledAt: null, startedAt: null,
+      finishedAt: null, status: 'NOT_STARTED', message: '尚无扫描结果缓存',
+      report: null, upperShadow: null, dataGaps: []
+    })
     vi.mocked(fetchOvernightBacktest).mockResolvedValue({} as never)
     vi.mocked(fetchShortTermValidationSummaries).mockResolvedValue([])
   })
@@ -390,7 +425,134 @@ describe('ShortTermPage manual scan flow', () => {
     vi.useRealTimers()
     vi.clearAllMocks()
     window.localStorage.removeItem(SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY)
+    window.localStorage.removeItem(CATCH_UP_STORAGE_KEY)
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
+  })
+
+  it('keeps the unified candidate card mounted through pending, running and empty results, then loads every completed candidate', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-23T06:00:00Z'))
+    const pending: ShortTermDailySnapshot = {
+      tradeDate: '2026-07-23', scheduledAt: '2026-07-23T06:00:00Z', startedAt: null,
+      finishedAt: null, status: 'NOT_STARTED', message: '当日结果尚未生成',
+      report: null, upperShadow: null, dataGaps: []
+    }
+    const symbols = Array.from({ length: 35 }, (_, index) => String(600001 + index))
+    vi.mocked(fetchDailyShortTermSnapshot)
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce({ ...pending, status: 'RUNNING', message: '扫描进行中' })
+      .mockResolvedValueOnce({ ...pending, status: 'READY', message: '已完成，暂无匹配', report: emptyReport })
+      .mockResolvedValueOnce({ ...pending, status: 'READY', message: '已完成', report: reportWithCandidates(['600795']), upperShadow: shadowScan(symbols) })
+    vi.mocked(fetchShortTermResultCache)
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce({ ...pending, runId: 'empty-run', startedAt: '2026-07-23T06:00:00Z', finishedAt: '2026-07-23T06:01:00Z', status: 'READY', message: '已完成，暂无匹配', report: emptyReport })
+      .mockResolvedValueOnce({ ...pending, runId: 'full-run', startedAt: '2026-07-23T06:01:00Z', finishedAt: '2026-07-23T06:02:00Z', status: 'READY', message: '已完成', report: reportWithCandidates(['600795']), upperShadow: shadowScan(symbols) })
+
+    await renderPagePlain(root)
+    const list = host.querySelector('[aria-label="短线候选列表"]')!
+    expect(list).not.toBeNull()
+    const card = list.closest('section')!
+    expect(card.querySelector('[aria-label="已保存候选状态"]')).not.toBeNull()
+    expect(card.textContent).toContain('当日结果尚未生成')
+    expect(host.textContent).not.toContain('14:00 定时短线候选')
+    expect(fetchDailyShortTermSnapshot).toHaveBeenCalledTimes(1)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000) })
+    expect(card.textContent).toContain('扫描进行中')
+    expect(fetchDailyShortTermSnapshot).toHaveBeenCalledTimes(2)
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000) })
+    expect(card.textContent).toContain('已完成，暂无匹配')
+    expect(fetchDailyShortTermSnapshot).toHaveBeenCalledTimes(3)
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000) })
+
+    expect(host.querySelector('[aria-label="短线候选列表"]')).toBe(list)
+    expect(list.querySelectorAll('button')).toHaveLength(36)
+    expect(list.textContent).toContain('形态600035')
+    expect(list.textContent).toContain('候选600795')
+    expect(fetchDailyShortTermSnapshot).toHaveBeenCalledTimes(4)
+    expect(startShortTermScanJob).not.toHaveBeenCalled()
+  })
+
+  it.each([{ label: 'absent', report: null }, { label: 'zero-candidate', report: emptyReport }])('shows saved upper-shadow candidates in the unified list with $label right-side report', async ({ report }) => {
+    useShortTermScanStore.setState({ report, upperShadow: shadowScan() })
+    await renderPage(root)
+    const list = host.querySelector('[aria-label="短线候选列表"]')!
+    expect(list).not.toBeNull()
+    expect(list.textContent).toContain('形态600001')
+    expect(list.textContent).toContain('专用设备')
+    expect(list.textContent).toContain('横盘长上影')
+    expect(list.textContent).not.toContain('暂无候选')
+    expect(list.textContent).not.toContain('排序分')
+    expect(list.textContent).not.toContain('建议：')
+    await clickButton('形态600001')
+    const detail = document.querySelector('[role="dialog"]')!
+    expect(detail.textContent).toContain('20日箱体')
+    expect(detail.textContent).toContain('68.50%')
+    expect(detail.textContent).toContain('2026-07-23 14:00:00')
+    expect(detail.textContent).toContain('20日箱体窄幅整理')
+    expect(detail.textContent).toContain('冲高回落，也可能存在抛压')
+    expect(detail.textContent).not.toContain('今日建议')
+    expect(detail.querySelector('button[aria-label^="买入 "]')).toBeNull()
+    expect(detail.textContent).not.toContain('排序分')
+  })
+
+  it('deduplicates matching symbols, shows both source badges and industry on all rows, and keeps normal detail', async () => {
+    useShortTermScanStore.setState({ report: reportWithCandidates(['600795', '600002']), upperShadow: shadowScan(['600795', '600001']) })
+    await renderPage(root)
+    const list = host.querySelector('[aria-label="短线候选列表"]')!
+    const rows = Array.from(list.querySelectorAll('button'))
+    expect(rows).toHaveLength(3)
+    const overlap = rows.find(row => row.textContent?.includes('600795'))!
+    expect(overlap.textContent).toContain('右侧候选')
+    expect(overlap.textContent).toContain('横盘长上影')
+    expect(overlap.textContent).toContain('电力')
+    expect(rows.find(row => row.textContent?.includes('600002'))?.textContent).toContain('电力')
+    expect(rows.find(row => row.textContent?.includes('600001'))?.textContent).toContain('专用设备')
+    expect(list.textContent).not.toContain('形态600795')
+    await clickButton('候选600795')
+    const detail = document.querySelector('[role="dialog"]')!
+    expect(detail.textContent).toContain('今日建议')
+    expect(detail.textContent).toContain('横盘长上影证据')
+    expect(detail.textContent).toContain('冲高回落，也可能存在抛压')
+  })
+
+  it('does not merge a shape scan from a different market date into the current report', async () => {
+    useShortTermScanStore.setState({ report: reportWithCandidates(['600795']), upperShadow: shadowScan(['600001'], '2026-07-22') })
+    await renderPage(root)
+    const list = host.querySelector('[aria-label="短线候选列表"]')!
+    expect(list.textContent).toContain('候选600795')
+    expect(list.textContent).not.toContain('形态600001')
+  })
+
+  it('removes old same-day shapes when the new manual bundle contains no shapes', async () => {
+    useShortTermScanStore.setState({ upperShadow: shadowScan() })
+    await renderWithManualReport(root, emptyReport)
+    const list = host.querySelector('[aria-label="短线候选列表"]')!
+    expect(list.textContent).not.toContain('形态600001')
+    expect(useShortTermScanStore.getState().upperShadow).toBeNull()
+    expect(useShortTermScanStore.getState().report).toBe(emptyReport)
+  })
+
+  it('shows new manual shapes when its right-side report is blocked without retaining the previous run', async () => {
+    useShortTermScanStore.setState({ report: reportWithCandidates(['600795']), upperShadow: shadowScan(['600001']) })
+    mockManualReport(emptyReport, 'manual-shape-only')
+    vi.mocked(fetchShortTermScanJob).mockResolvedValue({
+      jobId: 'manual-shape-only', status: 'SUCCEEDED', tradeDate: '2026-07-23',
+      resultStatus: 'DATA_BLOCKED', strategyVersion: 'short-term-right-side-v4-transparent-ranking',
+      blockedReasons: ['右侧行情覆盖不足'], createdAt: '2026-07-23T06:40:00Z',
+      startedAt: '2026-07-23T06:40:01Z', finishedAt: '2026-07-23T06:49:00Z',
+      message: '右侧数据未通过，长上影观察已保存', report: reportWithCandidates(['600900']),
+      upperShadow: shadowScan(['600002']), dataGaps: ['右侧行情覆盖不足']
+    })
+    await renderPage(root)
+    await clickButton('重新扫描')
+    const list = host.querySelector('[aria-label="短线候选列表"]')!
+    expect(list.textContent).toContain('形态600002')
+    expect(list.textContent).not.toContain('形态600001')
+    expect(list.textContent).not.toContain('候选600795')
+    expect(list.textContent).not.toContain('候选600900')
+    expect(useShortTermScanStore.getState().report).toBeNull()
   })
 
   it('waits for an explicit manual action when the page mounts', async () => {
@@ -431,6 +593,32 @@ describe('ShortTermPage manual scan flow', () => {
 
     expect(document.body.textContent).toContain('今日量 / 前3日均')
     expect(document.body.textContent).toContain('成交量待补')
+  })
+
+  it('labels saved sentiment with its scan time while the independent board shows newer market counts', async () => {
+    const report = {
+      ...emptyReport,
+      marketSentiment: { ...emptyReport.marketSentiment, advancing: 370, declining: 5176, score: 6.47, phase: '冰点/混沌' },
+      coverage: { ...emptyReport.coverage, fetchedAt: '2026-10-15T06:29:19Z' }
+    }
+    vi.mocked(fetchShortTermMarketBreadth).mockResolvedValue({
+      tradeDate: '2026-10-15', fetchedAt: '2026-10-15T07:59:00Z', advancing: 429, declining: 5108,
+      unchanged: 38, excludedCount: 0, totalCount: 5575, source: '独立行情'
+    })
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+
+    const heading = [...host.querySelectorAll('h3')].find(node => node.textContent === '扫描时市场情绪')
+    expect(heading).toBeDefined()
+    const sentiment = heading!.closest('section')!
+    expect(sentiment.textContent).toContain('行情采集 2026-10-15 14:29:19')
+    expect(sentiment.textContent).toContain('370 / 5176')
+    expect(sentiment.textContent).toContain('6.47')
+    expect(sentiment.textContent).not.toContain('429')
+    expect(host.textContent).toContain('上涨 429 家')
+    expect(host.querySelector('[aria-label="扫描结果时间"]')?.textContent).toContain('行情采集 2026-10-15 14:29:19')
+    expect(useShortTermScanStore.getState().report).toBe(report)
+    expect(startShortTermScanJob).not.toHaveBeenCalled()
   })
 
   it('defaults to the remembered compact result view after a manual scan result loads', async () => {
@@ -580,7 +768,7 @@ describe('ShortTermPage manual scan flow', () => {
     })
 
     expect(fetchShortTermIndustryLeaders).toHaveBeenCalledWith('BK1201', { name: '电子', flow: 'INFLOW', limit: 20 })
-    expect(document.body.textContent).toContain('电子 · 龙头股')
+    expect(document.body.textContent).toContain('电子 · 行业资金排名')
     expect(document.body.textContent).toContain('立讯精密')
     expect(document.body.textContent).toContain('三安光电')
     expect(document.body.textContent).toContain('主力净流入前 20')
@@ -591,7 +779,7 @@ describe('ShortTermPage manual scan flow', () => {
       popupCloseButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await flushPromises()
     })
-    expect(document.body.textContent).not.toContain('电子 · 龙头股')
+    expect(document.body.textContent).not.toContain('电子 · 行业资金排名')
 
     const outflowButton = document.querySelector('button[aria-label="查看 银行 板块内主力资金前 20 个股"]') as HTMLButtonElement | null
     expect(outflowButton).not.toBeNull()
@@ -601,7 +789,7 @@ describe('ShortTermPage manual scan flow', () => {
     })
 
     expect(fetchShortTermIndustryLeaders).toHaveBeenLastCalledWith('BK0475', { name: '银行', flow: 'OUTFLOW', limit: 20 })
-    expect(document.body.textContent).toContain('银行 · 龙头股')
+    expect(document.body.textContent).toContain('银行 · 行业资金排名')
     expect(document.body.textContent).toContain('主力净流出前 20')
   })
 
@@ -633,7 +821,7 @@ describe('ShortTermPage manual scan flow', () => {
     expect(document.body.textContent).toContain('资金流微调（最多±2）')
     expect(document.body.textContent).toContain('热点方向修正（最多±2）')
     expect(document.body.textContent).toContain('相对强度修正（最多±4）')
-    expect(document.body.textContent).toContain('行业地位修正（最多±2）')
+    expect(document.body.textContent).toContain('行业成交额地位修正（最多±2）')
     expect(document.body.textContent).toContain('横截面合计（最多±8）')
     expect(document.body.textContent).toContain('排序分')
     expect(document.body.textContent).not.toContain('综合分')
@@ -1016,23 +1204,29 @@ describe('ShortTermPage manual scan flow', () => {
 
     expect(startShortTermScanJob).toHaveBeenCalledTimes(1)
     expect(startShortTermScanJob).toHaveBeenCalledWith(expect.objectContaining({
-      limit: 8,
-      klineLimit: 120,
+      limit: 0,
+      scanLimit: 0,
+      klineLimit: 0,
       minVolumeRatio: 1.2,
-      allowStaticCachePreview: true,
+      allowStaticCachePreview: false,
       allowChiNext: false
     }))
+    expect(document.body.textContent).toContain('候选数量（0=全部）')
+    expect(document.body.textContent).toContain('扫描数量（0=全部）')
+    expect(document.body.textContent).toContain('K线复核数（0=全部）')
+    expect(document.body.textContent).toContain('财报风险提示线')
+    expect(document.body.textContent).toContain('默认完整复核并展示全部；这些参数用于手动扫描，定时任务使用默认参数。')
     expect(fetchShortTermScanJob).toHaveBeenCalledWith('manual-1')
     }
   )
 
-  it('lets manual scans disable static cache preview from the page switch', async () => {
+  it('lets manual scans explicitly enable static cache preview from the page switch', async () => {
     mockManualReport(emptyReport, 'manual-cache-toggle')
     await renderPage(root)
 
     const toggle = document.querySelector('input[aria-label="允许休市缓存预览"]') as HTMLInputElement | null
     expect(toggle).not.toBeNull()
-    expect(toggle?.checked).toBe(true)
+    expect(toggle?.checked).toBe(false)
     await act(async () => {
       toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await flushPromises()
@@ -1041,7 +1235,7 @@ describe('ShortTermPage manual scan flow', () => {
     await clickButton('重新扫描')
 
     expect(startShortTermScanJob).toHaveBeenCalledWith(expect.objectContaining({
-      allowStaticCachePreview: false
+      allowStaticCachePreview: true
     }))
   })
 

@@ -47,7 +47,7 @@ class EastMoneyQuoteFallbackTest {
         assertThat(snapshot.fetchedCount()).isEqualTo(3);
         assertThat(snapshot.missingCount()).isZero();
         assertThat(snapshot.complete()).isTrue();
-        assertThat(snapshot.source()).contains("新浪", "腾讯");
+        assertThat(snapshot.source()).contains("新浪hs_a清单范围", "腾讯", "本清单3/3", "非东财全集核验");
         assertThat(snapshot.quotes()).allSatisfy(quote -> {
             assertThat(quote.marketTimestamp()).isEqualTo(Instant.parse("2026-10-08T07:00:00Z"));
             assertThat(quote.tradeDate()).isEqualTo(LocalDate.of(2026, 10, 8));
@@ -115,6 +115,138 @@ class EastMoneyQuoteFallbackTest {
 
         assertThat(snapshot.complete()).isTrue();
         assertThat(client.requestedSymbols).isEmpty();
+        server.verify();
+    }
+
+    @Test
+    void nonEmptyIncompleteEastMoneySnapshotUsesTheCompleteBackupWithoutMixingRows() {
+        client.eastMoneyAvailable = true;
+        client.eastMoneyRows = List.of(quote("600999"));
+        expectUniverse(ALL_SYMBOLS, 3);
+
+        AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
+
+        assertThat(client.requestedSymbols).containsExactly("600000", "000001", "920000");
+        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.expectedCount()).isEqualTo(3);
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol)
+                .containsExactly("600000", "000001", "920000");
+        assertThat(snapshot.source()).contains("新浪", "腾讯");
+        server.verify();
+    }
+
+    @Test
+    void backupFailurePreservesTheNonEmptyPrimarySnapshotAsIncomplete() {
+        client.eastMoneyAvailable = true;
+        client.eastMoneyRows = List.of(quote("600999"));
+        expectUniverseRequests(ALL_SYMBOLS, 3);
+        expectSecurities("[{\"symbol\":\"sz300059\",\"code\":\"300059\"}]", 2);
+
+        AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
+
+        assertThat(snapshot.complete()).isFalse();
+        assertThat(snapshot.expectedCount()).isEqualTo(3);
+        assertThat(snapshot.fetchedCount()).isEqualTo(1);
+        assertThat(snapshot.missingCount()).isEqualTo(2);
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("600999");
+        assertThat(snapshot.source()).contains("备用获取失败", "主源不完整");
+        server.verify();
+    }
+
+    @Test
+    void twoIncompleteSourcesKeepTheBetterCoveredBackupWithoutCombiningRows() {
+        client.eastMoneyAvailable = true;
+        client.eastMoneyRows = List.of(quote("600999"));
+        client.tencentRows = List.of(quote("600000"), quote("000001"));
+        expectUniverse(ALL_SYMBOLS, 3);
+
+        AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
+
+        assertThat(snapshot.complete()).isFalse();
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.missingCount()).isEqualTo(1);
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("600000", "000001");
+        assertThat(snapshot.source()).contains("主源覆盖1/3", "备用覆盖2/3", "保留备用不完整");
+        server.verify();
+    }
+
+    @Test
+    void worseIncompleteBackupDoesNotDiscardTheBetterCoveredPrimary() {
+        client.eastMoneyAvailable = true;
+        client.eastMoneyRows = List.of(quote("600998"), quote("600999"));
+        client.tencentRows = List.of(quote("600000"));
+        expectUniverse(ALL_SYMBOLS, 3);
+
+        AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
+
+        assertThat(snapshot.complete()).isFalse();
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("600998", "600999");
+        assertThat(snapshot.source()).contains("主源覆盖2/3", "备用覆盖1/3", "保留主源不完整");
+        server.verify();
+    }
+
+    @Test
+    void aBackupWithUnknownUniverseCannotReplacePrimaryCoverageWithAKnownDenominator() {
+        client.eastMoneyAvailable = true;
+        client.eastMoneyRows = List.of(quote("600999"));
+        expectUniverse(ALL_SYMBOLS, 4);
+
+        AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
+
+        assertThat(snapshot.complete()).isFalse();
+        assertThat(snapshot.expectedCount()).isEqualTo(3);
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("600999");
+        assertThat(snapshot.source()).contains("备用覆盖3/0", "保留主源不完整");
+        server.verify();
+    }
+
+    @Test
+    void differentKnownMarketCountsKeepTheBackupScopeButCannotConfirmThePrimaryUniverse() {
+        client.eastMoneyAvailable = true;
+        client.eastMoneyTotal = 4;
+        client.eastMoneyRows = List.of(quote("600999"));
+        expectUniverse(ALL_SYMBOLS, 3);
+
+        AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
+
+        assertThat(snapshot.complete()).isFalse();
+        assertThat(snapshot.expectedCount()).isEqualTo(3);
+        assertThat(snapshot.fetchedCount()).isEqualTo(3);
+        assertThat(snapshot.missingCount()).isZero();
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol)
+                .containsExactly("600000", "000001", "920000");
+        assertThat(snapshot.source()).contains("新浪hs_a清单范围", "东财4", "新浪hs_a3", "范围差异未核实");
+        server.verify();
+    }
+
+    @Test
+    void aSatisfiedLimitedPrimaryRequestDoesNotFetchTheBackupOrClaimCompleteCoverage() {
+        client.eastMoneyAvailable = true;
+
+        AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(2);
+
+        assertThat(client.requestedSymbols).isEmpty();
+        assertThat(snapshot.requestedCount()).isEqualTo(2);
+        assertThat(snapshot.expectedCount()).isEqualTo(3);
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.complete()).isFalse();
+        server.verify();
+    }
+
+    @Test
+    void aPrematurelyTruncatedLimitedRequestStillUsesTheBackupWithoutClaimingWholeMarketCoverage() {
+        client.eastMoneyAvailable = true;
+        client.eastMoneyRows = List.of(quote("600999"));
+        expectUniverse(ALL_SYMBOLS, 3);
+
+        AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(2);
+
+        assertThat(client.requestedSymbols).containsExactly("600000", "000001");
+        assertThat(snapshot.requestedCount()).isEqualTo(2);
+        assertThat(snapshot.expectedCount()).isEqualTo(3);
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.complete()).isFalse();
         server.verify();
     }
 
@@ -208,6 +340,8 @@ class EastMoneyQuoteFallbackTest {
         private List<EastMoneyQuote> tencentRows = List.of(quote("600000"), quote("000001"), quote("920000"));
         private List<String> requestedSymbols = List.of();
         private boolean eastMoneyAvailable;
+        private List<EastMoneyQuote> eastMoneyRows;
+        private int eastMoneyTotal = 3;
 
         private FallbackClient(RestClient restClient) {
             super(restClient, new ObjectMapper(), null);
@@ -216,7 +350,8 @@ class EastMoneyQuoteFallbackTest {
         @Override
         AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
             if (!eastMoneyAvailable) throw new IllegalStateException("curl: (56) unexpected eof while reading");
-            return new AshareQuotePage(3, pageNumber == 1 ? tencentRows : List.of());
+            return new AshareQuotePage(eastMoneyTotal, pageNumber == 1
+                    ? eastMoneyRows == null ? tencentRows : eastMoneyRows : List.of());
         }
 
         @Override

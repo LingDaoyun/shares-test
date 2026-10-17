@@ -28,7 +28,9 @@ server:
 
 research:
   short-term:
-    scan-job-timeout: PT15M
+    daily-scan:
+      cron: "0 0 14 * * MON-FRI"
+    scan-job-timeout: PT45M
     validation:
       enabled: true
       outcome-cron: "0 30 16 * * MON-FRI"
@@ -50,7 +52,9 @@ research:
       min-valid-bars: 80
       min-turnover-coverage: 0.95
       weight: 0.25
-      activation-mode: SHADOW
+      activation-mode: ACTIVE
+      # Initial short-term rule; set to 0 to disable the near-overhead penalty.
+      near-overhead-max-penalty: 10
       single-source-coefficient: 1.00
       max-average-cost-deviation: 0.03
       min-cost-band-overlap: 0.70

@@ -92,6 +92,7 @@ public class PostgresFirstBoardDailyBarStore implements FirstBoardDailyBarStore 
     }
 
     @Override
+    @Transactional
     public void upsertBars(List<EastMoneyKLine> rows, String sourceName) {
         if (rows == null || rows.isEmpty()) {
             return;
@@ -167,7 +168,7 @@ public class PostgresFirstBoardDailyBarStore implements FirstBoardDailyBarStore 
         namedJdbc.query("""
                 SELECT symbol, close_price
                 FROM first_board_daily_bar
-                WHERE trade_date = :tradeDate AND symbol IN (:symbols)
+                WHERE trade_date = :tradeDate AND symbol IN (:symbols) AND adjust_mode = 'QFQ'
                 """, parameters, (RowCallbackHandler) rows ->
                 result.put(rows.getString("symbol"), rows.getBigDecimal("close_price")));
         return Map.copyOf(result);
@@ -199,7 +200,7 @@ public class PostgresFirstBoardDailyBarStore implements FirstBoardDailyBarStore 
                 SELECT symbol, trade_date, open_price, close_price, high_price, low_price,
                        volume, amount, turnover_rate
                 FROM first_board_daily_bar
-                WHERE symbol = ? AND trade_date <= ?
+                WHERE symbol = ? AND trade_date <= ? AND adjust_mode = 'QFQ'
                 ORDER BY trade_date DESC
                 LIMIT ?
                 """, (rows, rowNumber) -> new EastMoneyKLine(

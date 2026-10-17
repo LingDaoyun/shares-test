@@ -252,6 +252,7 @@ public class LocalChipDistributionCalculator {
         BigDecimal cost95 = percentile(prices, weights, 0.95d);
         BigDecimal winnerRate = percentAtOrBelow(prices, weights, currentPrice);
         BigDecimal overhead = HUNDRED.subtract(winnerRate).max(BigDecimal.ZERO);
+        ChipOverheadPressure shortTermPressure = shortTermPressure(prices, weights, currentPrice);
         BigDecimal cost70Width = percentWidth(cost15, cost85, average);
         BigDecimal cost90Width = percentWidth(cost5, cost95, average);
         BigDecimal distance = currentPrice.subtract(average)
@@ -298,7 +299,42 @@ public class LocalChipDistributionCalculator {
                 dominant == null ? null : dominant.chipRatioPercent(),
                 currentPricePosition(currentPrice, dominant),
                 nearestOverhead,
+                shortTermPressure,
                 gaps
+        );
+    }
+
+    private ChipOverheadPressure shortTermPressure(
+            BigDecimal[] prices,
+            double[] weights,
+            BigDecimal currentPrice
+    ) {
+        BigDecimal nearLimit = currentPrice.multiply(new BigDecimal("1.05"));
+        BigDecimal farLimit = currentPrice.multiply(new BigDecimal("1.10"));
+        BigDecimal weightRange = currentPrice.multiply(new BigDecimal("0.10"));
+        BigDecimal near = BigDecimal.ZERO;
+        BigDecimal farther = BigDecimal.ZERO;
+        BigDecimal weighted = BigDecimal.ZERO;
+        for (int index = 0; index < prices.length; index++) {
+            BigDecimal price = prices[index];
+            if (price.compareTo(currentPrice) <= 0 || price.compareTo(farLimit) > 0) {
+                continue;
+            }
+            BigDecimal ratioPercent = BigDecimal.valueOf(weights[index]).multiply(HUNDRED);
+            if (price.compareTo(nearLimit) <= 0) {
+                near = near.add(ratioPercent);
+            } else {
+                farther = farther.add(ratioPercent);
+            }
+            BigDecimal proximityWeight = farLimit.subtract(price)
+                    .divide(weightRange, 12, RoundingMode.HALF_UP);
+            weighted = weighted.add(ratioPercent.multiply(proximityWeight));
+        }
+        return new ChipOverheadPressure(
+                currentPrice,
+                scaleRatio(near),
+                scaleRatio(farther),
+                scaleRatio(weighted)
         );
     }
 

@@ -913,6 +913,7 @@ export interface ShortTermScoreBreakdown {
   largeOrderNetInflowRatio?: number | null
   buyPressureScore?: number | null
   fundFlowAdjustment?: number | null
+  chipPressureAdjustment?: number | null
   overheadPressureReliefScore?: number | null
   technicalRankingScore?: number | null
   v2RankingScore?: number | null
@@ -1019,6 +1020,13 @@ export interface ChipConcentrationZone {
   positionToCurrentPrice: ChipPricePosition
 }
 
+export interface ShortTermPressure {
+  referencePrice: number
+  nearChipRatioPercent: number
+  fartherChipRatioPercent: number
+  weightedChipRatioPercent: number
+}
+
 export interface ShortTermChipSnapshot {
   dataQuality: 'VALID' | 'INSUFFICIENT'
   calculationMode: 'COMPLETED_BAR' | 'INTRADAY_ESTIMATE'
@@ -1062,6 +1070,7 @@ export interface ShortTermChipSnapshot {
   dominantZoneChipRatioPercent?: number | null
   currentPricePosition?: ChipPricePosition | null
   nearestOverheadZone?: ChipConcentrationZone | null
+  shortTermPressure?: ShortTermPressure | null
   modelVersion: string
   dataGaps: string[]
 }
@@ -1357,6 +1366,8 @@ export interface ShortTermScanJobStatus {
   finishedAt: string | null
   message: string
   report: ShortTermReport | null
+  upperShadow?: import('./api/dailyShortTerm').UpperShadowScan | null
+  dataGaps?: string[]
 }
 
 export interface ShortTermHotDirection {
@@ -1461,6 +1472,9 @@ export interface ShortTermMarketTurnover {
 export interface ShortTermMarketBreadth {
   tradeDate: string
   fetchedAt: string
+  marketTimestampFrom?: string | null
+  marketTimestampTo?: string | null
+  missingTimestampCount?: number
   advancing: number
   declining: number
   unchanged: number

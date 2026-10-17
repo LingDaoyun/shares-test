@@ -9,6 +9,7 @@ import {
   recordManualTradeFill,
   updateTradeFill
 } from '../api/client'
+import { fetchFiveDayTradeSchedule } from '../api/fiveDay'
 import { Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { DataTable, type Column } from '../components/ui/DataTable'
@@ -39,6 +40,7 @@ type StatusFilter = 'ALL' | TradeCaseStatus
 type TradeCase = TradeCaseSummary | TradeCaseDetail
 type CaseMutationKind = 'refresh' | 'cancel' | 'delete' | 'save'
 type CaseMutation = CaseOperation & { kind: CaseMutationKind }
+type FiveDayTradeSchedule = Awaited<ReturnType<typeof fetchFiveDayTradeSchedule>>
 
 const statusTabs: { value: StatusFilter; label: string }[] = [
   { value: 'ALL', label: '全部' },
@@ -228,6 +230,7 @@ export function TradeReviewPage() {
     toast.success('复盘关注已删除')
   }, [clearDetailError, removeCase, runSelectedMutation])
 
+  const showRecommendationHorizons = filteredCases.some((tradeCase) => tradeCase.sourceModule !== 'FIVE_DAY')
   const columns = useMemo<Column<TradeCase>[]>(() => [
     {
       key: 'identity',
@@ -255,7 +258,7 @@ export function TradeReviewPage() {
       width: '130px',
       render: (tradeCase) => (
         <div className="min-w-[110px]">
-          <div className="font-medium text-ink-900">{tradeCase.sourceModule}</div>
+          <div className="font-medium text-ink-900">{tradeSourceLabel(tradeCase.sourceModule)}</div>
           <div className="mt-1 text-xs text-ink-400">{tradeCase.ruleVersion}</div>
         </div>
       )
@@ -281,12 +284,14 @@ export function TradeReviewPage() {
       align: 'right',
       render: (tradeCase) => <ProfitText value={tradeCase.ledger.totalProfit} />
     },
-    ...(['T1', 'T5', 'T20'] as const).map<Column<TradeCase>>((horizon) => ({
+    ...(showRecommendationHorizons ? (['T1', 'T5', 'T20'] as const).map<Column<TradeCase>>((horizon) => ({
       key: horizon,
       title: horizon,
       align: 'right',
-      render: (tradeCase) => <OutcomeCell outcome={getRecommendationOutcome(tradeCase, horizon)} />
-    })),
+      render: (tradeCase) => tradeCase.sourceModule === 'FIVE_DAY'
+        ? <span className="text-xs text-ink-400" title="五日观察从实际首笔买入日计时">—</span>
+        : <OutcomeCell outcome={getRecommendationOutcome(tradeCase, horizon)} />
+    })) : []),
     {
       key: 'actions',
       title: '操作',
@@ -305,7 +310,7 @@ export function TradeReviewPage() {
         />
       )
     }
-  ], [mutation, removeReviewCase, selectCase, selectedId])
+  ], [mutation, removeReviewCase, selectCase, selectedId, showRecommendationHorizons])
 
   const refreshList = async () => {
     setListError('')
@@ -481,7 +486,7 @@ export function TradeReviewPage() {
       <DetailOverlay
         open={selectedId !== null}
         title={selected ? `${selected.symbol} ${selected.companyName}` : '交易复盘详情'}
-        subtitle={selected ? `${selected.sourceModule} · ${selected.ruleVersion}` : '加载复盘记录'}
+        subtitle={selected ? `${tradeSourceLabel(selected.sourceModule)} · ${selected.ruleVersion}` : '加载复盘记录'}
         onClose={() => setSelectedId(null)}
       >
         {!selected ? (
@@ -572,8 +577,10 @@ function CaseDetail({
   onRefresh: () => void
   onRequestCancel: (returnFocus: HTMLElement | null) => void
 }) {
+  const isFiveDay = tradeCase.sourceModule === 'FIVE_DAY'
   const recommendationOutcomes = ['T1', 'T5', 'T20'].map((horizon) => getRecommendationOutcome(tradeCase, horizon))
-  const executionOutcomes = tradeCase.outcomes.filter((outcome) => outcome.baselineType === 'EXECUTION')
+  const executionOutcomes = tradeCase.outcomes.filter((outcome) => outcome.baselineType === 'EXECUTION'
+    && (!isFiveDay || (outcome.horizon === 'CLOSED' && tradeCase.status === 'CLOSED')))
   const firstBuy = [...tradeCase.fills]
     .filter((fill) => fill.side === 'BUY')
     .sort((left, right) => Date.parse(left.executedAt) - Date.parse(right.executedAt))[0]
@@ -625,23 +632,32 @@ function CaseDetail({
           <Metric label="浮动收益" value={<ProfitText value={tradeCase.ledger.unrealizedProfit} />} />
           <Metric label="累计毛收益" value={<ProfitText value={tradeCase.ledger.totalProfit} />} />
         </div>
-        <p className="mt-3 border-l-2 border-amber-400 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">收益未计佣金、印花税、分红和送转股</p>
+        <p className="mt-3 border-l-2 border-amber-400 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">{isFiveDay ? '成交费用尚未入账，此处为成交账本毛收益，未计佣金、印花税、分红和送转股。' : '收益未计佣金、印花税、分红和送转股'}</p>
       </DetailSection>
 
-      <DetailSection title="策略表现">
-        <div className="grid grid-cols-1 divide-y divide-line-soft border-y border-line-soft">
+      {isFiveDay ? (
+        <FiveDayTradePlan
+          caseId={tradeCase.caseId}
+          openedAt={tradeCase.ledger.openedAt ?? firstBuy?.executedAt ?? null}
+          status={tradeCase.status}
+          updatedAt={tradeCase.updatedAt}
+        />
+      ) : null}
+
+      <DetailSection title={isFiveDay ? '实际成交复盘' : '策略表现'}>
+        {!isFiveDay ? <div className="grid grid-cols-1 divide-y divide-line-soft border-y border-line-soft">
           {recommendationOutcomes.map((outcome, index) => (
             <OutcomeRow key={outcome?.horizon ?? `missing-${index}`} horizon={['T1', 'T5', 'T20'][index]} outcome={outcome} />
           ))}
-        </div>
+        </div> : null}
         {executionOutcomes.length ? (
           <div className="mt-4">
-            <h4 className="text-xs font-semibold text-ink-600">执行后表现</h4>
+            <h4 className="text-xs font-semibold text-ink-600">{isFiveDay ? '已平仓成交毛收益率' : '执行后表现'}</h4>
             <div className="mt-2 grid grid-cols-1 divide-y divide-line-soft border-y border-line-soft">
               {executionOutcomes.map((outcome) => <OutcomeRow key={`${outcome.baselineType}-${outcome.horizon}`} horizon={outcome.horizon} outcome={outcome} />)}
             </div>
           </div>
-        ) : null}
+        ) : isFiveDay ? <p className="text-sm text-ink-500">{tradeCase.status === 'CLOSED' ? '已平仓，成交表现数据待补充。' : '平仓后展示真实成交结果；当前仓位与毛收益见成交账本。'}</p> : null}
         {tradeCase.outcomeWarnings.length ? (
           <div role="alert" className="mt-3 border-l-2 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             {tradeCase.outcomeWarnings.map((warning) => <p key={warning}>{warning}</p>)}
@@ -1130,6 +1146,85 @@ function FillModal({ tradeCase, fill, returnFocus, busy, onClose, onSubmit, onSa
   )
 }
 
+function FiveDayTradePlan({ caseId, openedAt, status, updatedAt }: {
+  caseId: string
+  openedAt: string | null
+  status: TradeCaseStatus
+  updatedAt: string
+}) {
+  const entryDate = openedAt ? formatShanghaiDateTimeLocal(openedAt).slice(0, 10) : ''
+  const requestKey = `${caseId}:${entryDate}:${status}:${updatedAt}`
+  const requestSequenceRef = useRef(0)
+  const [result, setResult] = useState<{
+    requestKey: string
+    schedule: FiveDayTradeSchedule | null
+    loading: boolean
+    error: string
+  }>({ requestKey: '', schedule: null, loading: false, error: '' })
+
+  useEffect(() => {
+    const sequence = ++requestSequenceRef.current
+    if (!entryDate) {
+      setResult({ requestKey, schedule: null, loading: false, error: '' })
+      return
+    }
+    setResult({ requestKey, schedule: null, loading: true, error: '' })
+    void fetchFiveDayTradeSchedule(entryDate)
+      .then((schedule) => {
+        if (requestSequenceRef.current !== sequence) return
+        setResult({ requestKey, schedule, loading: false, error: '' })
+      })
+      .catch((error) => {
+        if (requestSequenceRef.current !== sequence) return
+        setResult({ requestKey, schedule: null, loading: false, error: extractErrorMessage(error) })
+      })
+    return () => {
+      if (requestSequenceRef.current === sequence) requestSequenceRef.current += 1
+    }
+  }, [entryDate, requestKey])
+
+  const currentResult = result.requestKey === requestKey ? result : null
+  const schedule = currentResult?.schedule ?? null
+  const loading = Boolean(entryDate && (!currentResult || currentResult.loading))
+  const closed = status === 'CLOSED'
+  const scheduleLabels: Record<string, string> = {
+    NOT_STARTED: '尚未开始',
+    HOLDING: '持有中',
+    DUE: '今日为第5交易日',
+    OVERDUE: '已超过第5交易日',
+    CALENDAR_UNAVAILABLE: '交易日历待补',
+    INVALID_DATE: '买入日期无效'
+  }
+
+  return (
+    <DetailSection title="实际成交五日计划">
+      {!entryDate ? (
+        <p className="text-sm text-ink-500">
+          {closed ? '已平仓。' : ''}
+          {openedAt ? '实际买入时间无效，暂不能计算五日计划。' : '尚未录入实际买入成交，五交易日计划尚未开始。'}
+        </p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+            <Metric label="首笔实际买入日" value={entryDate} />
+            <Metric label="第5交易日计划日期" value={schedule?.plannedExitDate ?? (loading ? '计算中' : '待确定')} />
+            <Metric label="持有交易日进度" value={closed ? '已平仓'
+              : schedule?.holdingDay === null || schedule?.holdingDay === undefined ? '待确定'
+                : schedule.holdingDay === 0 ? '尚未开始' : `第 ${schedule.holdingDay} 个交易日 / 计划 5 日`} />
+            <Metric label="计划状态" value={closed ? '已平仓' : schedule ? scheduleLabels[schedule.status] ?? '待确定' : loading ? '计算中' : '待确定'} />
+          </div>
+          {loading ? <p role="status" className="mt-3 text-xs text-ink-500">正在读取五交易日计划</p> : null}
+          {currentResult?.error ? <p role="alert" className="mt-3 text-sm text-red-600">五交易日计划暂不可用：{currentResult.error}</p> : null}
+          {schedule && (!closed || schedule.status === 'CALENDAR_UNAVAILABLE' || schedule.status === 'INVALID_DATE') ? (
+            <p className="mt-3 text-xs leading-relaxed text-ink-600">{schedule.detail}</p>
+          ) : null}
+          <p className="mt-3 text-xs text-ink-400">按中国时区计日，首笔实际买入日为第1交易日。</p>
+        </>
+      )}
+    </DetailSection>
+  )
+}
+
 function DetailSection({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
     <section className="border-b border-line px-4 py-4 last:border-b-0">
@@ -1216,6 +1311,10 @@ function IconButton({ label, icon, danger = false, loading = false, ...props }: 
       {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : icon}
     </button>
   )
+}
+
+function tradeSourceLabel(sourceModule: string) {
+  return sourceModule === 'FIVE_DAY' ? '五日观察' : sourceModule
 }
 
 function canDeleteReviewCase(tradeCase: TradeCase) {

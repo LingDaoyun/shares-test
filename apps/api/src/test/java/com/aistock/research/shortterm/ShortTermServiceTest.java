@@ -15,6 +15,8 @@ import com.aistock.research.quality.EvidenceCompletenessService;
 import com.aistock.research.shortterm.chip.ShortTermChipAnalysisService;
 import com.aistock.research.shortterm.chip.ShortTermChipSnapshot;
 import com.aistock.research.shortterm.schedule.ShortTermAutomationSettings;
+import com.aistock.research.shortterm.schedule.ShortTermFinalResultGate;
+import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
 import com.aistock.research.trading.QuoteFreshnessSnapshot;
 import com.aistock.research.trading.QuoteFreshnessService;
 import com.aistock.research.trading.TradingAdvice;
@@ -69,6 +71,105 @@ class ShortTermServiceTest {
         assertThat(report.ruleSet().klineLimit()).isEqualTo(120);
         assertThat(report.ruleSet().maxEntryRisePercent()).isEqualByComparingTo("6.5");
         assertThat(report.ruleSet().minFinancialScore()).isEqualByComparingTo("55");
+    }
+
+    @Test
+    void zeroLimitsReviewAndReturnEveryEligibleCandidateBeyondLegacyCaps() {
+        prepareEligiblePool(180);
+
+        ShortTermReport report = service.report(new ShortTermScanRequest(
+                0, 0, 0, null, null, null, null, null, null, false, false));
+
+        assertThat(eastMoneyClient.requestedQuoteLimit).isEqualTo(Integer.MAX_VALUE);
+        assertThat(report.ruleSet().scanLimit()).isZero();
+        assertThat(report.ruleSet().klineLimit()).isZero();
+        assertThat(report.technicalReviewCoverage().quotePreselectedCount()).isEqualTo(180);
+        assertThat(report.technicalReviewCoverage().requestedCount()).isEqualTo(180);
+        assertThat(report.technicalReviewCoverage().sufficientCount()).isEqualTo(180);
+        assertThat(report.technicalReviewCoverage().missingCount()).isZero();
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactlyElementsOf(eastMoneyClient.quotes.stream().map(EastMoneyQuote::symbol).toList());
+        assertThat(report.candidates()).extracting(ShortTermCandidate::rank)
+                .containsExactlyElementsOf(IntStream.rangeClosed(1, 180).boxed().toList());
+        assertThat(eastMoneyClient.requestedFinancialSymbols).hasSize(180);
+        assertThat(eastMoneyClient.requestedIntradaySymbols).containsExactlyInAnyOrderElementsOf(
+                report.candidates().stream().map(ShortTermCandidate::symbol).toList());
+        assertThat(eastMoneyClient.requestedFundFlowBatches).hasSize(2)
+                .allSatisfy(batch -> assertThat(batch).hasSizeLessThanOrEqualTo(100));
+        assertThat(report.candidates()).allSatisfy(candidate ->
+                assertThat(candidate.score().mainNetInflowRatio()).isEqualByComparingTo("8"));
+        assertThat(report.methodology()).anyMatch(text -> text.contains("全部合格候选"));
+    }
+
+    @Test
+    void zeroMarketLimitFetchesBeyondSixThousandWithoutRelaxingQuoteFilters() {
+        prepareEligiblePool(1);
+        List<EastMoneyQuote> quotes = new ArrayList<>(eastMoneyClient.quotes);
+        IntStream.range(1, 6001).forEach(index -> quotes.add(quoteWithIndustry(
+                String.format("%06d", 600000 + index), "超出价格上限" + index, "行业" + index,
+                "128.00", "1.20", "18", "1.6", "600000000")));
+        eastMoneyClient.quotes = quotes;
+        eastMoneyClient.snapshotExpectedCount = quotes.size();
+
+        ShortTermReport report = service.report(new ShortTermScanRequest(
+                0, 0, 0, null, null, null, null, null, null, false, false));
+
+        assertThat(report.coverage().rawFetchedCount()).isEqualTo(6001);
+        assertThat(report.coverage().rawComplete()).isTrue();
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.reviewedSymbols()).containsExactly("600000");
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).containsExactly("600000");
+    }
+
+    @Test
+    void missingAndPositiveLimitsRetainLegacyDefaultsAndCaps() {
+        prepareEligiblePool(180);
+
+        ShortTermReport defaults = service.report(ShortTermScanRequest.empty());
+        assertThat(defaults.ruleSet().scanLimit()).isEqualTo(6000);
+        assertThat(defaults.ruleSet().klineLimit()).isEqualTo(120);
+        assertThat(defaults.technicalReviewCoverage().requestedCount()).isEqualTo(120);
+        assertThat(defaults.candidates()).hasSize(8);
+
+        ShortTermReport bounded = service.report(new ShortTermScanRequest(
+                100, 10000, 200, null, null, null, null, null, null, false, false));
+        assertThat(bounded.ruleSet().scanLimit()).isEqualTo(6000);
+        assertThat(bounded.ruleSet().klineLimit()).isEqualTo(160);
+        assertThat(bounded.technicalReviewCoverage().requestedCount()).isEqualTo(160);
+        assertThat(bounded.candidates()).hasSize(40);
+    }
+
+    @Test
+    void fullScanKeepsSuccessfulFundFlowBatchesWhenAnotherBatchFails() {
+        prepareEligiblePool(180);
+        eastMoneyClient.failedFundFlowBatch = 1;
+
+        ShortTermReport report = service.report(new ShortTermScanRequest(
+                0, 0, 0, null, null, null, null, null, null, false, false));
+
+        assertThat(report.candidates()).hasSize(180);
+        assertThat(eastMoneyClient.requestedFundFlowBatches).hasSize(2);
+        for (String symbol : eastMoneyClient.requestedFundFlowBatches.get(0)) {
+            assertThat(find(report, symbol).score().mainNetInflowRatio()).isNull();
+        }
+        for (String symbol : eastMoneyClient.requestedFundFlowBatches.get(1)) {
+            assertThat(find(report, symbol).score().mainNetInflowRatio()).isEqualByComparingTo("8");
+        }
+    }
+
+    private void prepareEligiblePool(int count) {
+        eastMoneyClient.quotes = IntStream.range(0, count)
+                .mapToObj(index -> quoteWithIndustry(
+                        String.format("%06d", 600000 + index), "全量样本" + index, "行业" + index,
+                        "10.62", "1.20", "18", "1.6", "600000000"))
+                .toList();
+        eastMoneyClient.snapshotExpectedCount = count;
+        for (EastMoneyQuote quote : eastMoneyClient.quotes) {
+            String symbol = quote.symbol();
+            eastMoneyClient.klines.put(symbol, rightEarlyKLines(symbol, "10.62", "180000"));
+            eastMoneyClient.financials.put(symbol, goodFinancial(symbol));
+            eastMoneyClient.fundFlows.put(symbol, fundFlow(symbol, "8", "3", "2"));
+        }
     }
 
     @Test
@@ -442,6 +543,97 @@ class ShortTermServiceTest {
         assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("1.0000");
         assertThat(report.coverage().executionReliable()).isFalse();
         assertThat(report.marketSentiment().phase()).isEqualTo("行情覆盖不足");
+    }
+
+    @Test
+    void afterCloseDoesNotTreatFreshlyFetchedMorningQuotesAsClosingData() {
+        assertIncompleteClosingQuoteIsBlocked(Instant.parse("2026-07-07T03:00:00Z"));
+    }
+
+    @Test
+    void afterCloseDoesNotTreatTheLastPreCloseSecondAsClosingData() {
+        assertIncompleteClosingQuoteIsBlocked(Instant.parse("2026-07-07T06:59:59Z"));
+    }
+
+    @Test
+    void afterCloseAcceptsQuotesAtTheRegularCloseWithCurrentDailyBars() {
+        ShortTermReport report = closingReport(Instant.parse("2026-07-07T07:00:00Z"), LocalDate.parse("2026-07-07"));
+
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.coverage().fetchedCount()).isEqualTo(1);
+        assertThat(report.technicalReviewCoverage().sufficientCount()).isEqualTo(1);
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).containsExactly("600001");
+    }
+
+    @Test
+    void afterCloseDoesNotCountYesterdaysDailyBarsAsCompleteOrPublishTheirCandidate() {
+        ShortTermReport report = closingReport(Instant.parse("2026-07-07T07:00:00Z"), LocalDate.parse("2026-07-06"));
+
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.technicalReviewCoverage().requestedCount()).isEqualTo(1);
+        assertThat(report.technicalReviewCoverage().sufficientCount()).isZero();
+        assertThat(report.technicalReviewCoverage().missingCount()).isEqualTo(1);
+        assertThat(report.candidates()).isEmpty();
+        assertThat(eastMoneyClient.requestedFinancialSymbols).isEmpty();
+        assertThat(report.exclusions()).anyMatch(exclusion -> exclusion.symbol().equals("600001")
+                && exclusion.category().equals("KLINE_DATA_MISSING"));
+    }
+
+    @Test
+    void intradayStillSupportsTheExistingHistoricalDailyBarInput() {
+        eastMoneyClient.quotes = List.of(quoteAt("600001", "盘中样本", "普通行业", Instant.parse("2026-07-07T06:58:00Z")));
+        eastMoneyClient.klines.put("600001", endingOn(rightEarlyKLines("600001", "10.62", "180000"),
+                LocalDate.parse("2026-07-06")));
+        eastMoneyClient.financials.put("600001", goodFinancial("600001"));
+
+        ShortTermReport report = service.report(new ShortTermScanRequest(
+                0, 0, 0, null, null, null, null, null, null, false, false));
+
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.technicalReviewCoverage().sufficientCount()).isEqualTo(1);
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).containsExactly("600001");
+    }
+
+    @Test
+    void closedDayStaticPreviewKeepsItsExistingDateCompatibility() {
+        Instant now = Instant.parse("2026-07-11T07:15:00Z");
+        eastMoneyClient.snapshotFetchedAt = now;
+        eastMoneyClient.quotes = List.of(quoteAt("600001", "休市预览", "普通行业", Instant.parse("2026-07-10T06:59:00Z")));
+        eastMoneyClient.klines.put("600001", endingOn(rightEarlyKLines("600001", "10.62", "180000"),
+                LocalDate.parse("2026-07-09")));
+        eastMoneyClient.financials.put("600001", goodFinancial("600001"));
+
+        ShortTermReport report = serviceAt(Clock.fixed(now, SHANGHAI)).report(new ShortTermScanRequest(
+                0, 0, 0, null, null, null, null, null, null, true, false));
+
+        assertThat(report.coverage().executionReliable()).isTrue();
+        assertThat(report.technicalReviewCoverage().sufficientCount()).isEqualTo(1);
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol).containsExactly("600001");
+    }
+
+    private void assertIncompleteClosingQuoteIsBlocked(Instant marketTimestamp) {
+        ShortTermReport report = closingReport(marketTimestamp, LocalDate.parse("2026-07-07"));
+        Clock clock = Clock.fixed(Instant.parse("2026-07-07T07:15:00Z"), SHANGHAI);
+        ShortTermFinalResultGate gate = new ShortTermFinalResultGate(new ShortTermAutomationSettings(new MockEnvironment()),
+                new TradingClockService(clock));
+
+        assertThat(report.coverage().rawComplete()).isTrue();
+        assertThat(report.coverage().fetchedAt()).isEqualTo(clock.instant());
+        assertThat(report.coverage().executionReliable()).isFalse();
+        assertThat(report.coverage().fetchedCount()).isZero();
+        assertThat(report.candidates()).isEmpty();
+        assertThat(eastMoneyClient.requestedKlineSymbols).isEmpty();
+        assertThat(gate.evaluateManual(report, clock.instant()).status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
+    }
+
+    private ShortTermReport closingReport(Instant marketTimestamp, LocalDate barDate) {
+        Instant now = Instant.parse("2026-07-07T07:15:00Z");
+        eastMoneyClient.snapshotFetchedAt = now;
+        eastMoneyClient.quotes = List.of(quoteAt("600001", "收盘样本", "普通行业", marketTimestamp));
+        eastMoneyClient.klines.put("600001", endingOn(rightEarlyKLines("600001", "10.62", "180000"), barDate));
+        eastMoneyClient.financials.put("600001", goodFinancial("600001"));
+        return serviceAt(Clock.fixed(now, SHANGHAI)).report(new ShortTermScanRequest(
+                0, 0, 0, null, null, null, null, null, null, false, false));
     }
 
     @Test
@@ -871,7 +1063,79 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void legacyActiveChipConfigurationCannotChangeProductionOrder() {
+    void fundDirectionCoverageIncludesReturnedIndustriesWithoutAmountsAndKeepsRealZero() {
+        eastMoneyClient.quotes = List.of(quote("600100", "当日样本", "10.62", "1.20", "18", "1.6", "600000000"));
+        eastMoneyClient.industryFundFlows = List.of(
+                industryFundFlow("BK0475", "银行", "100", "1", 3, 2),
+                industryFundFlow("BK1201", "电子", null, "1", 3, 2),
+                industryFundFlow("BK1036", "半导体", "0", "0", 3, 2));
+
+        ShortTermMarketFundDirection direction = service.report(
+                3, 100, 10, null, null, null, null, null, null, null).marketFundDirection();
+
+        assertThat(direction.coveredIndustryCount()).isEqualTo(2);
+        assertThat(direction.expectedIndustryCount()).isEqualTo(3);
+        assertThat(direction.coverageRatio()).isEqualByComparingTo("0.6667");
+        assertThat(direction.topInflows()).extracting(ShortTermIndustryFundDirection::code).containsExactly("BK0475");
+        assertThat(direction.topOutflows()).isEmpty();
+        assertThat(direction.dataGaps()).anyMatch(gap -> gap.contains("返回行业范围") && gap.contains("全市场行业全集"));
+    }
+
+    @Test
+    void fundDirectionRanksOnlyRowsFromTheVerifiedQuoteDate() {
+        eastMoneyClient.quotes = List.of(quote("600100", "当日样本", "10.62", "1.20", "18", "1.6", "600000000"));
+        eastMoneyClient.industryFundFlows = List.of(
+                industryFundFlow("BK0475", "当日银行", "100", "1", 3, 2),
+                withIndustryFlowDate(industryFundFlow("BK1201", "昨日电子", "999999", "5", 3, 2), LocalDate.of(2026, 7, 6)),
+                withIndustryFlowDate(industryFundFlow("BK1036", "无日期半导体", "888888", "5", 3, 2), null));
+
+        ShortTermMarketFundDirection direction = service.report(
+                3, 100, 10, null, null, null, null, null, null, null).marketFundDirection();
+
+        assertThat(direction.tradeDate()).isEqualTo(LocalDate.of(2026, 7, 7));
+        assertThat(direction.topInflows()).extracting(ShortTermIndustryFundDirection::name).containsExactly("当日银行");
+        assertThat(direction.coveredIndustryCount()).isEqualTo(1);
+        assertThat(direction.expectedIndustryCount()).isEqualTo(3);
+        assertThat(direction.dataGaps()).anyMatch(gap -> gap.contains("缺少数据日"))
+                .anyMatch(gap -> gap.contains("行情日") && gap.contains("不一致"));
+    }
+
+    @Test
+    void mixedOrMissingQuoteDatesCannotTurnFundsIntoTodaysRanking() {
+        for (List<EastMoneyQuote> quotes : List.of(
+                List.of(quoteAt("600100", "当日样本", "半导体", Instant.parse("2026-07-07T06:58:00Z")),
+                        quoteAt("600101", "旧日样本", "银行", Instant.parse("2026-07-06T06:58:00Z"))),
+                List.of(quoteAt("600100", "缺日期样本", "半导体", null)))) {
+            eastMoneyClient.quotes = quotes;
+            eastMoneyClient.industryFundFlows = List.of(industryFundFlow("BK0475", "银行", "100", "1", 3, 2));
+
+            ShortTermMarketFundDirection direction = service.report(
+                    3, 100, 10, null, null, null, null, null, null, null).marketFundDirection();
+
+            assertThat(direction.tradeDate()).isNull();
+            assertThat(direction.topInflows()).isEmpty();
+            assertThat(direction.topOutflows()).isEmpty();
+            assertThat(direction.coveredIndustryCount()).isZero();
+            assertThat(direction.dataGaps()).anyMatch(gap -> gap.contains("行情日") && gap.contains("无法核实"));
+        }
+    }
+
+    @Test
+    void matchingHistoricalFundsAndQuotesAreNotPresentedAsToday() {
+        eastMoneyClient.quotes = List.of(quoteAt("600100", "昨日样本", "银行", Instant.parse("2026-07-06T06:58:00Z")));
+        eastMoneyClient.industryFundFlows = List.of(withIndustryFlowDate(
+                industryFundFlow("BK0475", "银行", "100", "1", 3, 2), LocalDate.of(2026, 7, 6)));
+
+        ShortTermMarketFundDirection direction = service.report(
+                3, 100, 10, null, null, null, null, null, null, null).marketFundDirection();
+
+        assertThat(direction.topInflows()).isEmpty();
+        assertThat(direction.tradeDate()).isNull();
+        assertThat(direction.dataGaps()).anyMatch(gap -> gap.contains("历史行情日") && gap.contains("今日"));
+    }
+
+    @Test
+    void legacyChipSnapshotWithoutPressureKeepsProductionOrderAndExplainsMissingEvaluation() {
         eastMoneyClient.quotes = List.of(
                 quote("600607", "强买盘样本", "10.62", "1.20", "18", "1.6", "600000000"),
                 quote("600608", "优质筹码样本", "10.62", "1.20", "18", "1.6", "600000000")
@@ -906,15 +1170,12 @@ class ShortTermServiceTest {
         assertThat(find(active, "600608").score().rankDelta()).isPositive();
         assertThat(find(active, "600608").score().rankingScore())
                 .isEqualByComparingTo(find(active, "600608").score().v2RankingScore());
-        assertThat(active.quoteNote()).doesNotContain("筹码");
-        assertThat(active.methodology()).noneMatch(item -> item.contains("筹码"));
+        assertThat(active.quoteNote()).contains("近端筹码压力");
+        assertThat(active.methodology()).anyMatch(item -> item.contains("近端筹码压力"));
         assertThat(active.candidates()).allSatisfy(candidate -> {
-            assertThat(candidate.strengths()).noneMatch(item -> item.contains("筹码"));
-            assertThat(candidate.risks()).noneMatch(item -> item.contains("筹码"));
-            assertThat(candidate.evidence()).allSatisfy(item -> {
-                assertThat(item.title()).doesNotContain("筹码");
-                assertThat(item.summary()).doesNotContain("筹码");
-            });
+            assertThat(candidate.risks()).anyMatch(item -> item.contains("近端筹码压力未评估"));
+            assertThat(candidate.evidence()).anyMatch(item -> "近端筹码压力".equals(item.title())
+                    && item.summary().contains("未评估"));
         });
         assertThat(eastMoneyClient.turnoverEnrichmentCalls).isPositive();
     }
@@ -1631,6 +1892,14 @@ class ShortTermServiceTest {
         assertThat(candidate.score().visibleRankingAdjustment()).isEqualByComparingTo(
                 candidate.score().rankingScore().subtract(candidate.score().technicalRankingScore())
         );
+        BigDecimal beforePenalty = candidate.score().v2RankingScore()
+                .add(candidate.score().crossSectionAdjustment())
+                .add(candidate.score().volatilityContribution())
+                .max(BigDecimal.ZERO).min(new BigDecimal("100"));
+        BigDecimal penalty = candidate.score().chipPressureAdjustment() == null
+                ? BigDecimal.ZERO : candidate.score().chipPressureAdjustment().negate();
+        assertThat(candidate.score().rankingScore())
+                .isEqualByComparingTo(beforePenalty.subtract(penalty));
     }
 
     @Test
@@ -1726,9 +1995,12 @@ class ShortTermServiceTest {
     @Test
     void shouldTreatPostCloseFixedPriceAsSeparateFromRegularTailBuyPoint() {
         eastMoneyClient.quotes = List.of(
-                quote("600001", "右侧股份", "10.62", "1.60", "18.00", "1.60", "180000000")
+                withTurnover(quoteAt("600001", "右侧股份", "通用设备", Instant.parse("2026-07-07T07:00:00Z"),
+                        "1.60", "180000000"), "3.00")
         );
-        eastMoneyClient.klines.put("600001", rightEarlyKLines("600001", "10.62", "180000"));
+        eastMoneyClient.klines.put("600001", endingOn(rightEarlyKLines("600001", "10.62", "180000"),
+                LocalDate.parse("2026-07-07")));
+        eastMoneyClient.snapshotFetchedAt = Instant.parse("2026-07-07T07:20:00Z");
         eastMoneyClient.financials.put("600001", goodFinancial("600001"));
         eastMoneyClient.intraday.put("600001", postCloseOnly("600001"));
         Clock postCloseClock = Clock.fixed(Instant.parse("2026-07-07T07:20:00Z"), SHANGHAI);
@@ -2481,7 +2753,7 @@ class ShortTermServiceTest {
         return new EastMoneyIndustryFundFlowSnapshot(
                 code,
                 name,
-                new BigDecimal(mainNetInflow),
+                mainNetInflow == null ? null : new BigDecimal(mainNetInflow),
                 new BigDecimal(mainNetInflowRatio),
                 new BigDecimal("60000000"),
                 new BigDecimal("1.5"),
@@ -2496,6 +2768,16 @@ class ShortTermServiceTest {
                 LocalDate.parse("2026-07-07"),
                 Instant.parse("2026-07-07T07:00:00Z")
         );
+    }
+
+    private EastMoneyIndustryFundFlowSnapshot withIndustryFlowDate(
+            EastMoneyIndustryFundFlowSnapshot snapshot, LocalDate date
+    ) {
+        return new EastMoneyIndustryFundFlowSnapshot(snapshot.code(), snapshot.name(), snapshot.mainNetInflow(),
+                snapshot.mainNetInflowRatio(), snapshot.superLargeNetInflow(), snapshot.superLargeNetInflowRatio(),
+                snapshot.largeNetInflow(), snapshot.largeNetInflowRatio(), snapshot.advancing(), snapshot.declining(),
+                snapshot.constituentCount(), snapshot.sourceName(), snapshot.sourceUrl(), snapshot.fetchedAt(), date,
+                date == null ? null : date.atTime(15, 0).atZone(SHANGHAI).toInstant());
     }
 
     private EastMoneyQuote quoteAt(
@@ -2669,6 +2951,9 @@ class ShortTermServiceTest {
         private Set<String> unstableIndustrySymbols = Set.of();
         private final List<String> requestedKlineSymbols = Collections.synchronizedList(new ArrayList<>());
         private final List<String> requestedFinancialSymbols = Collections.synchronizedList(new ArrayList<>());
+        private final List<String> requestedIntradaySymbols = Collections.synchronizedList(new ArrayList<>());
+        private final List<List<String>> requestedFundFlowBatches = new ArrayList<>();
+        private int failedFundFlowBatch;
         private final Map<String, List<EastMoneyKLine>> klines = new HashMap<>();
         private final Map<String, List<EastMoneyAnnualIndicator>> financials = new HashMap<>();
         private final Map<String, List<EastMoneyIntradayPoint>> intraday = new HashMap<>();
@@ -2754,6 +3039,7 @@ class ShortTermServiceTest {
 
         @Override
         public List<EastMoneyIntradayPoint> fetchIntradayTrends(String symbol) {
+            requestedIntradaySymbols.add(symbol);
             return intraday.getOrDefault(symbol, List.of());
         }
 
@@ -2761,6 +3047,10 @@ class ShortTermServiceTest {
         public Map<String, EastMoneyFundFlowSnapshot> fetchFundFlowSnapshots(List<String> symbols) {
             fundFlowBatchCalls++;
             requestedFundFlowSymbols = List.copyOf(symbols);
+            requestedFundFlowBatches.add(List.copyOf(symbols));
+            if (fundFlowBatchCalls == failedFundFlowBatch) {
+                throw new IllegalStateException("测试资金流分批失败");
+            }
             Map<String, EastMoneyFundFlowSnapshot> result = new HashMap<>();
             symbols.forEach(symbol -> {
                 EastMoneyFundFlowSnapshot snapshot = fundFlows.get(symbol);

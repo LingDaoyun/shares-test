@@ -9,9 +9,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -47,6 +49,20 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ApiError> handleConstraintViolation(ConstraintViolationException exception) {
         ApiError body = new ApiError("VALIDATION_ERROR", exception.getMessage(), Instant.now(), Map.of());
+        return ResponseEntity.badRequest().body(body);
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiError> handleArgumentTypeMismatch(MethodArgumentTypeMismatchException exception) {
+        ApiError body = new ApiError("VALIDATION_ERROR", "请求参数格式错误", Instant.now(),
+                Map.of(exception.getName(), "请求参数格式错误"));
+        return ResponseEntity.badRequest().body(body);
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiError> handleMissingRequestParameter(MissingServletRequestParameterException exception) {
+        ApiError body = new ApiError("VALIDATION_ERROR", "缺少必填请求参数", Instant.now(),
+                Map.of(exception.getParameterName(), "缺少必填请求参数"));
         return ResponseEntity.badRequest().body(body);
     }
 

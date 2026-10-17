@@ -20,6 +20,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -163,8 +164,11 @@ public class TradeOutcomeService {
 
     public List<TradeOutcomeEntity> outcomes(String caseId) {
         return Optional.ofNullable(readTransaction.execute(status -> {
-            requireCase(caseId);
-            return outcomeRepository.findByCaseIdOrderByHorizonAsc(caseId);
+            TradeCaseEntity tradeCase = requireCase(caseId);
+            List<TradeOutcomeEntity> outcomes = outcomeRepository.findByCaseIdOrderByHorizonAsc(caseId);
+            return RecommendationSource.FIVE_DAY.sourceModule().equals(tradeCase.getSourceModule())
+                    ? outcomes.stream().filter(outcome -> !RECOMMENDATION.equals(outcome.getBaselineType())).toList()
+                    : outcomes;
         })).orElseGet(List::of);
     }
 
@@ -178,9 +182,16 @@ public class TradeOutcomeService {
         if (normalizedCaseIds.isEmpty()) {
             return List.of();
         }
-        return Optional.ofNullable(readTransaction.execute(status ->
-                outcomeRepository.findByCaseIdInOrderByCaseIdAscBaselineTypeAscHorizonAsc(normalizedCaseIds)
-        )).orElseGet(List::of);
+        return Optional.ofNullable(readTransaction.execute(status -> {
+            Set<String> fiveDayCaseIds = caseRepository.findAllById(normalizedCaseIds).stream()
+                    .filter(tradeCase -> RecommendationSource.FIVE_DAY.sourceModule().equals(tradeCase.getSourceModule()))
+                    .map(TradeCaseEntity::getCaseId)
+                    .collect(java.util.stream.Collectors.toSet());
+            return outcomeRepository.findByCaseIdInOrderByCaseIdAscBaselineTypeAscHorizonAsc(normalizedCaseIds).stream()
+                    .filter(outcome -> !fiveDayCaseIds.contains(outcome.getCaseId())
+                            || !RECOMMENDATION.equals(outcome.getBaselineType()))
+                    .toList();
+        })).orElseGet(List::of);
     }
 
     private CaseFacts loadFacts(String caseId) {
@@ -192,6 +203,7 @@ public class TradeOutcomeService {
         return new CaseFacts(
                 tradeCase.getCaseId(),
                 tradeCase.getSymbol(),
+                tradeCase.getSourceModule(),
                 tradeCase.getRecommendedPrice(),
                 tradeCase.getRecommendedAt(),
                 fills,
@@ -264,24 +276,26 @@ public class TradeOutcomeService {
 
     private List<ScopedOutcome> calculate(CaseFacts facts, MarketFacts market) {
         List<ScopedOutcome> results = new ArrayList<>();
-        if (market.historyAvailable()) {
-            outcomeCalculator.evaluateRecommendation(
-                            facts.recommendedPrice(), market.rows(), facts.recommendedAt())
-                    .forEach(result -> results.add(new ScopedOutcome(
-                            RECOMMENDATION, result, market.historySourceName(), null)));
-        } else {
-            List.of("T1", "T5", "T20").forEach(horizon -> results.add(new ScopedOutcome(
-                    RECOMMENDATION, OutcomeResult.unavailable(horizon), market.historySourceName(), null)));
+        if (!RecommendationSource.FIVE_DAY.sourceModule().equals(facts.sourceModule())) {
+            if (market.historyAvailable()) {
+                outcomeCalculator.evaluateRecommendation(
+                                facts.recommendedPrice(), market.rows(), facts.recommendedAt())
+                        .forEach(result -> results.add(new ScopedOutcome(
+                                RECOMMENDATION, result, market.historySourceName(), null)));
+            } else {
+                List.of("T1", "T5", "T20").forEach(horizon -> results.add(new ScopedOutcome(
+                        RECOMMENDATION, OutcomeResult.unavailable(horizon), market.historySourceName(), null)));
+            }
+            OutcomeResult currentRecommendation = market.latestPrice() == null
+                    ? OutcomeResult.unavailable("CURRENT")
+                    : outcomeCalculator.evaluateRecommendationCurrent(
+                            facts.recommendedPrice(), market.rows(), facts.recommendedAt(),
+                            market.latestPrice(), market.evaluationDate());
+            results.add(new ScopedOutcome(
+                    RECOMMENDATION, currentRecommendation,
+                    market.latestPrice() == null ? "LIVE_QUOTE_UNAVAILABLE" : market.sourceName(),
+                    market.marketTimestamp()));
         }
-        OutcomeResult currentRecommendation = market.latestPrice() == null
-                ? OutcomeResult.unavailable("CURRENT")
-                : outcomeCalculator.evaluateRecommendationCurrent(
-                        facts.recommendedPrice(), market.rows(), facts.recommendedAt(),
-                        market.latestPrice(), market.evaluationDate());
-        results.add(new ScopedOutcome(
-                RECOMMENDATION, currentRecommendation,
-                market.latestPrice() == null ? "LIVE_QUOTE_UNAVAILABLE" : market.sourceName(),
-                market.marketTimestamp()));
 
         if (!facts.fills().isEmpty() || facts.hadExecutionOutcomes()) {
             if (facts.fills().isEmpty()) {
@@ -452,6 +466,7 @@ public class TradeOutcomeService {
     private record CaseFacts(
             String caseId,
             String symbol,
+            String sourceModule,
             BigDecimal recommendedPrice,
             Instant recommendedAt,
             List<FillFact> fills,

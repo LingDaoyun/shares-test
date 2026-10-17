@@ -59,12 +59,12 @@ export function IndustryLeaderOverlay({
   return (
     <DetailOverlay
       open
-      title={`${selection.name} · 龙头股`}
+      title={`${selection.name} · 行业资金排名`}
       subtitle={`板块内个股按今日${selection.flow === 'OUTFLOW' ? '主力净流出' : '主力净流入'}排名 · ${rankLabel}`}
       onClose={onClose}
     >
       <div className="flex flex-col gap-3">
-        {state === 'LOADING' ? <Loader text="板块龙头股资金流加载中" /> : null}
+        {state === 'LOADING' ? <Loader text="行业个股资金排名加载中" /> : null}
 
         {state === 'FAILED' ? (
           <div className="flex flex-col items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -84,7 +84,7 @@ export function IndustryLeaderOverlay({
                 </div>
               ) : null}
               <p className="text-xs leading-relaxed text-ink-500">
-                排名口径：{selection.name} 板块成分股按当日主力净流入{selection.flow === 'OUTFLOW' ? '从低到高' : '从高到低'}排序，展示相对资金龙头，不构成买入建议。
+                排名口径：{selection.name} 板块成分股按当日主力净流入{selection.flow === 'OUTFLOW' ? '从低到高' : '从高到低'}排序，仅反映这次资金排名，不证明个股具有龙头地位。
                 {snapshot.tradeDate ? ` 数据日 ${snapshot.tradeDate}。` : ''}
               </p>
               <div className="flex flex-col divide-y divide-line-soft rounded-xl border border-line-soft">

@@ -200,7 +200,7 @@ public class RecommendationAttestationService {
         return new ShortTermScanJobStatus(
                 status.jobId(), status.status(), status.tradeDate(), status.resultStatus(),
                 status.blockedReasons(), status.createdAt(), status.startedAt(), status.finishedAt(),
-                status.message(), attest(status.report()));
+                status.message(), attest(status.report()), status.upperShadow(), status.dataGaps());
     }
 
     public MarketScanReport attest(MarketScanReport report) {

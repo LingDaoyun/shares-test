@@ -118,6 +118,82 @@ class TradeOutcomeServiceTest {
     }
 
     @Test
+    void fiveDayRefreshKeepsActualHoldingOutcomesWithoutRecommendationBaselines() {
+        TradeCaseEntity tradeCase = tradeCase("case-1", "HOLDING", "FIVE_DAY");
+        when(cases.findById("case-1")).thenReturn(Optional.of(tradeCase));
+        when(cases.findByIdForUpdate("case-1")).thenReturn(Optional.of(tradeCase));
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(twentyBars());
+        when(gateway.latestPrice(anyString())).thenReturn(Optional.of(
+                latest("13", "2026-08-07", "2026-08-07T07:00:00Z")));
+
+        service.refresh("case-1");
+
+        assertThat(stored.values())
+                .extracting(entity -> entity.getBaselineType() + "/" + entity.getHorizon())
+                .containsExactlyInAnyOrder("EXECUTION/CURRENT", "EXECUTION/CLOSED");
+        assertThat(stored.get(key("case-1", "EXECUTION", "CURRENT")).getReturnPct())
+                .isEqualByComparingTo("30.0000");
+        assertThat(stored.get(key("case-1", "EXECUTION", "CLOSED")).getStatus()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void fiveDayRefreshKeepsActualClosedGrossReturn() {
+        TradeCaseEntity tradeCase = tradeCase("case-1", "CLOSED", "FIVE_DAY");
+        when(cases.findById("case-1")).thenReturn(Optional.of(tradeCase));
+        when(cases.findByIdForUpdate("case-1")).thenReturn(Optional.of(tradeCase));
+        when(fills.findByCaseIdOrderByExecutedAtAscCreatedAtAsc("case-1")).thenReturn(List.of(
+                fill("buy", "BUY", "2026-07-13T01:30:00Z", "10", 100),
+                fill("sell", "SELL", "2026-07-15T01:30:00Z", "12", 100)));
+        when(gateway.dailyKLines(anyString(), any(), any())).thenReturn(twentyBars());
+        when(gateway.latestPrice(anyString())).thenReturn(Optional.empty());
+
+        service.refresh("case-1");
+
+        assertThat(stored.values()).allSatisfy(outcome ->
+                assertThat(outcome.getBaselineType()).isEqualTo("EXECUTION"));
+        TradeOutcomeEntity closed = stored.get(key("case-1", "EXECUTION", "CLOSED"));
+        assertThat(closed.getStatus()).isEqualTo("MATURED");
+        assertThat(closed.getReturnPct()).isEqualByComparingTo("20.0000");
+        assertThat(closed.getSourceName()).isEqualTo("EXECUTION_FILLS");
+        assertThat(closed.getEvaluationDate()).isEqualTo(LocalDate.parse("2026-07-15"));
+    }
+
+    @Test
+    void fiveDayDetailHidesPreviouslyStoredRecommendationRowsWithoutDeletingThem() {
+        TradeCaseEntity tradeCase = tradeCase("case-1", "HOLDING", "FIVE_DAY");
+        when(cases.findById("case-1")).thenReturn(Optional.of(tradeCase));
+        TradeOutcomeEntity legacyT5 = TradeOutcomeEntity.pending(
+                "legacy-t5", "case-1", "RECOMMENDATION", "T5", null, null, NOW);
+        TradeOutcomeEntity legacyCurrent = TradeOutcomeEntity.pending(
+                "legacy-current", "case-1", "RECOMMENDATION", "CURRENT", null, null, NOW);
+        TradeOutcomeEntity execution = executionOutcome("execution", "CURRENT", "13", "2026-08-07");
+        stored.put(key("case-1", "RECOMMENDATION", "T5"), legacyT5);
+        stored.put(key("case-1", "RECOMMENDATION", "CURRENT"), legacyCurrent);
+        stored.put(key("case-1", "EXECUTION", "CURRENT"), execution);
+
+        assertThat(service.outcomes("case-1")).containsExactly(execution);
+        assertThat(stored).hasSize(3);
+        verify(outcomes, never()).deleteAll(any(Iterable.class));
+    }
+
+    @Test
+    void batchOutcomesHideOnlyFiveDayRecommendationRows() {
+        TradeCaseEntity fiveDay = tradeCase("case-1", "HOLDING", "FIVE_DAY");
+        TradeCaseEntity legacyCase = tradeCase("case-2", "HOLDING");
+        TradeOutcomeEntity fiveDayRecommendation = TradeOutcomeEntity.pending(
+                "five-day-t5", "case-1", "RECOMMENDATION", "T5", null, null, NOW);
+        TradeOutcomeEntity fiveDayExecution = executionOutcome("execution", "CURRENT", "13", "2026-08-07");
+        TradeOutcomeEntity legacyRecommendation = TradeOutcomeEntity.pending(
+                "legacy-t5", "case-2", "RECOMMENDATION", "T5", null, null, NOW);
+        when(cases.findAllById(List.of("case-1", "case-2"))).thenReturn(List.of(fiveDay, legacyCase));
+        when(outcomes.findByCaseIdInOrderByCaseIdAscBaselineTypeAscHorizonAsc(List.of("case-1", "case-2")))
+                .thenReturn(List.of(fiveDayRecommendation, fiveDayExecution, legacyRecommendation));
+
+        assertThat(service.outcomes(List.of("case-1", "case-2")))
+                .containsExactly(fiveDayExecution, legacyRecommendation);
+    }
+
+    @Test
     void advancesAndSavesTheLockedCaseVersionAfterEverySuccessfulReconciliation() {
         TradeCaseEntity tradeCase = tradeCase("HOLDING");
         tradeCase.updateStatusAndMarkOutcomeDirty("HOLDING", tradeCase.getUpdatedAt());
@@ -380,9 +456,13 @@ class TradeOutcomeServiceTest {
     }
 
     private TradeCaseEntity tradeCase(String caseId, String status) {
+        return tradeCase(caseId, status, "MISPRICING");
+    }
+
+    private TradeCaseEntity tradeCase(String caseId, String status, String sourceModule) {
         TradeCaseEntity tradeCase = TradeCaseEntity.planned(
-                caseId, "fingerprint-" + caseId, "decision-1", "002714", "牧原股份", "MISPRICING",
-                "分批建仓", decimal("78"), "mispricing-v2", decimal("10"),
+                caseId, "fingerprint-" + caseId, "decision-1", "002714", "牧原股份", sourceModule,
+                "分批建仓", decimal("78"), "FIVE_DAY".equals(sourceModule) ? "five-day-observation-v1" : "mispricing-v2", decimal("10"),
                 Instant.parse("2026-07-10T07:00:00Z"), "{}", Instant.parse("2026-07-10T07:00:00Z"));
         tradeCase.updateStatus(status, NOW.minusSeconds(60));
         return tradeCase;

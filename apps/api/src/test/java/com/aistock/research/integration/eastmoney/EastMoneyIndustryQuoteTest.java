@@ -86,7 +86,7 @@ class EastMoneyIndustryQuoteTest {
             assertThat(quote.tradeDate()).isEqualTo(LocalDate.of(2026, 10, 9));
             assertThat(quote.marketTimestamp()).isEqualTo(Instant.parse("2026-10-09T02:36:48Z"));
         });
-        assertThat(result.source()).isEqualTo("东方财富行业成分 + 腾讯行情");
+        assertThat(result.source()).isEqualTo("东方财富板块成分 + 腾讯行情");
     }
 
     @Test
@@ -123,6 +123,38 @@ class EastMoneyIndustryQuoteTest {
         assertThat(snapshot.fetchedCount()).isEqualTo(105);
         assertThat(snapshot.expectedCount()).isEqualTo(105);
         assertThat(snapshot.complete()).isTrue();
+    }
+
+    @Test
+    void boardCodeEntryReusesWholeMembershipPagingWithoutIndustryResolution() {
+        Client client = new Client(List.of(
+                new AshareQuotePage(105, quotes(0, 100)), new AshareQuotePage(105, quotes(100, 5)))) {
+            @Override public List<EastMoneyIndustryBoard> fetchIndustryBoards() {
+                throw new AssertionError("a confirmed board code does not need industry resolution");
+            }
+        };
+
+        AshareQuoteSnapshot snapshot = client.fetchBoardQuoteSnapshot("BK0855");
+
+        assertThat(client.pages).containsExactly(1, 2);
+        assertThat(snapshot.expectedCount()).isEqualTo(105);
+        assertThat(snapshot.complete()).isTrue();
+    }
+
+    @Test
+    void boardCodeEntryKeepsMissingTencentQuotesIncomplete() {
+        AshareQuoteSnapshot snapshot = new MetadataClient(2, false).fetchBoardQuoteSnapshot("BK0855");
+
+        assertThat(snapshot.complete()).isFalse();
+        assertThat(snapshot.expectedCount()).isEqualTo(2);
+        assertThat(snapshot.fetchedCount()).isEqualTo(1);
+        assertThat(snapshot.missingCount()).isEqualTo(1);
+    }
+
+    @Test
+    void malformedBoardCodeIsRejectedBeforeFetchingMembership() {
+        assertThatThrownBy(() -> new Client(List.of()).fetchBoardQuoteSnapshot("BK0855&pn=2"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

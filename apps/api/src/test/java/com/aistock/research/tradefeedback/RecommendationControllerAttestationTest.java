@@ -60,7 +60,8 @@ class RecommendationControllerAttestationTest {
                 service,
                 jobs,
                 attestations,
-                mock(com.aistock.research.shortterm.ShortTermLimitUpBoardService.class)
+                mock(com.aistock.research.shortterm.ShortTermLimitUpBoardService.class),
+                mock(com.aistock.research.shortterm.ShortTermCatchUpService.class)
         );
 
         assertThat(controller.report(null, null, null, null,null, null, null, null, null, null)).isSameAs(report);

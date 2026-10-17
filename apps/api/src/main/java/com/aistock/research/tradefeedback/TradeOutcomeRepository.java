@@ -25,7 +25,7 @@ public interface TradeOutcomeRepository extends JpaRepository<TradeOutcomeEntity
             from TradeOutcomeEntity outcome, TradeCaseEntity tradeCase
             where tradeCase.caseId = outcome.caseId
               and tradeCase.recommendationVerified = true
-              and tradeCase.sourceModule <> 'SHORT_TERM'
+              and tradeCase.sourceModule not in ('SHORT_TERM', 'FIVE_DAY')
               and outcome.baselineType = 'RECOMMENDATION'
               and outcome.horizon = 'T20'
               and outcome.status = 'MATURED'

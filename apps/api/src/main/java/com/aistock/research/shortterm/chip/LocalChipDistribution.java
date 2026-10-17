@@ -36,12 +36,59 @@ public record LocalChipDistribution(
         BigDecimal dominantZoneChipRatioPercent,
         ChipPricePosition currentPricePosition,
         ChipConcentrationZone nearestOverheadZone,
+        ChipOverheadPressure shortTermPressure,
         List<String> dataGaps
 ) {
     public LocalChipDistribution {
         distributionBuckets = distributionBuckets == null ? List.of() : List.copyOf(distributionBuckets);
         concentrationZones = concentrationZones == null ? List.of() : List.copyOf(concentrationZones);
         dataGaps = dataGaps == null ? List.of() : List.copyOf(dataGaps);
+    }
+
+    public LocalChipDistribution(
+            ChipDataQuality quality,
+            ChipCalculationMode calculationMode,
+            LocalDate tradeDate,
+            BigDecimal averageCost,
+            BigDecimal cost5,
+            BigDecimal cost15,
+            BigDecimal cost50,
+            BigDecimal cost85,
+            BigDecimal cost95,
+            BigDecimal winnerRatePercent,
+            BigDecimal overheadChipRatioPercent,
+            BigDecimal cost70Low,
+            BigDecimal cost70High,
+            BigDecimal cost70ConcentrationPercent,
+            BigDecimal cost90Low,
+            BigDecimal cost90High,
+            BigDecimal cost90ConcentrationPercent,
+            BigDecimal distanceToAverageCostPercent,
+            BigDecimal priorHighPrice,
+            BigDecimal priorHighZoneResidualRatioPercent,
+            BigDecimal turnoverSincePriorHighPercent,
+            BigDecimal turnoverCoveragePercent,
+            int validBars,
+            List<ChipDistributionBucket> distributionBuckets,
+            List<ChipConcentrationZone> concentrationZones,
+            BigDecimal dominantPeakPrice,
+            BigDecimal dominantZoneLow,
+            BigDecimal dominantZoneHigh,
+            BigDecimal dominantZoneChipRatioPercent,
+            ChipPricePosition currentPricePosition,
+            ChipConcentrationZone nearestOverheadZone,
+            List<String> dataGaps
+    ) {
+        this(quality, calculationMode, tradeDate, averageCost, cost5, cost15, cost50,
+                cost85, cost95, winnerRatePercent, overheadChipRatioPercent,
+                cost70Low, cost70High, cost70ConcentrationPercent,
+                cost90Low, cost90High, cost90ConcentrationPercent,
+                distanceToAverageCostPercent, priorHighPrice,
+                priorHighZoneResidualRatioPercent, turnoverSincePriorHighPercent,
+                turnoverCoveragePercent, validBars, distributionBuckets, concentrationZones,
+                dominantPeakPrice, dominantZoneLow, dominantZoneHigh,
+                dominantZoneChipRatioPercent, currentPricePosition, nearestOverheadZone,
+                null, dataGaps);
     }
 
     public static LocalChipDistribution insufficient(

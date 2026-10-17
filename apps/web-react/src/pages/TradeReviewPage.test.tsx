@@ -4,6 +4,7 @@ import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import * as apiClient from '../api/client'
+import { fetchFiveDayTradeSchedule } from '../api/fiveDay'
 import {
   addTradeFill,
   cancelTradeCase,
@@ -30,6 +31,8 @@ vi.mock('../api/client', () => ({
   refreshTradeCase: vi.fn(),
   updateTradeFill: vi.fn()
 }))
+
+vi.mock('../api/fiveDay', () => ({ fetchFiveDayTradeSchedule: vi.fn() }))
 
 describe('TradeReviewPage case removal', () => {
   let host: HTMLDivElement
@@ -207,6 +210,43 @@ describe('TradeReviewPage case removal', () => {
       }
     })
     expect(document.body.textContent).toContain('600367')
+  })
+
+  it('starts a five-day plan from the Shanghai date of the actual first buy', async () => {
+    const detail = tradeCaseDetail('five-day-holding', '600001', '五日样本')
+    detail.sourceModule = 'FIVE_DAY'
+    detail.status = 'HOLDING'
+    detail.ledger = { ...detail.ledger, openedAt: '2026-09-07T16:30:00Z', positionQuantity: 100 }
+    vi.mocked(fetchTradeCases).mockResolvedValue([detail])
+    vi.mocked(fetchTradeCase).mockResolvedValue(detail)
+    vi.mocked(fetchFiveDayTradeSchedule).mockResolvedValue({
+      entryDate: '2026-09-08', plannedExitDate: '2026-09-14', holdingDay: 1, status: 'HOLDING', detail: '首笔买入日计第 1 日'
+    })
+    await renderPage(root)
+    await act(async () => {
+      document.querySelector<HTMLTableRowElement>('tbody tr')?.click()
+      await flushPromises()
+    })
+    expect(fetchFiveDayTradeSchedule).toHaveBeenCalledWith('2026-09-08')
+    expect(document.body.textContent).toContain('2026-09-14')
+    expect(document.body.textContent).toContain('第 1 个交易日 / 计划 5 日')
+    expect(document.body.textContent).toContain('成交账本毛收益')
+    expect([...document.querySelectorAll('th')].map((header) => header.textContent)).not.toContain('T20')
+    expect(document.body.textContent).not.toContain('推荐后表现')
+  })
+
+  it('does not calculate the actual five-day plan before a buy is recorded', async () => {
+    const detail = tradeCaseDetail('five-day-planned', '600001', '五日样本')
+    detail.sourceModule = 'FIVE_DAY'
+    vi.mocked(fetchTradeCases).mockResolvedValue([detail])
+    vi.mocked(fetchTradeCase).mockResolvedValue(detail)
+    await renderPage(root)
+    await act(async () => {
+      document.querySelector<HTMLTableRowElement>('tbody tr')?.click()
+      await flushPromises()
+    })
+    expect(fetchFiveDayTradeSchedule).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('尚未录入实际买入成交，五交易日计划尚未开始')
   })
 })
 

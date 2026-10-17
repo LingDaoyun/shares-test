@@ -21,17 +21,20 @@ public class ShortTermController {
     private final ShortTermScanJobService scanJobService;
     private final RecommendationAttestationService attestationService;
     private final ShortTermLimitUpBoardService limitUpBoardService;
+    private final ShortTermCatchUpService catchUpService;
 
     public ShortTermController(
             ShortTermService shortTermService,
             ShortTermScanJobService scanJobService,
             RecommendationAttestationService attestationService,
-            ShortTermLimitUpBoardService limitUpBoardService
+            ShortTermLimitUpBoardService limitUpBoardService,
+            ShortTermCatchUpService catchUpService
     ) {
         this.shortTermService = shortTermService;
         this.scanJobService = scanJobService;
         this.attestationService = attestationService;
         this.limitUpBoardService = limitUpBoardService;
+        this.catchUpService = catchUpService;
     }
 
     @GetMapping("/limit-up-board")
@@ -47,6 +50,21 @@ public class ShortTermController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
         return limitUpBoardService.industrySnapshot(industry, date);
+    }
+
+    @GetMapping("/limit-up-board/industry/catch-up")
+    public ShortTermCatchUpSnapshot catchUp(
+            @RequestParam String industry,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam String leaderSymbol,
+            @RequestParam(required = false) String boardCode
+    ) {
+        return catchUpService.snapshot(industry, date, leaderSymbol, boardCode);
+    }
+
+    @PostMapping("/catch-up/follow-up")
+    public ShortTermCatchUpFollowUpSnapshot catchUpFollowUp(@RequestBody ShortTermCatchUpFollowUpRequest request) {
+        return catchUpService.followUp(request);
     }
 
     @GetMapping("/industry-fund-leaders")

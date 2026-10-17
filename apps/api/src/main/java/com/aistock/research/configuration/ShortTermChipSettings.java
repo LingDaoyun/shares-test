@@ -58,9 +58,13 @@ public class ShortTermChipSettings {
         return decimal("weight", "0.25", BigDecimal.ZERO, BigDecimal.ONE);
     }
 
+    public BigDecimal nearOverheadMaxPenalty() {
+        return decimal("near-overhead-max-penalty", "10", BigDecimal.ZERO, new BigDecimal("100"));
+    }
+
     public ChipActivationMode activationMode() {
         try {
-            return ChipActivationMode.valueOf(text("activation-mode", "SHADOW").toUpperCase(Locale.ROOT));
+            return ChipActivationMode.valueOf(text("activation-mode", "ACTIVE").toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException exception) {
             return ChipActivationMode.SHADOW;
         }

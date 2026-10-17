@@ -149,17 +149,67 @@ public class EastMoneyClient {
     }
 
     public AshareQuoteSnapshot fetchAshareQuoteSnapshot(int limit) {
+        AshareQuoteSnapshot primary = null;
+        RuntimeException primaryFailure = null;
         try {
-            return fetchEastMoneyQuoteSnapshot(limit);
+            primary = fetchEastMoneyQuoteSnapshot(limit);
+            if (fulfillsQuoteRequest(primary)) return primary;
+            logger.warn("东方财富全市场行情覆盖不完整（{}/{}），尝试新浪证券清单和腾讯行情",
+                    primary.fetchedCount(), primary.expectedCount());
         } catch (RuntimeException eastMoneyFailure) {
+            primaryFailure = eastMoneyFailure;
             logger.warn("东方财富全市场行情不可用，改用新浪证券清单和腾讯行情：{}", rootMessage(eastMoneyFailure));
-            try {
-                return fetchTencentAshareQuoteSnapshot(limit);
-            } catch (RuntimeException backupFailure) {
-                backupFailure.addSuppressed(eastMoneyFailure);
-                throw new IllegalStateException("A股全市场行情主备数据源均不可用：" + rootMessage(backupFailure), backupFailure);
-            }
         }
+        try {
+            AshareQuoteSnapshot backup = fetchTencentAshareQuoteSnapshot(limit);
+            if (primary != null && primary.expectedCount() > 0 && backup.expectedCount() > 0
+                    && primary.expectedCount() != backup.expectedCount()) {
+                backup = new AshareQuoteSnapshot(backup.quotes(), backup.requestedCount(), backup.expectedCount(),
+                        backup.fetchedCount(), backup.missingCount(), false,
+                        backup.source() + "（东财" + primary.expectedCount() + "/新浪hs_a"
+                                + backup.expectedCount() + "；范围差异未核实）", backup.fetchedAt());
+            }
+            if (fulfillsQuoteRequest(backup)) return backup;
+            if (primary == null) {
+                return quoteSnapshotWithSource(backup, backup.source() + "（主源获取失败；备用覆盖"
+                        + backup.fetchedCount() + "/" + backup.expectedCount() + "，保留备用不完整快照）");
+            }
+            AshareQuoteSnapshot selected = betterCoveredQuoteSnapshot(primary, backup);
+            return quoteSnapshotWithSource(selected, selected.source() + "（主源覆盖"
+                    + primary.fetchedCount() + "/" + primary.expectedCount() + "；备用覆盖"
+                    + backup.fetchedCount() + "/" + backup.expectedCount() + "；保留"
+                    + (selected == primary ? "主源" : "备用") + "不完整快照）");
+        } catch (RuntimeException backupFailure) {
+            if (primary != null) {
+                return quoteSnapshotWithSource(primary, primary.source() + "（主源不完整，覆盖"
+                        + primary.fetchedCount() + "/" + primary.expectedCount()
+                        + "；备用获取失败：" + rootMessage(backupFailure) + "）");
+            }
+            if (primaryFailure != null) backupFailure.addSuppressed(primaryFailure);
+            throw new IllegalStateException("A股全市场行情主备数据源均不可用：" + rootMessage(backupFailure), backupFailure);
+        }
+    }
+
+    private boolean fulfillsQuoteRequest(AshareQuoteSnapshot snapshot) {
+        return snapshot.expectedCount() > 0 && snapshot.fetchedCount() == snapshot.quotes().size()
+                && snapshot.fetchedCount() >= Math.min(snapshot.requestedCount(), snapshot.expectedCount());
+    }
+
+    private AshareQuoteSnapshot betterCoveredQuoteSnapshot(AshareQuoteSnapshot primary, AshareQuoteSnapshot backup) {
+        boolean primaryKnown = primary.expectedCount() > 0;
+        boolean backupKnown = backup.expectedCount() > 0;
+        if (primaryKnown != backupKnown) return primaryKnown ? primary : backup;
+        if (primaryKnown) {
+            long primaryCoverage = (long) primary.fetchedCount() * backup.expectedCount();
+            long backupCoverage = (long) backup.fetchedCount() * primary.expectedCount();
+            if (primaryCoverage != backupCoverage) return primaryCoverage > backupCoverage ? primary : backup;
+        }
+        return backup.fetchedCount() > primary.fetchedCount() ? backup : primary;
+    }
+
+    private AshareQuoteSnapshot quoteSnapshotWithSource(AshareQuoteSnapshot snapshot, String source) {
+        return new AshareQuoteSnapshot(snapshot.quotes(), snapshot.requestedCount(), snapshot.expectedCount(),
+                snapshot.fetchedCount(), snapshot.missingCount(), snapshot.complete(), source, snapshot.fetchedAt());
     }
 
     private AshareQuoteSnapshot fetchTencentAshareQuoteSnapshot(int limit) {
@@ -200,7 +250,8 @@ public class EastMoneyClient {
             return new AshareQuoteSnapshot(
                     rows, requestedCount, expectedCount, rows.size(), Math.max(0, expectedCount - rows.size()),
                     expectedCount > 0 && rows.size() == expectedCount,
-                    "新浪全市场证券列表 + 腾讯行情（东方财富不可用）",
+                    "新浪hs_a清单范围 + 腾讯行情（本清单" + rows.size() + "/"
+                            + (expectedCount > 0 ? expectedCount : "未知") + "；非东财全集核验，东方财富不可用）",
                     rows.stream().map(EastMoneyQuote::fetchedAt).filter(Objects::nonNull)
                             .max(Instant::compareTo).orElseGet(Instant::now)
             );
@@ -242,10 +293,11 @@ public class EastMoneyClient {
 
     private record SinaSymbolList(int expectedCount, List<String> symbols) {}
 
-    private AshareQuoteSnapshot fetchEastMoneyQuoteSnapshot(int limit) {
+    AshareQuoteSnapshot fetchEastMoneyQuoteSnapshot(int limit) {
         int requestedCount = Math.max(1, limit);
         int pageSize = Math.min(MAX_QUOTE_PAGE_SIZE, Math.max(50, requestedCount));
         Map<String, EastMoneyQuote> merged = new LinkedHashMap<>();
+        Set<String> conflictingSymbols = new HashSet<>();
         RuntimeException pageFailure = null;
         int reportedTotal = 0;
         boolean reportedTotalConsistent = true;
@@ -278,9 +330,15 @@ public class EastMoneyClient {
                 }
                 fetchTarget = Math.min(requestedCount, reportedTotal);
             }
-            page.quotes().stream()
-                    .filter(quote -> quote.symbol() != null && !quote.symbol().isBlank())
-                    .forEach(quote -> merged.putIfAbsent(quote.symbol(), quote));
+            for (EastMoneyQuote quote : page.quotes()) {
+                String symbol = quote.symbol();
+                if (symbol == null || symbol.isBlank() || conflictingSymbols.contains(symbol)) continue;
+                EastMoneyQuote previous = merged.putIfAbsent(symbol, quote);
+                if (previous != null && !sameExecutionQuote(previous, quote)) {
+                    merged.remove(symbol);
+                    conflictingSymbols.add(symbol);
+                }
+            }
             if (merged.size() >= fetchTarget) {
                 break;
             }
@@ -854,6 +912,9 @@ public class EastMoneyClient {
     }
 
     List<EastMoneyBrokenBoardPoolEntry> readBrokenBoardPoolEntries(JsonNode pool) {
+        if (pool == null || !pool.isArray()) {
+            throw new IllegalStateException("炸板池响应结构缺失，无法确认炸板家数");
+        }
         List<EastMoneyBrokenBoardPoolEntry> entries = new ArrayList<>();
         for (JsonNode item : poolItems(pool)) {
             String symbol = text(item, "c");
@@ -1033,6 +1094,70 @@ public class EastMoneyClient {
         }
     }
 
+    public List<EastMoneyFundFlowSnapshot> fetchFundFlowHistory(String symbol, LocalDate begin, LocalDate end) {
+        if (begin == null || end == null || begin.isAfter(end)) {
+            throw new IllegalArgumentException("主力资金流历史日期范围无效");
+        }
+        String secId = secId(symbol);
+        if (secId == null) {
+            return List.of();
+        }
+        String url = EASTMONEY_FUND_FLOW_DAY_URL
+                + "?secid=" + encodeQueryValue(secId)
+                + "&lmt=120"
+                + "&fields1=f1,f2,f3,f7"
+                + "&fields2=" + FUND_FLOW_DAY_FIELDS;
+        try {
+            JsonNode klines = objectMapper.readTree(fetchBodyWithCurl(url, null, "https://quote.eastmoney.com/"))
+                    .path("data")
+                    .path("klines");
+            return readFundFlowHistory(symbol, klines, begin, end, Instant.now(), url);
+        } catch (Exception exception) {
+            throw new IllegalStateException("东方财富日级主力资金流历史获取失败：" + symbol, exception);
+        }
+    }
+
+    List<EastMoneyFundFlowSnapshot> readFundFlowHistory(
+            String symbol,
+            JsonNode klines,
+            LocalDate begin,
+            LocalDate end,
+            Instant fetchedAt,
+            String sourceUrl
+    ) {
+        if (klines == null || !klines.isArray() || klines.isEmpty()) {
+            return List.of();
+        }
+        Map<LocalDate, EastMoneyFundFlowSnapshot> byDate = new HashMap<>();
+        for (JsonNode item : klines) {
+            Optional<EastMoneyFundFlowSnapshot> parsed = item.isTextual()
+                    ? readFundFlowDaySnapshot(symbol, item.asText(), fetchedAt, sourceUrl)
+                    : Optional.empty();
+            if (parsed.isEmpty() || parsed.get().tradeDate() == null) {
+                throw new IllegalStateException("东方财富日级主力资金流存在无效行或交易日期：" + symbol);
+            }
+            EastMoneyFundFlowSnapshot row = parsed.get();
+            if (row.tradeDate().isBefore(begin) || row.tradeDate().isAfter(end)) {
+                continue;
+            }
+            EastMoneyFundFlowSnapshot snapshot = new EastMoneyFundFlowSnapshot(
+                    row.symbol(), row.name(), row.mainNetInflow(), row.superLargeNetInflow(),
+                    row.largeNetInflow(), row.mediumNetInflow(), row.smallNetInflow(),
+                    row.mainNetInflowRatio(), row.superLargeNetInflowRatio(), row.largeNetInflowRatio(),
+                    row.mediumNetInflowRatio(), row.smallNetInflowRatio(),
+                    "东方财富主力净流入（日级）", sourceUrl, fetchedAt, row.tradeDate(), null
+            );
+            EastMoneyFundFlowSnapshot existing = byDate.putIfAbsent(snapshot.tradeDate(), snapshot);
+            if (existing != null && !existing.equals(snapshot)) {
+                throw new IllegalStateException("东方财富日级主力资金流存在同日冲突："
+                        + symbol + " " + snapshot.tradeDate());
+            }
+        }
+        return byDate.values().stream()
+                .sorted(java.util.Comparator.comparing(EastMoneyFundFlowSnapshot::tradeDate))
+                .toList();
+    }
+
     private Optional<EastMoneyFundFlowSnapshot> fetchLatestFundFlowDaySnapshot(String symbol, String secId, Instant fetchedAt) {
         String url = EASTMONEY_FUND_FLOW_DAY_URL
                 + "?secid=" + encodeQueryValue(secId)
@@ -1062,20 +1187,27 @@ public class EastMoneyClient {
             JsonNode first = objectMapper.readTree(fetchBodyWithCurl(url, null, "https://emweb.securities.eastmoney.com/"))
                     .path("jbzl")
                     .path(0);
-            String emIndustry = text(first, "EM2016");
-            if (emIndustry != null) {
-                String[] parts = emIndustry.split("-");
-                return normalize(parts.length >= 2 ? parts[1] : parts[parts.length - 1]);
-            }
-            String csrcIndustry = text(first, "INDUSTRYCSRC1");
-            if (csrcIndustry != null) {
-                String[] parts = csrcIndustry.split("-");
-                return normalize(parts[parts.length - 1]);
-            }
-            return null;
+            return readCompanySurveyIndustry(symbol, first);
         } catch (Exception exception) {
             throw new IllegalStateException("东方财富 F10 行业数据获取失败：" + symbol, exception);
         }
+    }
+
+    String readCompanySurveyIndustry(String symbol, JsonNode first) {
+        if (symbol == null || !symbol.equals(text(first, "SECURITY_CODE"))) {
+            throw new IllegalStateException("东方财富 F10 行业返回的证券代码不匹配：" + symbol);
+        }
+        String emIndustry = text(first, "EM2016");
+        if (emIndustry != null) {
+            String[] parts = emIndustry.split("-");
+            return normalize(parts.length >= 2 ? parts[1] : parts[parts.length - 1]);
+        }
+        String csrcIndustry = text(first, "INDUSTRYCSRC1");
+        if (csrcIndustry != null) {
+            String[] parts = csrcIndustry.split("-");
+            return normalize(parts[parts.length - 1]);
+        }
+        return null;
     }
 
     public String fetchStockBoardIndustry(String symbol) {
@@ -1089,9 +1221,56 @@ public class EastMoneyClient {
         try {
             JsonNode data = objectMapper.readTree(fetchBodyWithCurl(url, null, "https://quote.eastmoney.com/"))
                     .path("data");
-            return normalize(text(data, "f127"));
+            return readStockBoardIndustry(symbol, data);
         } catch (Exception exception) {
             throw new IllegalStateException("东方财富单票板块行业数据获取失败：" + symbol, exception);
+        }
+    }
+
+    String readStockBoardIndustry(String symbol, JsonNode data) {
+        if (symbol == null || !symbol.equals(text(data, "f57"))) {
+            throw new IllegalStateException("东方财富单票板块行业返回的证券代码不匹配：" + symbol);
+        }
+        return normalize(text(data, "f127"));
+    }
+
+    /** 返回供应商所属板块，包含供应商提供的不同板块种类。 */
+    public List<EastMoneyRelatedBoard> fetchStockRelatedBoards(String symbol) {
+        if (symbol == null || !symbol.matches("\\d{6}") || secId(symbol) == null) {
+            throw new IllegalArgumentException("股票代码无效");
+        }
+        String url = "https://push2.eastmoney.com/api/qt/slist/get?secid=" + secId(symbol)
+                + "&spt=3&pi=0&pz=1000&po=1&invt=2&fltt=2&fields=f12,f14";
+        try {
+            JsonNode root = fetchQuoteRoot(url);
+            JsonNode data = root.path("data");
+            JsonNode total = data.path("total");
+            JsonNode diff = data.path("diff");
+            if (root.path("rc").asInt(-1) != 0 || !data.isObject()
+                    || !total.isIntegralNumber() || !total.canConvertToInt() || total.asInt() < 0
+                    || !(diff.isArray() || diff.isObject())) {
+                throw new IllegalStateException("所属板块响应结构无效");
+            }
+            List<JsonNode> items = diffItems(diff);
+            if (items.size() != total.asInt()) {
+                throw new IllegalStateException("所属板块返回不完整：" + items.size() + "/" + total.asInt());
+            }
+            Map<String, EastMoneyRelatedBoard> boards = new LinkedHashMap<>();
+            for (JsonNode item : items) {
+                String code = text(item, "f12");
+                String name = text(item, "f14");
+                if (code == null || !BOARD_CODE_PATTERN.matcher(code).matches() || name == null) {
+                    throw new IllegalStateException("所属板块代码或名称无效");
+                }
+                EastMoneyRelatedBoard board = new EastMoneyRelatedBoard(code, name);
+                EastMoneyRelatedBoard previous = boards.putIfAbsent(code, board);
+                if (previous != null && !previous.equals(board)) {
+                    throw new IllegalStateException("所属板块重复代码的名称冲突：" + code);
+                }
+            }
+            return List.copyOf(boards.values());
+        } catch (Exception exception) {
+            throw new IllegalStateException("东方财富股票所属板块获取失败：" + symbol, exception);
         }
     }
 
@@ -1142,6 +1321,13 @@ public class EastMoneyClient {
         if (boardCode == null) {
             throw new IllegalStateException("未找到行业板块：" + industryName);
         }
+        return fetchBoardQuoteSnapshot(boardCode);
+    }
+
+    public AshareQuoteSnapshot fetchBoardQuoteSnapshot(String boardCode) {
+        if (boardCode == null || !BOARD_CODE_PATTERN.matcher(boardCode).matches()) {
+            throw new IllegalArgumentException("板块代码无效");
+        }
         Map<String, EastMoneyQuote> quotes = new LinkedHashMap<>();
         Set<String> conflicts = new HashSet<>();
         int expectedCount = 0;
@@ -1165,10 +1351,10 @@ public class EastMoneyClient {
         }
         List<EastMoneyQuote> rows = List.copyOf(quotes.values());
         boolean complete = consistent && expectedCount > 0 && rows.size() == expectedCount;
-        String source = "东方财富行业行情";
+        String source = "东方财富板块行情";
         if (complete && rows.stream().noneMatch(quote -> quote.latestPrice() != null
                 && quote.latestPrice().signum() > 0 && quote.changePercent() != null)) {
-            // 行业接口可能只返回成分代码；保留已确认的行业范围，用腾讯报价的真实时间补齐行情。
+            // 板块接口可能只返回成分代码；保留已确认的成分范围，用腾讯报价的真实时间补齐行情。
             Set<String> symbols = new java.util.LinkedHashSet<>(quotes.keySet());
             quotes.clear();
             conflicts.clear();
@@ -1182,7 +1368,7 @@ public class EastMoneyClient {
             }
             rows = List.copyOf(quotes.values());
             complete = rows.size() == expectedCount;
-            source = "东方财富行业成分 + 腾讯行情";
+            source = "东方财富板块成分 + 腾讯行情";
         }
         return new AshareQuoteSnapshot(rows, Integer.MAX_VALUE, expectedCount, rows.size(),
                 Math.max(0, expectedCount - rows.size()), complete,
@@ -1294,6 +1480,63 @@ public class EastMoneyClient {
             logger.warn("东方财富换手率补齐失败，保留原 K 线并让筹码模型自行降级：{}", symbol, exception);
             return safeRows;
         }
+    }
+
+    public List<EastMoneyKLine> enrichDailyKLineTradingMetrics(
+            String symbol,
+            LocalDate begin,
+            LocalDate end,
+            List<EastMoneyKLine> canonicalRows
+    ) {
+        List<EastMoneyKLine> safeRows = canonicalRows == null ? List.of() : canonicalRows;
+        boolean missingMetrics = safeRows.stream()
+                .anyMatch(row -> row != null && (row.amount() == null || row.turnoverRate() == null));
+        if (!missingMetrics) {
+            return safeRows;
+        }
+        try {
+            EastMoneyKLineFetch supplement = fetchEastMoneyDailyKLines(symbol, begin, end);
+            if (!supplement.complete() || supplement.rows().isEmpty()) {
+                return safeRows;
+            }
+            List<EastMoneyKLine> merged = mergeDailyTradingMetrics(safeRows, supplement.rows());
+            recordKlineHistory(merged, "原始前复权日线+东方财富成交额及换手率");
+            return merged;
+        } catch (RuntimeException exception) {
+            logger.warn("东方财富成交额及换手率补齐失败，保留原 K 线及缺失字段：{}", symbol, exception);
+            return safeRows;
+        }
+    }
+
+    static List<EastMoneyKLine> mergeDailyTradingMetrics(
+            List<EastMoneyKLine> canonicalRows,
+            List<EastMoneyKLine> metricRows
+    ) {
+        List<EastMoneyKLine> safeCanonical = canonicalRows == null ? List.of() : canonicalRows;
+        List<EastMoneyKLine> safeMetrics = metricRows == null ? List.of() : metricRows;
+        Map<String, Map<LocalDate, EastMoneyKLine>> bySymbolAndDate = new HashMap<>();
+        for (EastMoneyKLine row : safeMetrics) {
+            if (row == null || row.symbol() == null || row.tradeDate() == null) {
+                continue;
+            }
+            bySymbolAndDate.computeIfAbsent(row.symbol(), ignored -> new HashMap<>())
+                    .put(row.tradeDate(), row);
+        }
+        return safeCanonical.stream().map(row -> {
+            if (row == null || (row.amount() != null && row.turnoverRate() != null)) {
+                return row;
+            }
+            Map<LocalDate, EastMoneyKLine> byDate = bySymbolAndDate.get(row.symbol());
+            EastMoneyKLine supplement = byDate == null ? null : byDate.get(row.tradeDate());
+            if (supplement == null) {
+                return row;
+            }
+            return new EastMoneyKLine(
+                    row.symbol(), row.tradeDate(), row.open(), row.close(), row.high(), row.low(), row.volume(),
+                    row.amount() == null ? supplement.amount() : row.amount(),
+                    row.turnoverRate() == null ? supplement.turnoverRate() : row.turnoverRate()
+            );
+        }).toList();
     }
 
     static List<EastMoneyKLine> mergeTurnoverRates(
@@ -1490,6 +1733,8 @@ public class EastMoneyClient {
         int responseRows = 0;
         int parsedRows = 0;
         int duplicateRows = 0;
+        int excludedRows = 0;
+        LocalDate today = LocalDate.now(CHINA_MARKET_ZONE);
         LocalDate cursor = begin;
         while (!cursor.isAfter(end)) {
             requestedSlices++;
@@ -1497,12 +1742,14 @@ public class EastMoneyClient {
             if (sliceEnd.isAfter(end)) {
                 sliceEnd = end;
             }
+            // Tencent's fixed-end history omits the current daily bar, even after the close.
+            boolean currentLastSlice = sliceEnd.equals(end) && sliceEnd.equals(today);
             String url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
                     + "?param=" + code
                     + ",day,"
                     + cursor
                     + ","
-                    + sliceEnd
+                    + (currentLastSlice ? "" : sliceEnd)
                     + ",500,qfq";
             try {
                 JsonNode rows = objectMapper.readTree(fetchBodyWithCurl(url, null, "https://gu.qq.com/"))
@@ -1527,11 +1774,21 @@ public class EastMoneyClient {
                         if (sliceByDate.put(parsed.get().tradeDate(), parsed.get()) != null) {
                             duplicateRowsInSlice++;
                         }
-                        if (byDate.put(parsed.get().tradeDate(), parsed.get()) != null) {
-                            duplicateRows++;
-                        }
                     }
-                    List<EastMoneyKLine> sliceItems = sliceByDate.values().stream()
+                    List<EastMoneyKLine> sliceItems = new ArrayList<>();
+                    boolean excludedRowsValid = true;
+                    for (EastMoneyKLine item : sliceByDate.values()) {
+                        if (currentLastSlice && (item.tradeDate().isBefore(cursor) || item.tradeDate().isAfter(sliceEnd))) {
+                            excludedRows++;
+                            // Cropping must not conceal invalid OHLC; raw parse/duplicate counts also remain intact.
+                            excludedRowsValid &= KLineSeriesIntegrity.assess(List.of(item), 1, 1, 0, 1, 1,
+                                    item.tradeDate(), item.tradeDate()).complete();
+                            continue;
+                        }
+                        sliceItems.add(item);
+                        if (byDate.put(item.tradeDate(), item) != null) duplicateRows++;
+                    }
+                    sliceItems = sliceItems.stream()
                             .sorted(java.util.Comparator.comparing(EastMoneyKLine::tradeDate))
                             .toList();
                     KLineSeriesIntegrity.Result sliceIntegrity = KLineSeriesIntegrity.assess(
@@ -1543,7 +1800,7 @@ public class EastMoneyClient {
                             1,
                             cursor,
                             sliceEnd);
-                    if (sliceIntegrity.complete()) {
+                    if (excludedRowsValid && sliceIntegrity.complete()) {
                         successfulSlices++;
                     }
                 }
@@ -1560,7 +1817,8 @@ public class EastMoneyClient {
                 items, responseRows, parsedRows, duplicateRows,
                 requestedSlices, successfulSlices, begin, end);
         return new TencentKLineFetch(
-                items, requestedSlices, successfulSlices, integrity.complete(), integrity.detail());
+                items, requestedSlices, successfulSlices, integrity.complete(), integrity.detail()
+                        + (excludedRows == 0 ? "" : "；当前日末分片已排除 " + excludedRows + " 行区间外数据"));
     }
 
     private record TencentKLineFetch(
@@ -1579,7 +1837,7 @@ public class EastMoneyClient {
     ) {
     }
 
-    private JsonNode fetchQuoteRoot(String url) {
+    JsonNode fetchQuoteRoot(String url) {
         Exception lastException = null;
         for (int attempt = 1; attempt <= EASTMONEY_ATTEMPTS; attempt++) {
             try {
@@ -1642,7 +1900,7 @@ public class EastMoneyClient {
         throw new IllegalStateException("腾讯行情数据获取失败", lastException);
     }
 
-    private String fetchBodyWithCurl(String url, Exception restClientException, String referer) {
+    String fetchBodyWithCurl(String url, Exception restClientException, String referer) {
         return new String(fetchBytesWithCurl(url, restClientException, referer), StandardCharsets.UTF_8);
     }
 
@@ -2056,7 +2314,7 @@ public class EastMoneyClient {
                 decimal(fields[3]),
                 decimal(fields[32]),
                 decimal(fields[38]),
-                decimal(fields[36]),
+                tencentVolumeHands(symbol, decimal(fields[36])),
                 amount,
                 positiveOrNull(decimal(fields[39])),
                 positiveOrNull(decimal(fields[46])),
@@ -2129,7 +2387,7 @@ public class EastMoneyClient {
         String code = text(item, "f12");
         String name = text(item, "f14");
         BigDecimal mainNetInflow = decimal(item, "f62");
-        if (code == null || !code.startsWith("BK") || name == null || mainNetInflow == null) {
+        if (code == null || !BOARD_CODE_PATTERN.matcher(code).matches() || name == null) {
             return Optional.empty();
         }
         Instant marketTimestamp = epochSecond(item, "f124");
@@ -2359,12 +2617,18 @@ public class EastMoneyClient {
                     decimal(row.get(2).asText()),
                     decimal(row.get(3).asText()),
                     decimal(row.get(4).asText()),
-                    decimal(row.get(5).asText()),
+                    tencentVolumeHands(symbol, decimal(row.get(5).asText())),
                     null
             ));
         } catch (Exception exception) {
             return java.util.Optional.empty();
         }
+    }
+
+    private BigDecimal tencentVolumeHands(String symbol, BigDecimal volume) {
+        // Tencent 688 quotes and daily bars report shares; the local quote/daily-bar unit is hands (100 shares).
+        return volume != null && symbol != null && symbol.startsWith("688")
+                ? volume.movePointLeft(2) : volume;
     }
 
     private String marketName(int marketCode, String symbol) {

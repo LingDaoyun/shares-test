@@ -2,6 +2,10 @@ package com.aistock.research.shortterm;
 
 import com.aistock.research.integration.eastmoney.EastMoneyFundFlowSnapshot;
 import com.aistock.research.shortterm.chip.ChipActivationMode;
+import com.aistock.research.shortterm.chip.ChipCalculationMode;
+import com.aistock.research.shortterm.chip.ChipDataQuality;
+import com.aistock.research.shortterm.chip.ChipOverheadPressure;
+import com.aistock.research.shortterm.chip.ChipVerificationStatus;
 import com.aistock.research.shortterm.chip.ShortTermChipSnapshot;
 import org.junit.jupiter.api.Test;
 
@@ -144,7 +148,7 @@ class ShortTermSupplyDemandScorerTest {
     }
 
     @Test
-    void keepsChipOutOfProductionRankingEvenWhenLegacyConfigurationSaysActive() {
+    void reportsUnavailablePressureWhenActiveButLegacySnapshotHasNoPressure() {
         ShortTermChipSnapshot chip = mock(ShortTermChipSnapshot.class);
         when(chip.contributionScore()).thenReturn(new BigDecimal("18"));
 
@@ -159,7 +163,156 @@ class ShortTermSupplyDemandScorerTest {
 
         assertThat(score.rankingScore()).isEqualByComparingTo(score.v2RankingScore());
         assertThat(score.chipContributionScore()).isEqualByComparingTo("18.00");
-        assertThat(score.dataGaps()).noneMatch(item -> item.contains("筹码"));
+        assertThat(score.chipPressurePenalty()).isNull();
+        assertThat(score.dataGaps()).contains("近端筹码压力未评估：本地有效筹码分布不足");
+    }
+
+    @Test
+    void activeModeAppliesDistanceWeightedPenaltyToProductionRanking() {
+        ShortTermSupplyDemandScore close = pressureScore(ChipActivationMode.ACTIVE,
+                pressure("80"), TRADE_DATE, ChipDataQuality.VALID, ChipVerificationStatus.SINGLE_SOURCE, "10");
+        ShortTermSupplyDemandScore farther = pressureScore(ChipActivationMode.ACTIVE,
+                pressure("20"), TRADE_DATE, ChipDataQuality.VALID, ChipVerificationStatus.SINGLE_SOURCE, "10");
+
+        assertThat(close.chipPressurePenalty()).isEqualByComparingTo("8.00");
+        assertThat(farther.chipPressurePenalty()).isEqualByComparingTo("2.00");
+        assertThat(close.rankingScore()).isEqualByComparingTo(close.v2RankingScore().subtract(new BigDecimal("8")));
+        assertThat(farther.rankingScore()).isEqualByComparingTo(farther.v2RankingScore().subtract(new BigDecimal("2")));
+        assertThat(close.rankingScore()).isLessThan(farther.rankingScore());
+    }
+
+    @Test
+    void offAndShadowModesDoNotApplyTheEstimatedPenalty() {
+        ShortTermSupplyDemandScore off = pressureScore(ChipActivationMode.OFF,
+                pressure("80"), TRADE_DATE, ChipDataQuality.VALID, ChipVerificationStatus.VERIFIED, "10");
+        ShortTermSupplyDemandScore shadow = pressureScore(ChipActivationMode.SHADOW,
+                pressure("80"), TRADE_DATE, ChipDataQuality.VALID, ChipVerificationStatus.VERIFIED, "10");
+        ShortTermSupplyDemandScore disabled = pressureScore(ChipActivationMode.ACTIVE,
+                pressure("80"), TRADE_DATE, ChipDataQuality.VALID, ChipVerificationStatus.VERIFIED, "0");
+
+        assertThat(off.chipPressurePenalty()).isNull();
+        assertThat(shadow.chipPressurePenalty()).isEqualByComparingTo("0.00");
+        assertThat(shadow.chipPressureSummary()).contains("估算扣分 8.00");
+        assertThat(disabled.chipPressurePenalty()).isNull();
+        assertThat(off.rankingScore()).isEqualByComparingTo(off.v2RankingScore());
+        assertThat(shadow.rankingScore()).isEqualByComparingTo(shadow.v2RankingScore());
+        assertThat(disabled.rankingScore()).isEqualByComparingTo(disabled.v2RankingScore());
+    }
+
+    @Test
+    void distinguishesRealZeroPressureFromUnavailableEvaluation() {
+        ShortTermSupplyDemandScore zero = pressureScore(ChipActivationMode.ACTIVE,
+                pressure("0"), TRADE_DATE, ChipDataQuality.VALID, ChipVerificationStatus.VERIFIED, "10");
+        ShortTermSupplyDemandScore missing = pressureScore(ChipActivationMode.ACTIVE,
+                null, TRADE_DATE, ChipDataQuality.VALID, ChipVerificationStatus.VERIFIED, "10");
+
+        assertThat(zero.chipPressurePenalty()).isEqualByComparingTo("0.00");
+        assertThat(zero.chipPressureSummary()).contains("距离加权占比 0.00%");
+        assertThat(missing.chipPressurePenalty()).isNull();
+        assertThat(missing.chipPressureSummary()).contains("未评估", "不代表上方压力低");
+    }
+
+    @Test
+    void refusesPenaltyForWrongDateInsufficientDistributionOrConflictingVerification() {
+        ShortTermSupplyDemandScore wrongDate = pressureScore(ChipActivationMode.ACTIVE,
+                pressure("80"), TRADE_DATE.minusDays(1), ChipDataQuality.VALID, ChipVerificationStatus.VERIFIED, "10");
+        ShortTermSupplyDemandScore insufficient = pressureScore(ChipActivationMode.ACTIVE,
+                pressure("80"), TRADE_DATE, ChipDataQuality.INSUFFICIENT, ChipVerificationStatus.VERIFIED, "10");
+        ShortTermSupplyDemandScore conflict = pressureScore(ChipActivationMode.ACTIVE,
+                pressure("80"), TRADE_DATE, ChipDataQuality.VALID, ChipVerificationStatus.CONFLICT, "10");
+
+        assertThat(wrongDate.chipPressurePenalty()).isNull();
+        assertThat(wrongDate.chipPressureSummary()).contains("日期与行情日期不一致");
+        assertThat(insufficient.chipPressurePenalty()).isNull();
+        assertThat(insufficient.chipPressureSummary()).contains("本地有效筹码分布不足");
+        assertThat(conflict.chipPressurePenalty()).isNull();
+        assertThat(conflict.chipPressureSummary()).contains("模型校验未通过");
+        assertThat(wrongDate.rankingScore()).isEqualByComparingTo(wrongDate.v2RankingScore());
+        assertThat(insufficient.rankingScore()).isEqualByComparingTo(insufficient.v2RankingScore());
+        assertThat(conflict.rankingScore()).isEqualByComparingTo(conflict.v2RankingScore());
+    }
+
+    @Test
+    void appliesPenaltyAfterPositiveAdjustmentsReachTheRankingCeiling() {
+        ShortTermChipSnapshot chip = pressureChip(pressure("80"), TRADE_DATE,
+                ChipDataQuality.VALID, ChipVerificationStatus.VERIFIED);
+
+        ShortTermSupplyDemandScore active = scorer.score(null, TRADE_DATE,
+                technical("10", "100", "1"), new BigDecimal("99"),
+                chip, ChipActivationMode.ACTIVE, new BigDecimal("10"), new BigDecimal("11"));
+        ShortTermSupplyDemandScore shadow = scorer.score(null, TRADE_DATE,
+                technical("10", "100", "1"), new BigDecimal("99"),
+                chip, ChipActivationMode.SHADOW, new BigDecimal("10"), new BigDecimal("11"));
+
+        assertThat(active.chipPressurePenalty()).isEqualByComparingTo("8.00");
+        assertThat(active.rankingScore()).isEqualByComparingTo("92.00");
+        assertThat(shadow.rankingScore()).isEqualByComparingTo("100.00");
+    }
+
+    @Test
+    void clampsLowAdjustedRankingBeforeLimitingPressurePenalty() {
+        ShortTermChipSnapshot chip = pressureChip(pressure("80"), TRADE_DATE,
+                ChipDataQuality.VALID, ChipVerificationStatus.VERIFIED);
+
+        ShortTermSupplyDemandScore score = scorer.score(null, TRADE_DATE,
+                technical("10", "100", "1"), BigDecimal.ONE,
+                chip, ChipActivationMode.ACTIVE, new BigDecimal("10"), new BigDecimal("-11"));
+
+        assertThat(score.chipPressurePenalty()).isEqualByComparingTo("0.00");
+        assertThat(score.rankingScore()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void existingSevenArgumentOverloadKeepsZeroAdditionalAdjustment() {
+        ShortTermChipSnapshot chip = pressureChip(pressure("80"), TRADE_DATE,
+                ChipDataQuality.VALID, ChipVerificationStatus.VERIFIED);
+
+        ShortTermSupplyDemandScore oldCall = scorer.score(null, TRADE_DATE,
+                technical("10", "100", "1"), new BigDecimal("80"),
+                chip, ChipActivationMode.ACTIVE, new BigDecimal("10"));
+        ShortTermSupplyDemandScore newCall = scorer.score(null, TRADE_DATE,
+                technical("10", "100", "1"), new BigDecimal("80"),
+                chip, ChipActivationMode.ACTIVE, new BigDecimal("10"), BigDecimal.ZERO);
+
+        assertThat(oldCall.rankingScore()).isEqualByComparingTo("72.00");
+        assertThat(newCall.rankingScore()).isEqualByComparingTo(oldCall.rankingScore());
+        assertThat(newCall.chipPressurePenalty()).isEqualByComparingTo(oldCall.chipPressurePenalty());
+    }
+
+    private ShortTermSupplyDemandScore pressureScore(
+            ChipActivationMode mode,
+            ChipOverheadPressure pressure,
+            LocalDate chipDate,
+            ChipDataQuality quality,
+            ChipVerificationStatus verification,
+            String maxPenalty
+    ) {
+        ShortTermChipSnapshot chip = pressureChip(pressure, chipDate, quality, verification);
+        return scorer.score(flow("0", "1", "1", TRADE_DATE), TRADE_DATE,
+                technical("10", "100", "1"), new BigDecimal("80"),
+                chip, mode, new BigDecimal(maxPenalty));
+    }
+
+    private ShortTermChipSnapshot pressureChip(
+            ChipOverheadPressure pressure,
+            LocalDate chipDate,
+            ChipDataQuality quality,
+            ChipVerificationStatus verification
+    ) {
+        ShortTermChipSnapshot chip = mock(ShortTermChipSnapshot.class);
+        when(chip.dataQuality()).thenReturn(quality);
+        when(chip.shortTermPressure()).thenReturn(pressure);
+        when(chip.localTradeDate()).thenReturn(chipDate);
+        when(chip.verificationStatus()).thenReturn(verification);
+        when(chip.verificationCoefficient()).thenReturn(verification == ChipVerificationStatus.CONFLICT
+                ? BigDecimal.ZERO : BigDecimal.ONE);
+        when(chip.calculationMode()).thenReturn(ChipCalculationMode.COMPLETED_BAR);
+        return chip;
+    }
+
+    private ChipOverheadPressure pressure(String weighted) {
+        return new ChipOverheadPressure(new BigDecimal("10.00"),
+                new BigDecimal("50"), new BigDecimal("50"), new BigDecimal(weighted));
     }
 
     private EastMoneyFundFlowSnapshot flow(

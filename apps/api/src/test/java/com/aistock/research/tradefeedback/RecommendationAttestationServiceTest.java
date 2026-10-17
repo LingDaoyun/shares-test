@@ -10,6 +10,9 @@ import com.aistock.research.shortterm.ShortTermCrossSectionContext;
 import com.aistock.research.shortterm.ShortTermMarketRegime;
 import com.aistock.research.shortterm.ShortTermReport;
 import com.aistock.research.shortterm.ShortTermTechnicalReviewCoverage;
+import com.aistock.research.shortterm.ShortTermScanJobStatus;
+import com.aistock.research.shortterm.ShortTermUpperShadowScan;
+import com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus;
 import com.aistock.research.trading.TradingAdvice;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -18,6 +21,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
@@ -194,6 +198,27 @@ class RecommendationAttestationServiceTest {
         assertThat(attested.technicalReviewCoverage()).isEqualTo(technicalCoverage);
         assertThat(attested.crossSectionContext()).isEqualTo(crossSectionContext);
         assertThat(attested.marketRegime()).isEqualTo(marketRegime);
+    }
+
+    @Test
+    void preservesTheSameRunShapeAndGapsWhenAttestingAManualJob() {
+        RecommendationAttestationService service = registry(8, Duration.ofMinutes(30));
+        ShortTermReport report = new ShortTermReport("测试", 0, 0, 0, 0, "测试", null,
+                List.of(), null, null, List.of(), List.of(), null, null, List.of(), Map.of(),
+                null, List.of(), NOW, NOW, null, null, null);
+        ShortTermUpperShadowScan upper = new ShortTermUpperShadowScan(LocalDate.parse("2026-07-12"), NOW,
+                "PARTIAL", "测试行情", 10, 9, 0, 1, 0, 0, List.of(), List.of("日线缺口"), "形态规则");
+        ShortTermScanJobStatus job = new ShortTermScanJobStatus("manual-run", "SUCCEEDED",
+                LocalDate.parse("2026-07-12"), ShortTermSnapshotStatus.FINAL_READY, List.of(),
+                NOW.minusSeconds(20), NOW.minusSeconds(20), NOW, "已完成", report, upper, List.of("日线缺口"));
+
+        ShortTermScanJobStatus attested = service.attest(job);
+
+        assertThat(attested.report()).isNotSameAs(report);
+        assertThat(attested.upperShadow()).isSameAs(upper);
+        assertThat(attested.dataGaps()).containsExactly("日线缺口");
+        assertThat(attested.jobId()).isEqualTo("manual-run");
+        assertThat(attested.resultStatus()).isEqualTo(ShortTermSnapshotStatus.FINAL_READY);
     }
 
     @Test

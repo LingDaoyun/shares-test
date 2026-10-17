@@ -25,6 +25,54 @@ class ShortTermLimitUpBoardServiceTest {
             new ShortTermLimitUpBoardService(mock(EastMoneyClient.class));
 
     @Test
+    void brokenBoardFailureKeepsRatioUnknownAndCannotClaimWarmOrStrongSentiment() {
+        EastMoneyClient client = mock(EastMoneyClient.class);
+        List<EastMoneyLimitUpPoolEntry> earlySeals = IntStream.range(0, 60)
+                .mapToObj(index -> entry("600" + String.format("%03d", index), "股" + index,
+                        "半导体", 1, "09:30:00")).toList();
+        when(client.fetchLimitUpPool(TRADE_DATE)).thenReturn(earlySeals);
+        when(client.fetchBrokenBoardPool(TRADE_DATE)).thenThrow(new IllegalStateException("炸板池超时"));
+
+        ShortTermLimitUpBoardSnapshot snapshot = new ShortTermLimitUpBoardService(client).snapshot(TRADE_DATE);
+
+        assertThat(snapshot.available()).isTrue();
+        assertThat(snapshot.brokenBoardAvailable()).isFalse();
+        assertThat(snapshot.brokenStocks()).isEmpty();
+        assertThat(snapshot.sentiment().brokenCount()).isNull();
+        assertThat(snapshot.sentiment().sealBreakRatioPercent()).isNull();
+        assertThat(snapshot.sentiment().tone()).isEqualTo("情绪待确认");
+        assertThat(snapshot.sentiment().explanation()).contains("炸板率缺失").doesNotContain("炸板 0 家");
+    }
+
+    @Test
+    void aConfirmedEmptyBrokenPoolRetainsTheRealZeroAndStrongTone() {
+        List<EastMoneyLimitUpPoolEntry> earlySeals = IntStream.range(0, 60)
+                .mapToObj(index -> entry("600" + String.format("%03d", index), "股" + index,
+                        "半导体", 1, "09:30:00")).toList();
+
+        ShortTermLimitUpBoardSnapshot snapshot = service.buildSnapshot(TRADE_DATE, Instant.now(),
+                earlySeals, List.of(), List.of(), null, List.of());
+
+        assertThat(snapshot.sentiment().brokenCount()).isZero();
+        assertThat(snapshot.sentiment().sealBreakRatioPercent()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(snapshot.sentiment().tone()).isEqualTo("情绪强势");
+    }
+
+    @Test
+    void aMissingBrokenPoolReturnIsMarkedUnavailable() {
+        EastMoneyClient client = mock(EastMoneyClient.class);
+        when(client.fetchLimitUpPool(TRADE_DATE))
+                .thenReturn(List.of(entry("600001", "甲股", "半导体", 1, "09:30:00")));
+        when(client.fetchBrokenBoardPool(TRADE_DATE)).thenReturn(null);
+
+        ShortTermLimitUpBoardSnapshot snapshot = new ShortTermLimitUpBoardService(client).snapshot(TRADE_DATE);
+
+        assertThat(snapshot.brokenBoardAvailable()).isFalse();
+        assertThat(snapshot.sentiment().brokenCount()).isNull();
+        assertThat(snapshot.dataGaps()).anyMatch(gap -> gap.contains("炸板率缺失"));
+    }
+
+    @Test
     void limitDownPoolFailureKeepsTheCountUnknownInsteadOfZero() {
         EastMoneyClient client = mock(EastMoneyClient.class);
         when(client.fetchLimitUpPool(TRADE_DATE))

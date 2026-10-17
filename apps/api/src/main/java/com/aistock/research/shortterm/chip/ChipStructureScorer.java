@@ -92,6 +92,7 @@ public class ChipStructureScorer {
                 local.currentPricePosition(),
                 local.nearestOverheadZone(),
                 ShortTermChipSnapshot.MODEL_VERSION,
+                local.shortTermPressure(),
                 List.copyOf(new LinkedHashSet<>(gaps))
         );
     }

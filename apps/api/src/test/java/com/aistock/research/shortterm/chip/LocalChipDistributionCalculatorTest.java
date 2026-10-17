@@ -187,6 +187,67 @@ class LocalChipDistributionCalculatorTest {
         assertThat(result.priorHighZoneResidualRatioPercent()).isBetween(BigDecimal.ZERO, new BigDecimal("100"));
     }
 
+    @Test
+    void appliesStrictCurrentPriceAndInclusiveFiveAndTenPercentBoundaries() {
+        assertPressureForSingleBucket("10.00", "0.00", "0.00", "0.00");
+        assertPressureForSingleBucket("10.50", "100.00", "0.00", "50.00");
+        assertPressureForSingleBucket("11.00", "0.00", "100.00", "0.00");
+        assertPressureForSingleBucket("11.01", "0.00", "0.00", "0.00");
+    }
+
+    @Test
+    void givesCloserEqualSizedChipMassMoreWeightedPressure() {
+        ChipOverheadPressure close = singleBucketPressure("10.20");
+        ChipOverheadPressure farther = singleBucketPressure("10.80");
+
+        assertThat(close.nearChipRatioPercent()).isEqualByComparingTo("100.00");
+        assertThat(farther.fartherChipRatioPercent()).isEqualByComparingTo("100.00");
+        assertThat(close.weightedChipRatioPercent()).isEqualByComparingTo("80.00");
+        assertThat(farther.weightedChipRatioPercent()).isEqualByComparingTo("20.00");
+    }
+
+    @Test
+    void computesPressureFromRawBucketsRegardlessOfDisplayCompression() {
+        EastMoneyKLine bar = bar(0, "9.00", "10.00", "11.00", "9.00", "100", "100000", "100000000");
+        LocalChipDistribution compact = new LocalChipDistributionCalculator(
+                1, 151, 1, BigDecimal.ONE, 1, 3, new BigDecimal("0.20"), new BigDecimal("0.25"))
+                .calculate(List.of(bar), new BigDecimal("10.00"), ChipCalculationMode.COMPLETED_BAR);
+        LocalChipDistribution detailed = new LocalChipDistributionCalculator(
+                1, 151, 1, BigDecimal.ONE, 151, 3, new BigDecimal("0.20"), new BigDecimal("0.25"))
+                .calculate(List.of(bar), new BigDecimal("10.00"), ChipCalculationMode.COMPLETED_BAR);
+
+        assertThat(compact.distributionBuckets()).hasSize(1);
+        assertThat(detailed.distributionBuckets()).hasSizeGreaterThan(1);
+        assertThat(compact.shortTermPressure()).isEqualTo(detailed.shortTermPressure());
+        assertThat(compact.shortTermPressure().weightedChipRatioPercent()).isPositive();
+    }
+
+    @Test
+    void leavesPressureUnavailableOnTheExistingInsufficientPath() {
+        LocalChipDistribution badPrice = calculator(1, 1.0).calculate(
+                fixedPriceBars(0, 1, "10.20", "100"), BigDecimal.ZERO, ChipCalculationMode.COMPLETED_BAR);
+        LocalChipDistribution tooFewBars = calculator(2, 1.0).calculate(
+                fixedPriceBars(0, 1, "10.20", "100"), new BigDecimal("10.00"), ChipCalculationMode.COMPLETED_BAR);
+
+        assertThat(badPrice.quality()).isEqualTo(ChipDataQuality.INSUFFICIENT);
+        assertThat(tooFewBars.quality()).isEqualTo(ChipDataQuality.INSUFFICIENT);
+        assertThat(badPrice.shortTermPressure()).isNull();
+        assertThat(tooFewBars.shortTermPressure()).isNull();
+    }
+
+    private void assertPressureForSingleBucket(String price, String near, String farther, String weighted) {
+        ChipOverheadPressure pressure = singleBucketPressure(price);
+        assertThat(pressure.referencePrice()).isEqualTo(new BigDecimal("10.00"));
+        assertThat(pressure.nearChipRatioPercent()).isEqualByComparingTo(near);
+        assertThat(pressure.fartherChipRatioPercent()).isEqualByComparingTo(farther);
+        assertThat(pressure.weightedChipRatioPercent()).isEqualByComparingTo(weighted);
+    }
+
+    private ChipOverheadPressure singleBucketPressure(String price) {
+        return calculator(1, 1.0).calculate(fixedPriceBars(0, 1, price, "100"),
+                new BigDecimal("10.00"), ChipCalculationMode.COMPLETED_BAR).shortTermPressure();
+    }
+
     private LocalChipDistributionCalculator calculator(int minValidBars, double minCoverage) {
         return new LocalChipDistributionCalculator(120, 150, minValidBars, BigDecimal.valueOf(minCoverage));
     }

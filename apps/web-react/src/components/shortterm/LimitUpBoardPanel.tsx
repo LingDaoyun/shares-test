@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Flame, RefreshCw } from 'lucide-react'
 import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
 import { DetailOverlay } from '../ui/DetailOverlay'
@@ -35,26 +35,39 @@ export function LimitUpBoardPanel() {
   const [breadthError, setBreadthError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const [industrySelection, setIndustrySelection] = useState<LimitUpIndustrySelection | null>(null)
+  const mounted = useRef(false)
+  const refreshing = useRef(false)
+  const refreshTimer = useRef<ReturnType<typeof setTimeout>>()
 
   const refresh = useCallback(async () => {
+    if (refreshing.current) return
+    refreshing.current = true
+    clearTimeout(refreshTimer.current)
     setLoading(true)
     setError(null)
     setBreadthLoading(true)
     setBreadthError(null)
     await Promise.all([
       fetchShortTermLimitUpBoard()
-        .then(setSnapshot)
-        .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '涨停看板获取失败'))
-        .finally(() => setLoading(false)),
+        .then(value => { if (mounted.current) setSnapshot(value) })
+        .catch((reason: unknown) => { if (mounted.current) setError(reason instanceof Error ? reason.message : '涨停看板获取失败') })
+        .finally(() => { if (mounted.current) setLoading(false) }),
       fetchShortTermMarketBreadth()
-        .then(setBreadth)
-        .catch((reason: unknown) => setBreadthError(reason instanceof Error ? reason.message : '涨跌家数获取失败'))
-        .finally(() => setBreadthLoading(false))
+        .then(value => { if (mounted.current) setBreadth(value) })
+        .catch((reason: unknown) => { if (mounted.current) setBreadthError(reason instanceof Error ? reason.message : '涨跌家数获取失败') })
+        .finally(() => { if (mounted.current) setBreadthLoading(false) })
     ])
+    refreshing.current = false
+    if (mounted.current) refreshTimer.current = setTimeout(() => void refresh(), 60000)
   }, [])
 
   useEffect(() => {
+    mounted.current = true
     void refresh()
+    return () => {
+      mounted.current = false
+      clearTimeout(refreshTimer.current)
+    }
   }, [refresh])
 
   return (
@@ -132,12 +145,16 @@ export function LimitUpBoardEntry({ snapshot, loading, error, breadth, breadthLo
           涨停看板
         </span>
         <span className="inline-flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-ink-500">最新可用涨跌数据</span>
           {breadth ? (
             <>
               <span className="font-semibold text-rose-600">上涨 {breadth.advancing} 家</span>
               <span className="font-semibold text-emerald-600">下跌 {breadth.declining} 家</span>
               <span className="text-ink-500">平盘 {breadth.unchanged} 家</span>
-              <span className="text-ink-400">{formatDateTime(breadth.fetchedAt)}</span>
+              <span className="text-ink-400">{breadthSourceTime(breadth)}</span>
+              <span className="text-ink-400">{`获取时间 ${formatDateTime(breadth.fetchedAt)}`}</span>
+              {breadth.missingTimestampCount ? <span className="text-amber-700">{`${breadth.missingTimestampCount} 只缺少源时间`}</span> : null}
+              {breadthLoading ? <span className="text-ink-400">正在更新…</span> : null}
             </>
           ) : breadthLoading ? (
             <span className="text-ink-400">正在获取涨跌家数…</span>
@@ -202,7 +219,7 @@ export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthL
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold text-ink-900">涨跌家数</h4>
+        <h4 className="text-sm font-semibold text-ink-900">最新可用涨跌数据</h4>
         <Button
           variant="secondary"
           icon={<RefreshCw className="h-4 w-4" />}
@@ -225,8 +242,9 @@ export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthL
             />
           </dl>
           <p className="text-[11px] leading-relaxed text-ink-400">
-            {breadth.tradeDate} · 快照 {formatDateTime(breadth.fetchedAt)} · {breadth.source}。
-            全 A 股 {breadth.totalCount} 只，仅统计当日有效报价。
+            {breadth.tradeDate} · {breadthSourceTime(breadth)} · {`获取时间 ${formatDateTime(breadth.fetchedAt)}`} · {breadth.source}。
+            {breadth.missingTimestampCount ? ` ${breadth.missingTimestampCount} 只缺少源时间。` : ''}
+            本次行情清单 {breadth.totalCount} 只，仅统计当日有效报价。
             {breadth.excludedCount > 0 ? ` 排除无当日报价、价格或涨跌幅缺失的 ${breadth.excludedCount} 只。` : ''}
             {breadthLoading ? ' 正在更新…' : ''}
           </p>
@@ -282,6 +300,12 @@ export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthL
       ) : null}
     </div>
   )
+}
+
+function breadthSourceTime(breadth: ShortTermMarketBreadth) {
+  const { marketTimestampFrom: from, marketTimestampTo: to } = breadth
+  if (!from || !to) return '源时间 未知'
+  return `源时间 ${formatDateTime(from)}${from === to ? '' : ` 至 ${formatDateTime(to)}`}`
 }
 
 function SentimentSummary({

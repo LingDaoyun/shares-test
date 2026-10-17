@@ -2,6 +2,9 @@ package com.aistock.research.integration.gov;
 
 import com.aistock.research.configuration.PolicySourceConfig;
 import com.aistock.research.configuration.RuntimeConfigStore;
+import com.aistock.research.fiveday.FiveDayContextModels;
+import com.aistock.research.fiveday.FiveDayEventEvidenceService;
+import com.aistock.research.integration.cninfo.CninfoClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -10,6 +13,9 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
 import java.util.List;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -69,6 +75,57 @@ class GovPolicyClientTest {
 
         assertThat(result.items()).isEmpty();
         assertThat(result.failedSources()).isEmpty();
+        server.verify();
+    }
+
+    @Test
+    void jsonPublicationValuesKeepTheirOriginalTimePrecision() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("JSON政策源", "json", "https://policy.example/list.json", 80)));
+        server.expect(requestTo("https://policy.example/list.json")).andRespond(withSuccess("""
+                [
+                  {"title":"半导体未来政策", "url":"https://policy.example/future", "publishedAt":" 2026-09-08T03:00:00Z "},
+                  {"title":"半导体已发布政策", "url":"https://policy.example/recent", "publishedAt":"2026-09-08 09:00:00"},
+                  {"title":"半导体按日公开政策", "url":"https://policy.example/date", "publishedAt":"2026-09-07"}
+                ]
+                """, MediaType.APPLICATION_JSON));
+
+        GovPolicyFetchResult result = client.fetchLatestPoliciesWithStatus(40);
+
+        assertThat(result.items()).extracting(GovPolicyItem::publishedAt)
+                .containsExactly("2026-09-08T03:00:00Z", "2026-09-08 09:00:00", "2026-09-07");
+        server.verify();
+    }
+
+    @Test
+    void futureIntradayPolicyCannotPassThroughRealClientParsing() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("JSON政策源", "json", "https://policy.example/list.json", 80)));
+        server.expect(requestTo("https://policy.example/list.json")).andRespond(withSuccess("""
+                [{"title":"半导体未来政策", "url":"https://policy.example/future", "publishedAt":"2026-09-08T03:00:00Z"}]
+                """, MediaType.APPLICATION_JSON));
+        Instant asOf = Instant.parse("2026-09-08T02:00:00Z");
+        FiveDayEventEvidenceService service = new FiveDayEventEvidenceService(client,
+                mock(CninfoClient.class), Clock.fixed(asOf.plusSeconds(2), ZoneOffset.UTC));
+
+        FiveDayContextModels.PolicyBundle result = service.fetchPolicies(asOf);
+
+        assertThat(result.evidence()).isEmpty();
+        assertThat(result.status()).isEqualTo("PARTIAL");
+        assertThat(result.notes()).anyMatch(note -> note.contains("未来日期"));
+        server.verify();
+    }
+
+    @Test
+    void htmlPublicationDateRetainsItsAvailableDayPrecision() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("HTML政策源", "html", "https://policy.example/list", 80)));
+        server.expect(requestTo("https://policy.example/list")).andRespond(withSuccess("""
+                <li><a href='/recent'>半导体产业发展实施意见</a><span>2026年9月7日</span></li>
+                """, new MediaType("text", "html", UTF_8)));
+
+        assertThat(client.fetchLatestPoliciesWithStatus(40).items()).singleElement()
+                .satisfies(row -> assertThat(row.publishedAt()).isEqualTo("2026-09-07"));
         server.verify();
     }
 }
