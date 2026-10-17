@@ -66,7 +66,11 @@ describe('daily policy research board', () => {
     expect(button).toBeDefined(); expect(button!.disabled).toBe(false)
     await act(async () => { button!.focus(); button!.click() })
   }
-  async function detail() { await click(`查看${theme.name}趋势详情`) }
+  async function detail() {
+    const title = [...host.querySelectorAll<HTMLElement>('article h3')].find(item => item.textContent === theme.name)
+    expect(title).toBeDefined()
+    await act(async () => { title!.click() })
+  }
 
   it('reads saved intelligence and reviews without launching paid analysis', async () => {
     await render()
@@ -80,7 +84,9 @@ describe('daily policy research board', () => {
   })
 
   it('opens source articles and validated company assessments in separate detail tabs', async () => {
-    await render(); await detail(); await click('政策与新闻')
+    await render(); await detail(); await click('关闭详情')
+    expect(document.activeElement).toBe(host.querySelector('[data-policy-detail]'))
+    await click(`查看${theme.name}趋势详情`); await click('政策与新闻')
     expect(document.querySelector<HTMLAnchorElement>('[role="dialog"] a')?.href).toBe('https://www.gov.cn/policy-test')
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('仅标题线索')
     expect(document.querySelector('[role="dialog"] blockquote')).toBeNull()
@@ -190,7 +196,9 @@ describe('daily policy research board', () => {
   })
 
   it('keeps the watchlist in this browser and filters by it', async () => {
-    await render(); await click(`关注${theme.name}`); await click('我的关注')
+    await render(); await click(`关注${theme.name}`)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    await click('我的关注')
     expect(host.textContent).toContain(theme.name)
     expect(JSON.parse(localStorage.getItem('ai-stock.policy-tracked.v1')!)).toEqual([theme.themeCode])
     await click(`取消关注${theme.name}`)
