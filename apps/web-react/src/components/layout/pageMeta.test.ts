@@ -8,10 +8,10 @@ describe('page navigation meta', () => {
     expect(labels).toEqual([
       '涨停看板',
       '短线右侧',
+      '政策解读',
       '五日观察',
       '长期价投',
       '外围市场',
-      '政策解读',
       '特别关注',
       '交易复盘',
       '规则目录',

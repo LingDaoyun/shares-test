@@ -62,10 +62,10 @@ export const pageMeta: Record<PageKey, PageMeta> = {
 export const navItems: { key: PageKey; label: string }[] = [
   { key: 'limitUp', label: '涨停看板' },
   { key: 'shortTerm', label: '短线右侧' },
+  { key: 'policy', label: '政策解读' },
   { key: 'potentialLeader', label: '五日观察' },
   { key: 'market', label: '长期价投' },
   { key: 'overseas', label: '外围市场' },
-  { key: 'policy', label: '政策解读' },
   { key: 'watchlist', label: '特别关注' },
   { key: 'tradeReview', label: '交易复盘' },
   { key: 'rules', label: '规则目录' },
