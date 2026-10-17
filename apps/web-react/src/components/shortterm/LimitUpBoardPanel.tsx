@@ -421,9 +421,20 @@ function LimitUpTable({ snapshot }: { snapshot: ShortTermLimitUpBoardSnapshot })
   if (!snapshot.stocks.length) {
     return <p className="text-xs leading-relaxed text-ink-500">涨停明细暂无数据。</p>
   }
+  // The API already sorts stocks by board depth and first seal time; keep that order within each industry.
+  const byIndustry = new Map<string, ShortTermLimitUpBoardSnapshot['stocks']>()
+  for (const stock of snapshot.stocks) {
+    const industry = stock.industry?.trim() || '未分类'
+    const group = byIndustry.get(industry)
+    if (group) group.push(stock)
+    else byIndustry.set(industry, [stock])
+  }
+  const industryGroups = [...byIndustry.entries()].sort((a, b) => b[1].length - a[1].length)
+
   return (
     <div className="flex flex-col gap-2">
-      <h4 className="text-sm font-semibold text-ink-900">涨停明细（按连板高度 → 首次封板时间排序）</h4>
+      <h4 className="text-sm font-semibold text-ink-900">涨停明细（按行业涨停家数排序）</h4>
+      <p className="text-[11px] text-ink-500">行业按涨停家数从多到少排列；行业内按连板高度 → 首次封板时间排序。</p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] border-collapse text-left text-xs">
           <thead>
@@ -439,14 +450,21 @@ function LimitUpTable({ snapshot }: { snapshot: ShortTermLimitUpBoardSnapshot })
               <th className="px-2 py-1.5 font-medium">换手率</th>
             </tr>
           </thead>
-          <tbody>
-            {snapshot.stocks.map((stock) => (
+          {industryGroups.map(([industry, stocks]) => (
+          <tbody key={industry}>
+            <tr className="border-y border-line-soft bg-amber-50/60">
+              <th scope="rowgroup" colSpan={9} className="px-2 py-2 text-left">
+                <span className="font-semibold text-ink-900">{industry}</span>
+                <span className="ml-2 text-[11px] font-medium text-amber-700">涨停 {stocks.length} 家</span>
+              </th>
+            </tr>
+            {stocks.map((stock) => (
               <tr key={stock.symbol} className="border-b border-line-soft last:border-b-0">
                 <td className="px-2 py-1.5">
                   <span className="font-semibold text-ink-900">{stock.name}</span>
                   <span className="ml-1.5 text-[11px] text-ink-400">{stock.symbol}</span>
                 </td>
-                <td className="px-2 py-1.5 text-ink-600">{stock.industry ?? '未分类'}</td>
+                <td className="px-2 py-1.5 text-ink-600">{industry}</td>
                 <td className="px-2 py-1.5">
                   <Tag tone={stock.consecutiveBoards >= 3 ? 'danger' : stock.consecutiveBoards >= 2 ? 'warning' : 'neutral'}>
                     {stock.statDays > 0 ? `${stock.statDays}天${stock.statBoards > 0 ? stock.statBoards : stock.consecutiveBoards}板` : `${stock.consecutiveBoards} 板`}
@@ -461,6 +479,7 @@ function LimitUpTable({ snapshot }: { snapshot: ShortTermLimitUpBoardSnapshot })
               </tr>
             ))}
           </tbody>
+          ))}
         </table>
       </div>
     </div>

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermMarketBreadth } from '../../types'
@@ -201,6 +202,40 @@ describe('LimitUpBoardEntry', () => {
 })
 
 describe('LimitUpBoardDetail', () => {
+  it('groups all limit-up rows by industry count while preserving the server board-depth and seal-time order', () => {
+    const stocks = [
+      { ...snapshot.stocks[0], symbol: '600001', name: '饰品高标', industry: '饰品', consecutiveBoards: 6 },
+      { ...snapshot.stocks[0], symbol: '600002', name: '芯片高标', industry: ' 半导体 ', consecutiveBoards: 4, firstSealTime: '10:00:00' },
+      { ...snapshot.stocks[0], symbol: '600003', name: '未知高标', industry: null, consecutiveBoards: 3 },
+      { ...snapshot.stocks[0], symbol: '600004', name: '芯片早封', industry: '半导体', consecutiveBoards: 2, firstSealTime: '09:25:00' },
+      { ...snapshot.stocks[0], symbol: '600005', name: '芯片晚封', industry: '半导体', consecutiveBoards: 2, firstSealTime: '10:10:00' },
+      { ...snapshot.stocks[0], symbol: '600006', name: '未知首板', industry: '  ', consecutiveBoards: 1 },
+      { ...snapshot.stocks[0], symbol: '600007', name: '芯片缺时', industry: '半导体', consecutiveBoards: 1, firstSealTime: null },
+    ]
+    stocks.forEach(Object.freeze)
+    Object.freeze(stocks)
+    const container = document.createElement('div')
+    container.innerHTML = renderToStaticMarkup(
+      <LimitUpBoardDetail snapshot={{ ...snapshot, stocks, industryStats: [] }} loading={false} error={null} onRefresh={() => undefined} />
+    )
+
+    const groups = Array.from(container.querySelectorAll('table tbody'))
+    expect(groups).toHaveLength(3)
+    const expectedGroups = [
+      { industry: '半导体', count: 4, rows: ['芯片高标600002', '芯片早封600004', '芯片晚封600005', '芯片缺时600007'] },
+      { industry: '未分类', count: 2, rows: ['未知高标600003', '未知首板600006'] },
+      { industry: '饰品', count: 1, rows: ['饰品高标600001'] },
+    ]
+    groups.forEach((group, index) => {
+      const expected = expectedGroups[index]
+      const heading = group.querySelector('th[scope="rowgroup"]')
+      expect(heading?.textContent).toContain(expected.industry)
+      expect(heading?.textContent).toContain(`涨停 ${expected.count} 家`)
+      const rows = Array.from(group.querySelectorAll('tr')).filter(row => row.querySelector('td'))
+      expect(rows.map(row => row.querySelector('td')?.textContent)).toEqual(expected.rows)
+    })
+  })
+
   it('shows limit-down counts beside breadth and keeps missing counts distinct from zero', () => {
     const available = renderToStaticMarkup(
       <LimitUpBoardDetail snapshot={snapshot} breadth={breadth} loading={false} error={null} onRefresh={() => undefined} />
