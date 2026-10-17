@@ -30,12 +30,14 @@ export function AppShell() {
 
   return (
     <div className="min-h-full">
-      <div className="mx-auto flex max-w-[1480px] flex-col gap-5 px-5 py-6">
-        <Header ref={headerRef} />
+      <div className="mx-auto flex max-w-[1680px] items-start gap-2 px-2 py-4 sm:gap-5 sm:px-5">
         <NavRail />
-        <main tabIndex={-1} className="animate-fade-in outline-none">
-          <Outlet />
-        </main>
+        <div className="flex min-w-0 flex-1 flex-col gap-5">
+          <Header ref={headerRef} />
+          <main tabIndex={-1} className="min-w-0 animate-fade-in outline-none">
+            <Outlet />
+          </main>
+        </div>
       </div>
     </div>
   )

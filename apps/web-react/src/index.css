@@ -40,9 +40,9 @@
     @apply text-base font-semibold text-ink-900;
   }
 
-  /* 胶囊导航 */
+  /* 左侧模块导航 */
   .nav-pill {
-    @apply flex flex-col items-start gap-0.5 rounded-xl border border-line bg-white px-4 py-2.5 text-left transition hover:border-brand-300 hover:bg-brand-50;
+    @apply flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-transparent px-2 py-2.5 text-left outline-none transition hover:border-brand-300 hover:bg-brand-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 lg:justify-start;
   }
   .nav-pill-active {
     @apply border-brand-500 bg-brand-50;
