@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Flame, RefreshCw } from 'lucide-react'
+import { ChevronRight, Flame, RefreshCw } from 'lucide-react'
 import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
 import { DetailOverlay } from '../ui/DetailOverlay'
 import { Button } from '../ui/Button'
@@ -107,7 +107,7 @@ export function LimitUpBoardPanel() {
           onRefresh={() => void refresh()}
           onSelectIndustry={(industry) => {
             if (!snapshot) return
-            setIndustrySelection({ industry, tradeDate: snapshot.tradeDate,
+            setIndustrySelection({ industry, tradeDate: snapshot.tradeDate, fetchedAt: snapshot.fetchedAt,
               limitUpStocks: snapshot.stocks.filter(stock => (stock.industry?.trim() || '未分类') === industry) })
           }}
         />
@@ -284,8 +284,7 @@ export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthL
             turnover={snapshot.marketTurnover}
             stockCount={snapshot.stocks.length}
           />
-          <IndustryBoard snapshot={snapshot} onSelectIndustry={onSelectIndustry} />
-          <LimitUpTable snapshot={snapshot} />
+          <LimitUpIndustryCards snapshot={snapshot} onSelectIndustry={onSelectIndustry} />
           <p className="text-[11px] leading-relaxed text-ink-400">
             {snapshot.sentiment.explanation}
             {snapshot.marketTurnover ? ` ${snapshot.marketTurnover.explanation}` : ''}
@@ -380,44 +379,10 @@ function SealBucket({ label, count, total }: { label: string; count: number; tot
   )
 }
 
-function IndustryBoard({ snapshot, onSelectIndustry }: { snapshot: ShortTermLimitUpBoardSnapshot; onSelectIndustry?: (industry: string) => void }) {
-  if (!snapshot.industryStats.length) {
-    return <p className="text-xs leading-relaxed text-ink-500">行业聚合暂无数据。</p>
-  }
-  const max = Math.max(...snapshot.industryStats.map((stat) => stat.limitUpCount))
-  return (
-    <div className="flex flex-col gap-2">
-      <h4 className="text-sm font-semibold text-ink-900">行业聚合（当日主线）</h4>
-      <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
-        {snapshot.industryStats.slice(0, 8).map((stat) => (
-          <div key={stat.industry} className="rounded-xl border border-line-soft bg-white/80 px-3 py-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm font-semibold text-ink-900">{stat.industry}</span>
-              <button type="button" aria-label={`查看${stat.industry}涨停及上涨股票`}
-                className="rounded-md outline-none transition hover:bg-amber-50 focus-visible:ring-2 focus-visible:ring-brand-300"
-                onClick={() => onSelectIndustry?.(stat.industry)}>
-                <Tag tone={stat.maxConsecutiveBoards >= 3 ? 'danger' : 'warning'}>
-                  {stat.limitUpCount} 家 · 最高 {stat.maxConsecutiveBoards} 板
-                </Tag>
-              </button>
-            </div>
-            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-line">
-              <div
-                className="h-full rounded-full bg-amber-400"
-                style={{ width: `${max > 0 ? (stat.limitUpCount / max) * 100 : 0}%` }}
-              />
-            </div>
-            {stat.leaders.length ? (
-              <p className="mt-1 truncate text-xs text-ink-400">领涨：{stat.leaders.join('、')}</p>
-            ) : null}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function LimitUpTable({ snapshot }: { snapshot: ShortTermLimitUpBoardSnapshot }) {
+function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
+  snapshot: ShortTermLimitUpBoardSnapshot
+  onSelectIndustry?: (industry: string) => void
+}) {
   if (!snapshot.stocks.length) {
     return <p className="text-xs leading-relaxed text-ink-500">涨停明细暂无数据。</p>
   }
@@ -432,57 +397,52 @@ function LimitUpTable({ snapshot }: { snapshot: ShortTermLimitUpBoardSnapshot })
   const industryGroups = [...byIndustry.entries()].sort((a, b) => b[1].length - a[1].length)
 
   return (
-    <div className="flex flex-col gap-2">
-      <h4 className="text-sm font-semibold text-ink-900">涨停明细（按行业涨停家数排序）</h4>
-      <p className="text-[11px] text-ink-500">行业按涨停家数从多到少排列；行业内按连板高度 → 首次封板时间排序。</p>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] border-collapse text-left text-xs">
-          <thead>
-            <tr className="border-b border-line-soft text-[11px] text-ink-400">
-              <th className="px-2 py-1.5 font-medium">名称/代码</th>
-              <th className="px-2 py-1.5 font-medium">行业</th>
-              <th className="px-2 py-1.5 font-medium">连板</th>
-              <th className="px-2 py-1.5 font-medium">首封</th>
-              <th className="px-2 py-1.5 font-medium">末封</th>
-              <th className="px-2 py-1.5 font-medium">炸板</th>
-              <th className="px-2 py-1.5 font-medium">封板资金</th>
-              <th className="px-2 py-1.5 font-medium">成交额</th>
-              <th className="px-2 py-1.5 font-medium">换手率</th>
-            </tr>
-          </thead>
-          {industryGroups.map(([industry, stocks]) => (
-          <tbody key={industry}>
-            <tr className="border-y border-line-soft bg-amber-50/60">
-              <th scope="rowgroup" colSpan={9} className="px-2 py-2 text-left">
-                <span className="font-semibold text-ink-900">{industry}</span>
-                <span className="ml-2 text-[11px] font-medium text-amber-700">涨停 {stocks.length} 家</span>
-              </th>
-            </tr>
-            {stocks.map((stock) => (
-              <tr key={stock.symbol} className="border-b border-line-soft last:border-b-0">
-                <td className="px-2 py-1.5">
-                  <span className="font-semibold text-ink-900">{stock.name}</span>
-                  <span className="ml-1.5 text-[11px] text-ink-400">{stock.symbol}</span>
-                </td>
-                <td className="px-2 py-1.5 text-ink-600">{industry}</td>
-                <td className="px-2 py-1.5">
-                  <Tag tone={stock.consecutiveBoards >= 3 ? 'danger' : stock.consecutiveBoards >= 2 ? 'warning' : 'neutral'}>
-                    {stock.statDays > 0 ? `${stock.statDays}天${stock.statBoards > 0 ? stock.statBoards : stock.consecutiveBoards}板` : `${stock.consecutiveBoards} 板`}
-                  </Tag>
-                </td>
-                <td className="px-2 py-1.5 tabular text-ink-600">{shortTime(stock.firstSealTime)}</td>
-                <td className="px-2 py-1.5 tabular text-ink-600">{shortTime(stock.lastSealTime)}</td>
-                <td className="px-2 py-1.5 tabular text-ink-600">{stock.sealBreakCount > 0 ? `${stock.sealBreakCount} 次` : '—'}</td>
-                <td className="px-2 py-1.5 tabular text-ink-600">{formatAmount(stock.sealFunds)}</td>
-                <td className="px-2 py-1.5 tabular text-ink-600">{formatAmount(stock.amount)}</td>
-                <td className="px-2 py-1.5 tabular text-ink-600">{formatPercent(stock.turnoverRate)}</td>
-              </tr>
-            ))}
-          </tbody>
-          ))}
-        </table>
+    <section aria-label="涨停行业卡片" className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h4 className="text-sm font-semibold text-ink-900">涨停明细 · 行业概览</h4>
+        <span className="text-xs text-ink-400">{industryGroups.length} 个行业 · {snapshot.stocks.length} 只涨停</span>
       </div>
-    </div>
+      <p className="text-[11px] text-ink-500">按行业涨停家数排序，每卡预览前 3 只；点击卡片查看完整明细。</p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {industryGroups.map(([industry, stocks]) => {
+          const maxBoards = Math.max(...stocks.map(stock => stock.consecutiveBoards))
+          return (
+            <button key={industry} type="button" aria-label={`查看${industry}涨停及上涨股票`}
+              onClick={() => onSelectIndustry?.(industry)}
+              className="group flex min-w-0 flex-col rounded-xl border border-line-soft bg-white p-3 text-left outline-none transition hover:border-brand-300 hover:bg-brand-50/30 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-brand-300">
+              <span className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-sm font-semibold text-ink-900" title={industry}>{industry}</span>
+                <Tag tone="warning" className="shrink-0">涨停 {stocks.length} 家</Tag>
+              </span>
+              <span className="mt-2 flex items-center justify-between gap-2 text-[11px]">
+                <span className={maxBoards >= 3 ? 'font-medium text-rose-600' : 'text-ink-500'}>最高 {maxBoards} 板</span>
+                <span className="text-ink-400">连板 / 首封</span>
+              </span>
+              <span className="my-2 flex flex-col divide-y divide-line-soft border-t border-line-soft">
+                {stocks.slice(0, 3).map(stock => (
+                  <span key={stock.symbol} className="flex items-center justify-between gap-2 py-2">
+                    <span className="min-w-0">
+                      <span className="block truncate text-xs font-medium text-ink-900" title={stock.name}>{stock.name}</span>
+                      <span className="block text-[10px] text-ink-400">{stock.symbol}</span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <Tag tone={stock.consecutiveBoards >= 3 ? 'danger' : stock.consecutiveBoards >= 2 ? 'warning' : 'neutral'}>
+                        {stock.statDays > 0 ? `${stock.statDays}天${stock.statBoards > 0 ? stock.statBoards : stock.consecutiveBoards}板` : `${stock.consecutiveBoards} 板`}
+                      </Tag>
+                      <span className="tabular text-[11px] text-ink-500">{shortTime(stock.firstSealTime)}</span>
+                    </span>
+                  </span>
+                ))}
+              </span>
+              <span className="mt-auto flex items-center justify-between gap-2 border-t border-line-soft pt-2 text-[11px]">
+                <span className="text-ink-400">{stocks.length > 3 ? `还有 ${stocks.length - 3} 只` : '已展示全部预览'}</span>
+                <span className="inline-flex items-center gap-1 font-medium text-brand-600">查看明细<ChevronRight className="h-3.5 w-3.5" /></span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 

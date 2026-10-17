@@ -202,7 +202,7 @@ describe('LimitUpBoardEntry', () => {
 })
 
 describe('LimitUpBoardDetail', () => {
-  it('groups all limit-up rows by industry count while preserving the server board-depth and seal-time order', () => {
+  it('shows industry cards by count with only three stock previews in server order', () => {
     const stocks = [
       { ...snapshot.stocks[0], symbol: '600001', name: '饰品高标', industry: '饰品', consecutiveBoards: 6 },
       { ...snapshot.stocks[0], symbol: '600002', name: '芯片高标', industry: ' 半导体 ', consecutiveBoards: 4, firstSealTime: '10:00:00' },
@@ -219,21 +219,39 @@ describe('LimitUpBoardDetail', () => {
       <LimitUpBoardDetail snapshot={{ ...snapshot, stocks, industryStats: [] }} loading={false} error={null} onRefresh={() => undefined} />
     )
 
-    const groups = Array.from(container.querySelectorAll('table tbody'))
+    expect(container.querySelector('table')).toBeNull()
+    const groups = Array.from(container.querySelectorAll('section[aria-label="涨停行业卡片"] button'))
     expect(groups).toHaveLength(3)
     const expectedGroups = [
-      { industry: '半导体', count: 4, rows: ['芯片高标600002', '芯片早封600004', '芯片晚封600005', '芯片缺时600007'] },
-      { industry: '未分类', count: 2, rows: ['未知高标600003', '未知首板600006'] },
-      { industry: '饰品', count: 1, rows: ['饰品高标600001'] },
+      { industry: '半导体', count: 4, rows: ['芯片高标', '芯片早封', '芯片晚封'] },
+      { industry: '未分类', count: 2, rows: ['未知高标', '未知首板'] },
+      { industry: '饰品', count: 1, rows: ['饰品高标'] },
     ]
     groups.forEach((group, index) => {
       const expected = expectedGroups[index]
-      const heading = group.querySelector('th[scope="rowgroup"]')
-      expect(heading?.textContent).toContain(expected.industry)
-      expect(heading?.textContent).toContain(`涨停 ${expected.count} 家`)
-      const rows = Array.from(group.querySelectorAll('tr')).filter(row => row.querySelector('td'))
-      expect(rows.map(row => row.querySelector('td')?.textContent)).toEqual(expected.rows)
+      expect(group.getAttribute('aria-label')).toBe(`查看${expected.industry}涨停及上涨股票`)
+      expect(group.textContent).toContain(`涨停 ${expected.count} 家`)
+      const positions = expected.rows.map(name => group.textContent!.indexOf(name))
+      expect(positions.every(position => position >= 0)).toBe(true)
+      expect(positions).toEqual([...positions].sort((a, b) => a - b))
     })
+    expect(groups[0].textContent).toContain('最高 4 板')
+    expect(groups[0].textContent).toContain('还有 1 只')
+    expect(container.textContent).not.toContain('芯片缺时')
+  })
+
+  it('keeps every industry accessible and preserves first appearance when counts tie', () => {
+    const stocks = Array.from({ length: 9 }, (_, index) => ({
+      ...snapshot.stocks[0], symbol: `60000${index}`, industry: `行业${index}`,
+    }))
+    const container = document.createElement('div')
+    container.innerHTML = renderToStaticMarkup(
+      <LimitUpBoardDetail snapshot={{ ...snapshot, stocks }} loading={false} error={null} onRefresh={() => undefined} />
+    )
+    const cards = Array.from(container.querySelectorAll('section[aria-label="涨停行业卡片"] button'))
+    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(
+      stocks.map(stock => `查看${stock.industry}涨停及上涨股票`)
+    )
   })
 
   it('shows limit-down counts beside breadth and keeps missing counts distinct from zero', () => {
@@ -261,7 +279,7 @@ describe('LimitUpBoardDetail', () => {
     expect(entry).not.toContain('跌停 0 家')
   })
 
-  it('renders the full board metrics, industries and stock rows inside the overlay body', () => {
+  it('renders the board metrics and industry previews inside the overlay body', () => {
     const html = renderToStaticMarkup(
       <LimitUpBoardDetail
         snapshot={snapshot}
@@ -278,7 +296,7 @@ describe('LimitUpBoardDetail', () => {
     expect(html).toContain('显著缩量 -10.18%')
     expect(html).toContain('今日两市成交额')
     expect(html).toContain('18792.64 亿')
-    expect(html).toContain('行业聚合')
+    expect(html).toContain('涨停行业卡片')
     expect(html).toContain('深中华A')
     expect(html).toContain('09:25')
     expect(html).toContain('2天2板')
