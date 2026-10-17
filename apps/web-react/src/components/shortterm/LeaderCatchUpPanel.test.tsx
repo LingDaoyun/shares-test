@@ -3,13 +3,13 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchShortTermCatchUp, fetchShortTermCatchUpFollowUp } from '../../api/client'
+import { fetchShortTermCatchUp } from '../../api/client'
 import { catchUpSnapshotPair, emptyCatchUpLocalState, loadCatchUpLocalState, rememberCatchUpSnapshot, saveCatchUpLocalState } from '../../lib/shortTermCatchUpStorage'
 import type { ShortTermLimitUpStock } from '../../types'
 import type { ShortTermCatchUpSnapshot } from '../../types/shortTermCatchUp'
-import { LeaderCatchUpPanel, SavedCatchUpObservationsPanel } from './LeaderCatchUpPanel'
+import { LeaderCatchUpPanel } from './LeaderCatchUpPanel'
 
-vi.mock('../../api/client', () => ({ fetchShortTermCatchUp: vi.fn(), fetchShortTermCatchUpFollowUp: vi.fn() }))
+vi.mock('../../api/client', () => ({ fetchShortTermCatchUp: vi.fn() }))
 
 const anchor: ShortTermLimitUpStock = {
   symbol: '600001', name: '封板锚点', industry: '半导体', latestPrice: 11, changePercent: 10,
@@ -88,7 +88,7 @@ describe('LeaderCatchUpPanel', () => {
     expect(host.textContent).toContain('历史覆盖 80.00%')
     expect(host.textContent).toContain('落后不能证明将补涨')
     expect(host.textContent).toContain('下一核实交易日：2026-10-16')
-    expect(host.textContent).toContain('不是实际成交收益')
+    expect(host.textContent).not.toContain('本浏览器首次留样与隔日价格反馈')
     expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(0)
   })
 
@@ -163,40 +163,19 @@ describe('LeaderCatchUpPanel', () => {
     expect(host.textContent).toContain('不能证明撤单或资金轮动')
   })
 
-  it('refreshes the independent saved view after a same-window save and filters across industries without scanning', async () => {
-    await act(async () => { root.render(<SavedCatchUpObservationsPanel />) })
-    expect(host.textContent).toContain('暂无首次留样')
-    const first = rememberCatchUpSnapshot(emptyCatchUpLocalState(), snapshot(), '2026-10-15T06:00:06Z')
-    const other = snapshot({ industry: '银行', leaderSymbol: '600010', boardCode: 'BK1002', boardName: '银行共同板块',
-      leader: { ...anchor, symbol: '600010', name: '银行锚点' } })
-    other.candidates = other.candidates.map(row => ({ ...row, symbol: '600011', name: '银行留样' }))
-    const all = rememberCatchUpSnapshot(first, other, '2026-10-15T06:01:06Z')
-    await act(async () => { saveCatchUpLocalState(all) })
-    expect(host.textContent).toContain('中位观察样本')
-    expect(host.textContent).toContain('银行留样')
-    await choose('首次留样行业', '银行')
-    const table = host.querySelector('table[aria-label="本浏览器首次留样及隔日价格反馈"]')!
-    expect(table.textContent).toContain('银行留样')
-    expect(table.textContent).not.toContain('中位观察样本')
-    expect(fetchShortTermCatchUp).not.toHaveBeenCalled()
-    expect(fetchShortTermCatchUpFollowUp).not.toHaveBeenCalled()
-  })
-
-  it('queries saved observations independently when the anchor is no longer sealed on the next day', async () => {
+  it('hides saved-observation feedback while retaining existing local history and the main observation controls', async () => {
     const saved = rememberCatchUpSnapshot(emptyCatchUpLocalState(), snapshot(), '2026-10-15T06:00:06Z')
     saveCatchUpLocalState(saved)
-    const first = saved.observations[0]
-    vi.mocked(fetchShortTermCatchUpFollowUp).mockResolvedValue({ fetchedAt: '2026-10-16T06:00:05Z', dataGaps: [], results: [{
-      id: first.id, tradeDate: first.tradeDate, symbol: first.symbol, leaderSymbol: first.leaderSymbol, observedPrice: first.observedPrice,
-      followUpDate: '2026-10-16', status: 'OBSERVED', latestPrice: 10.2, quoteTradeDate: '2026-10-16',
-      marketTimestamp: '2026-10-16T06:00:00Z', priceChangePercent: 2, explanation: '相对首次观察价的未复权价格变动，非真实收益。', dataGaps: []
-    }] })
+
     await render([], '2026-10-16')
-    await click('查询隔日价格反馈')
+
+    expect(host.textContent).toContain('关联补涨观察')
+    expect(host.querySelector('select[aria-label="已封板锚点"]')).not.toBeNull()
+    expect(host.querySelector('section[aria-label="首次留样与隔日价格反馈"]')).toBeNull()
+    expect(host.textContent).not.toContain('本浏览器首次留样与隔日价格反馈')
+    expect(host.textContent).not.toContain('查询隔日价格反馈')
+    expect(host.textContent).not.toContain('下方独立查询')
+    expect(loadCatchUpLocalState()).toEqual(saved)
     expect(fetchShortTermCatchUp).not.toHaveBeenCalled()
-    expect(fetchShortTermCatchUpFollowUp).toHaveBeenCalledWith([{ id: first.id, tradeDate: first.tradeDate, symbol: first.symbol, leaderSymbol: first.leaderSymbol, observedPrice: 10 }])
-    expect(host.textContent).toContain('+2.00%')
-    expect(host.textContent).toContain('首次观察价的未复权价格变动')
-    expect(host.textContent).toContain('锚点隔日无需继续涨停')
   })
 })

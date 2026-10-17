@@ -595,7 +595,7 @@ describe('ShortTermPage manual scan flow', () => {
     expect(document.body.textContent).toContain('成交量待补')
   })
 
-  it('labels saved sentiment with its scan time while the independent board shows newer market counts', async () => {
+  it('keeps scan-time sentiment separate from the independent limit-up homepage', async () => {
     const report = {
       ...emptyReport,
       marketSentiment: { ...emptyReport.marketSentiment, advancing: 370, declining: 5176, score: 6.47, phase: '冰点/混沌' },
@@ -615,7 +615,8 @@ describe('ShortTermPage manual scan flow', () => {
     expect(sentiment.textContent).toContain('370 / 5176')
     expect(sentiment.textContent).toContain('6.47')
     expect(sentiment.textContent).not.toContain('429')
-    expect(host.textContent).toContain('上涨 429 家')
+    expect(host.textContent).not.toContain('涨停看板')
+    expect(fetchShortTermMarketBreadth).not.toHaveBeenCalled()
     expect(host.querySelector('[aria-label="扫描结果时间"]')?.textContent).toContain('行情采集 2026-10-15 14:29:19')
     expect(useShortTermScanStore.getState().report).toBe(report)
     expect(startShortTermScanJob).not.toHaveBeenCalled()

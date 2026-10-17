@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { fetchShortTermCatchUp, fetchShortTermCatchUpFollowUp } from '../../api/client'
+import { fetchShortTermCatchUp } from '../../api/client'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatPercent, formatPerSharePrice, formatSignedPercent } from '../../lib/format'
-import { CATCH_UP_FOLLOW_UP_LIMIT, CATCH_UP_OBSERVATION_LIMIT, CATCH_UP_STORAGE_EVENT, catchUpSnapshotPair, loadCatchUpLocalState, rememberCatchUpSnapshot, saveCatchUpLocalState } from '../../lib/shortTermCatchUpStorage'
-import type { CatchUpFirstObservation, CatchUpLocalSnapshot, CatchUpLocalState } from '../../lib/shortTermCatchUpStorage'
+import { catchUpSnapshotPair, loadCatchUpLocalState, rememberCatchUpSnapshot, saveCatchUpLocalState } from '../../lib/shortTermCatchUpStorage'
+import type { CatchUpLocalSnapshot } from '../../lib/shortTermCatchUpStorage'
 import type { ShortTermLimitUpStock } from '../../types'
-import type { ShortTermCatchUpCandidate, ShortTermCatchUpFollowUpSnapshot, ShortTermCatchUpSnapshot, ShortTermRelatedBoard } from '../../types/shortTermCatchUp'
+import type { ShortTermCatchUpCandidate, ShortTermCatchUpSnapshot, ShortTermRelatedBoard } from '../../types/shortTermCatchUp'
 import { Button } from '../ui/Button'
 import { Loader } from '../ui/Loader'
 
@@ -82,92 +82,13 @@ export function LeaderCatchUpPanel({ industry, tradeDate, sealedStocks }: {
         </label>
         <Button disabled={!leaderSymbol} loading={loading} onClick={() => setRefresh(value => value + 1)}>刷新关联观察</Button>
       </div>
-      {!leaderSymbol ? <p className="text-xs text-ink-400">选择锚点后读取共同板块；既有首次留样可在下方独立查询隔日价格反馈。</p> : null}
+      {!leaderSymbol ? <p className="text-xs text-ink-400">选择锚点后读取共同板块。</p> : null}
       {loading ? <Loader text={boardCode ? '共同板块观察加载中' : '核对锚点所属板块中'} /> : null}
       {error ? <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">关联观察获取失败：{error}</p> : null}
       {snapshot ? <CatchUpSnapshotView snapshot={snapshot} samples={samples} /> : null}
       {!storageAvailable ? <p role="status" className="text-xs text-amber-800">浏览器存储不可用，本次留样仅保留在当前页面，关闭后无法恢复。</p> : null}
-      <SavedCatchUpObservationsPanel industry={industry} localState={local} />
     </section>
   )
-}
-
-/** Independent of today's limit-up pool, so yesterday's observations remain reachable. */
-export function SavedCatchUpObservationsPanel({ industry, localState }: {
-  industry?: string
-  localState?: CatchUpLocalState
-}) {
-  const [local, setLocal] = useState(() => localState ?? loadCatchUpLocalState())
-  const [selectedIndustry, setSelectedIndustry] = useState('')
-  const [followUp, setFollowUp] = useState<ShortTermCatchUpFollowUpSnapshot | null>(null)
-  const [followUpLoading, setFollowUpLoading] = useState(false)
-  const [followUpError, setFollowUpError] = useState<string | null>(null)
-  const followUpRequest = useRef(0)
-  const filter = industry ?? selectedIndustry
-
-  useEffect(() => { if (localState) setLocal(localState) }, [localState])
-  useEffect(() => {
-    const refreshSaved = () => setLocal(loadCatchUpLocalState())
-    window.addEventListener(CATCH_UP_STORAGE_EVENT, refreshSaved)
-    return () => window.removeEventListener(CATCH_UP_STORAGE_EVENT, refreshSaved)
-  }, [])
-  useEffect(() => {
-    followUpRequest.current += 1
-    setFollowUp(null); setFollowUpError(null); setFollowUpLoading(false)
-    return () => { followUpRequest.current += 1 }
-  }, [filter])
-
-  const filtered = local.observations.filter(row => !filter || row.industry === filter)
-  const stored = filtered.slice(-CATCH_UP_FOLLOW_UP_LIMIT).reverse()
-  const industries = [...new Set(local.observations.map(row => row.industry))].sort()
-
-  async function queryFollowUp() {
-    const request = ++followUpRequest.current
-    setFollowUpLoading(true); setFollowUp(null); setFollowUpError(null)
-    try {
-      const result = await fetchShortTermCatchUpFollowUp(stored.map(({ id, tradeDate: date, symbol, leaderSymbol: anchor, observedPrice }) => ({
-        id, tradeDate: date, symbol, leaderSymbol: anchor, observedPrice
-      })))
-      if (request !== followUpRequest.current) return
-      const originals = new Map(stored.map(row => [row.id, row]))
-      const valid = result.results.filter(row => {
-        const original = originals.get(row.id)
-        return original && row.tradeDate === original.tradeDate && row.symbol === original.symbol
-          && row.leaderSymbol === original.leaderSymbol && row.observedPrice === original.observedPrice
-      })
-      setFollowUp({ ...result, results: valid })
-    } catch (reason) {
-      if (request === followUpRequest.current) setFollowUpError(extractErrorMessage(reason))
-    } finally {
-      if (request === followUpRequest.current) setFollowUpLoading(false)
-    }
-  }
-
-  return <section className="flex flex-col gap-2 border-t border-line-soft pt-3" aria-label="首次留样与隔日价格反馈">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <h4 className="text-xs font-semibold text-ink-800">本浏览器首次留样与隔日价格反馈 · {filtered.length} 条</h4>
-      <div className="flex flex-wrap items-center gap-2">
-        {industry === undefined ? <label className="flex items-center gap-2 text-xs text-ink-600">
-          留样行业
-          <select aria-label="首次留样行业" value={selectedIndustry} onChange={event => setSelectedIndustry(event.target.value)}
-            className="rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink-900 focus:outline-none focus:ring-2 focus:ring-brand-200">
-            <option value="">全部行业</option>
-            {industries.map(name => <option key={name} value={name}>{name}</option>)}
-          </select>
-        </label> : null}
-        <Button disabled={!stored.length} loading={followUpLoading} onClick={queryFollowUp}>查询隔日价格反馈</Button>
-      </div>
-    </div>
-    <p className="text-[11px] leading-relaxed text-ink-500">
-      按日期、锚点、板块、候选保存首次价格和证据，刷新不覆盖保留中的首次记录。仅此浏览器保留最近 {CATCH_UP_OBSERVATION_LIMIT} 条；当前范围展示并查询最近 {CATCH_UP_FOLLOW_UP_LIMIT} 条。锚点隔日无需继续涨停，当前涨停池不可用时仍可查询。
-      反馈仅限下一经日历核实的交易日，观察价与隔日报价的未复权变动不是实际成交收益；除权除息会影响比较。
-    </p>
-    {followUpError ? <p role="alert" className="text-xs text-amber-800">隔日反馈查询失败：{followUpError}</p> : null}
-    {followUp?.dataGaps.length ? <EvidenceLine label="反馈缺口" values={followUp.dataGaps} /> : null}
-    {followUp ? <p className="text-[11px] text-ink-400">反馈查询于 {formatDateTime(followUp.fetchedAt)}</p> : null}
-    {stored.length ? <FirstObservationTable observations={stored} followUp={followUp} />
-      : <p className="text-xs text-ink-400">暂无首次留样。选定共同板块并取得有效行情后，自动保存本次展示的候选。</p>}
-  </section>
 }
 
 function CatchUpSnapshotView({ snapshot, samples }: { snapshot: ShortTermCatchUpSnapshot; samples: CatchUpLocalSnapshot[] }) {
@@ -194,7 +115,7 @@ function CatchUpSnapshotView({ snapshot, samples }: { snapshot: ShortTermCatchUp
           {!percentileAvailable ? ' 当前分位条件不足，中位未知。' : ''}
         </p>
         <p className="text-[11px] text-ink-400">行情来源 {snapshot.quoteSource ?? '未知'} · 源行情时间 {formatDateTime(snapshot.marketTimestamp)} · 拉取于 {formatDateTime(snapshot.fetchedAt)}</p>
-        <p className="text-[11px] text-ink-500">下一核实交易日：{snapshot.nextTradingDate ?? '未知，暂不能安排隔日反馈'}</p>
+        <p className="text-[11px] text-ink-500">下一核实交易日：{snapshot.nextTradingDate ?? '未知'}</p>
         <SnapshotComparison samples={samples} />
       </> : null}
       <EvidenceLine label="已知证据" values={snapshot.evidence} />
@@ -250,37 +171,6 @@ function CandidateTable({ candidates, percentileAvailable }: { candidates: Short
           <tr><td colSpan={7} className="px-3 pb-2"><details className="text-[11px] text-ink-500"><summary className="cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-200">{row.name}的证据、反证与缺口</summary>
             <EvidenceLine label="已知证据" values={row.evidence} /><EvidenceLine label="反证 / 限制" values={row.contraryEvidence} /><EvidenceLine label="数据缺口" values={row.dataGaps} />
             {!row.evidence.length && !row.contraryEvidence.length && !row.dataGaps.length ? <p>未提供额外证据。</p> : null}
-          </details></td></tr>
-        </Fragment>
-      })}</tbody>
-    </table>
-  </div>
-}
-
-function FirstObservationTable({ observations, followUp }: { observations: CatchUpFirstObservation[]; followUp: ShortTermCatchUpFollowUpSnapshot | null }) {
-  const results = new Map(followUp?.results.map(row => [row.id, row]) ?? [])
-  const labels = { WAITING: '等待下一交易日', EXPIRED: '已过精确隔日', UNKNOWN: '反馈未知', OBSERVED: '隔日价格反馈' }
-  return <div className="overflow-x-auto rounded-xl border border-line-soft">
-    <table className="w-full min-w-[800px] text-left text-xs" aria-label="本浏览器首次留样及隔日价格反馈">
-      <thead className="bg-line-soft/70 text-ink-500"><tr>{['首次留样 / 候选', '锚点 / 共同板块', '首次观察价', '下一核实交易日', '隔日价格反馈'].map(label => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{label}</th>)}</tr></thead>
-      <tbody>{observations.map(row => {
-        const result = results.get(row.id)
-        return <Fragment key={row.id}>
-          <tr className="border-t border-line-soft">
-            <td className="px-3 py-2"><span className="font-semibold text-ink-900">{row.name} · {row.symbol}</span><div className="mt-0.5 text-[11px] text-ink-400">{row.tradeDate} · 留样 {formatDateTime(row.observedAt)}</div></td>
-            <td className="px-3 py-2">{row.leaderName} · {row.leaderSymbol}<div className="mt-0.5 text-[11px] text-ink-400">{row.boardName} · {row.boardCode}</div></td>
-            <td className="whitespace-nowrap px-3 py-2 tabular">{formatPerSharePrice(row.observedPrice)}</td>
-            <td className="whitespace-nowrap px-3 py-2">{result?.followUpDate ?? row.nextTradingDate ?? '未知'}</td>
-            <td className="px-3 py-2">{result ? <>
-              <span>{labels[result.status]}</span>{result.status === 'OBSERVED' ? <div className={`mt-0.5 tabular ${changeClass(result.priceChangePercent)}`}>{formatPerSharePrice(result.latestPrice)} · {formatSignedPercent(result.priceChangePercent)}</div> : null}
-              <p className="mt-0.5 text-[11px] leading-relaxed text-ink-500">{result.explanation}</p>
-              <p className="text-[11px] text-ink-400">报价日 {result.quoteTradeDate ?? '未知'} · {formatDateTime(result.marketTimestamp)}</p>
-              <EvidenceLine label="数据缺口" values={result.dataGaps} />
-            </> : followUp ? '未返回可核对的反馈' : '尚未查询'}</td>
-          </tr>
-          <tr><td colSpan={5} className="px-3 pb-2"><details className="text-[11px] text-ink-500"><summary className="cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-200">首次证据 · {row.name} · {row.tradeDate}</summary>
-            <p>首次源行情 {formatDateTime(row.marketTimestamp)} · 来源 {row.quoteSource ?? '未知'} · 前五日 {formatSignedPercent(row.return5)} · 分位 {row.returnPercentile === null ? '未知' : formatPercent(row.returnPercentile)}</p>
-            <EvidenceLine label="首次证据" values={row.evidence} /><EvidenceLine label="首次反证 / 限制" values={row.contraryEvidence} /><EvidenceLine label="首次数据缺口" values={row.dataGaps} />
           </details></td></tr>
         </Fragment>
       })}</tbody>

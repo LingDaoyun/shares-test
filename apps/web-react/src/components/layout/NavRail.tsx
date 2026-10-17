@@ -8,10 +8,11 @@ export function NavRail() {
   const rules = useAppStore((s) => s.rules)
   const runtimeConfig = useAppStore((s) => s.runtimeConfig)
 
-  const key = (location.pathname.replace(/^\//, '').trim() as PageKey) || 'shortTerm'
-  const current = pathToPage[key] ?? 'shortTerm'
+  const key = location.pathname.replace(/^\/+|\/+$/g, '').trim()
+  const current = pathToPage[key] ?? 'limitUp'
 
   const pagePath: Record<PageKey, string> = {
+    limitUp: 'limit-up',
     market: 'market',
     shortTerm: 'short-term',
     potentialLeader: 'potential-leader',
@@ -24,6 +25,7 @@ export function NavRail() {
   }
 
   const counts: Record<PageKey, string> = {
+    limitUp: '首页',
     market: '长投',
     shortTerm: '盘中',
     potentialLeader: '5交易日',
@@ -36,7 +38,7 @@ export function NavRail() {
   }
 
   return (
-    <nav aria-label="模块菜单" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-9">
+    <nav aria-label="模块菜单" className="grid grid-cols-2 gap-2.5 lg:grid-cols-5">
       {navItems.map((item) => {
         const active = current === item.key
         return (

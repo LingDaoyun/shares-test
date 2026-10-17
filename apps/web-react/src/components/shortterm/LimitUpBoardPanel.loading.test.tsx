@@ -57,15 +57,15 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     await act(async () => { button?.click() })
   }
 
-  it('loads counts on mount without a scan and opens them even if the pool is empty', async () => {
+  it('shows the complete board on mount without an entry button or scan even if the pool is empty', async () => {
     await renderPanel()
 
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
-    expect(host.textContent).toContain('上涨 3123 家')
-    expect(host.textContent).toContain('下跌 2100 家')
-    expect(host.textContent).toContain('平盘 81 家')
-    await clickButton('查看看板')
+    expect(host.textContent).not.toContain('查看看板')
+    expect(host.textContent).toContain('上涨3123 家')
+    expect(host.textContent).toContain('下跌2100 家')
+    expect(host.textContent).toContain('平盘81 家')
     expect(document.body.textContent).toContain('本次行情清单 5314 只')
     expect(document.body.textContent).not.toContain('全 A 股')
     expect(document.body.textContent).toContain('排除无当日报价、价格或涨跌幅缺失的 10 只')
@@ -81,7 +81,8 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     expect(host.textContent).toContain('当日涨停池为空')
     expect(host.textContent).toContain('正在获取涨跌家数')
     await act(async () => { resolveBreadth(breadth) })
-    expect(host.textContent).toContain('上涨 3123 家')
+    expect(host.textContent).not.toContain('查看看板')
+    expect(host.textContent).toContain('上涨3123 家')
     expect(host.textContent).not.toContain('正在获取涨跌家数')
   })
 
@@ -90,8 +91,8 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     await renderPanel()
 
     expect(host.textContent).toContain('获取失败：涨停池超时')
-    expect(host.textContent).toContain('上涨 3123 家')
-    await clickButton('查看看板')
+    expect(host.textContent).not.toContain('查看看板')
+    expect(host.textContent).toContain('上涨3123 家')
     expect(document.body.textContent).toContain('本次行情清单 5314 只')
   })
 
@@ -102,9 +103,9 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
 
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(2)
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(2)
-    expect(host.textContent).toContain('上涨 3123 家')
+    expect(host.textContent).not.toContain('查看看板')
+    expect(host.textContent).toContain('上涨3123 家')
     expect(host.textContent).toContain('保留上次快照')
-    await clickButton('查看看板')
     expect(document.body.textContent).toContain('全市场行情覆盖不足')
     expect(document.body.textContent).toContain('请注意统计时间')
   })
@@ -114,9 +115,8 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     await renderPanel()
 
     expect(host.textContent).toContain('涨跌家数更新失败')
-    expect(host.textContent).not.toContain('上涨 0 家')
-    expect(host.textContent).not.toContain('下跌 0 家')
-    await clickButton('查看看板')
+    expect(host.textContent).not.toContain('上涨0 家')
+    expect(host.textContent).not.toContain('下跌0 家')
     expect(document.body.textContent).toContain('全市场行情覆盖不足')
   })
 
@@ -134,14 +134,15 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
     await act(async () => { await vi.advanceTimersByTimeAsync(1) })
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(2)
-    expect(host.textContent).toContain('上涨 429 家')
+    expect(host.textContent).toContain('上涨429 家')
   })
 
   it('reuses the in-flight request during StrictMode effect replay', async () => {
     await act(async () => { root.render(<StrictMode><LimitUpBoardPanel /></StrictMode>) })
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
-    expect(host.textContent).toContain('上涨 3123 家')
+    expect(host.textContent).not.toContain('查看看板')
+    expect(host.textContent).toContain('上涨3123 家')
   })
 
   it('restarts the auto-refresh delay after a manual refresh and preserves data when auto-refresh fails', async () => {
@@ -155,8 +156,10 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     vi.mocked(fetchShortTermMarketBreadth).mockRejectedValueOnce(new Error('刷新超时'))
     await act(async () => { await vi.advanceTimersByTimeAsync(50000) })
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(3)
-    expect(host.textContent).toContain('上涨 3123 家')
-    expect(host.textContent).toContain('涨跌家数更新失败，保留上次快照')
+    expect(host.textContent).not.toContain('查看看板')
+    expect(host.textContent).toContain('上涨3123 家')
+    expect(host.textContent).toContain('涨跌家数更新失败：刷新超时')
+    expect(host.textContent).toContain('当前保留上次快照')
   })
 
   it('stops polling after unmount even when the pending request resolves later', async () => {

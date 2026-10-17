@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronRight, Flame, RefreshCw } from 'lucide-react'
+import { ChevronRight, RefreshCw } from 'lucide-react'
 import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
-import { DetailOverlay } from '../ui/DetailOverlay'
+import { isEscapeClose } from '../ui/DetailOverlay'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
-import { Spinner } from '../ui/Loader'
 import { Tag } from '../ui/Badge'
 import { LimitUpIndustryOverlay, type LimitUpIndustrySelection } from './LimitUpIndustryOverlay'
 import { formatAmount, formatDateTime, formatPercent, formatSignedPercent } from '../../lib/format'
@@ -33,7 +32,6 @@ export function LimitUpBoardPanel() {
   const [breadth, setBreadth] = useState<ShortTermMarketBreadth | null>(null)
   const [breadthLoading, setBreadthLoading] = useState(false)
   const [breadthError, setBreadthError] = useState<string | null>(null)
-  const [open, setOpen] = useState(false)
   const [industrySelection, setIndustrySelection] = useState<LimitUpIndustrySelection | null>(null)
   const mounted = useRef(false)
   const refreshing = useRef(false)
@@ -71,32 +69,18 @@ export function LimitUpBoardPanel() {
   }, [refresh])
 
   return (
-    <>
-      <LimitUpBoardEntry
-        snapshot={snapshot}
-        loading={loading}
-        error={error}
-        breadth={breadth}
-        breadthLoading={breadthLoading}
-        breadthError={breadthError}
-        onRefresh={() => void refresh()}
-        onOpen={() => setOpen(true)}
-      />
-      <DetailOverlay
-        open={open}
-        title={
-          <span className="inline-flex items-center gap-2">
-            <Flame className="h-4 w-4 text-rose-500" />
-            涨停看板 · 市场情绪
-          </span>
-        }
-        subtitle={
-          snapshot
-            ? `${snapshot.tradeDate} · 快照 ${formatDateTime(snapshot.fetchedAt)}（盘中口径随时变化）`
-            : undefined
-        }
-        onClose={() => industrySelection ? setIndustrySelection(null) : setOpen(false)}
-      >
+    <div onKeyDown={event => {
+      if (industrySelection && isEscapeClose(event.key, event.defaultPrevented)) {
+        event.preventDefault()
+        event.stopPropagation()
+        setIndustrySelection(null)
+      }
+    }}>
+      <Card>
+        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-base font-semibold text-ink-900">市场情绪与行业分布</h2>
+          {snapshot ? <span className="text-xs text-ink-400">{snapshot.tradeDate} · 快照 {formatDateTime(snapshot.fetchedAt)}</span> : null}
+        </div>
         <LimitUpBoardDetail
           snapshot={snapshot}
           loading={loading}
@@ -111,12 +95,12 @@ export function LimitUpBoardPanel() {
               limitUpStocks: snapshot.stocks.filter(stock => (stock.industry?.trim() || '未分类') === industry) })
           }}
         />
-      </DetailOverlay>
+      </Card>
       {industrySelection ? (
         <LimitUpIndustryOverlay key={`${industrySelection.tradeDate}:${industrySelection.industry}`}
           selection={industrySelection} onClose={() => setIndustrySelection(null)} />
       ) : null}
-    </>
+    </div>
   )
 }
 
@@ -124,86 +108,6 @@ interface MarketBreadthProps {
   breadth?: ShortTermMarketBreadth | null
   breadthLoading?: boolean
   breadthError?: string | null
-}
-
-interface LimitUpBoardEntryProps extends MarketBreadthProps {
-  snapshot: ShortTermLimitUpBoardSnapshot | null
-  loading: boolean
-  error: string | null
-  onRefresh: () => void
-  onOpen: () => void
-}
-
-/** 页面内的一行式入口：情绪摘要 + 查看完整看板的按钮。 */
-export function LimitUpBoardEntry({ snapshot, loading, error, breadth, breadthLoading, breadthError, onRefresh, onOpen }: LimitUpBoardEntryProps) {
-  const sentiment = snapshot != null && snapshot.available ? snapshot.sentiment : null
-  return (
-    <Card>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="inline-flex items-center gap-2 text-sm font-semibold text-ink-900">
-          <Flame className="h-4 w-4 shrink-0 text-rose-500" />
-          涨停看板
-        </span>
-        <span className="inline-flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-ink-500">最新可用涨跌数据</span>
-          {breadth ? (
-            <>
-              <span className="font-semibold text-rose-600">上涨 {breadth.advancing} 家</span>
-              <span className="font-semibold text-emerald-600">下跌 {breadth.declining} 家</span>
-              <span className="text-ink-500">平盘 {breadth.unchanged} 家</span>
-              <span className="text-ink-400">{breadthSourceTime(breadth)}</span>
-              <span className="text-ink-400">{`获取时间 ${formatDateTime(breadth.fetchedAt)}`}</span>
-              {breadth.missingTimestampCount ? <span className="text-amber-700">{`${breadth.missingTimestampCount} 只缺少源时间`}</span> : null}
-              {breadthLoading ? <span className="text-ink-400">正在更新…</span> : null}
-            </>
-          ) : breadthLoading ? (
-            <span className="text-ink-400">正在获取涨跌家数…</span>
-          ) : !breadthError ? (
-            <span className="text-ink-400">涨跌家数暂无数据</span>
-          ) : null}
-          {breadthError ? <span className="text-amber-700">涨跌家数更新失败{breadth ? '，保留上次快照' : ''}</span> : null}
-        </span>
-        {error ? (
-          <span className="min-w-0 truncate text-xs text-rose-600">获取失败：{error}</span>
-        ) : !snapshot && loading ? (
-          <span className="inline-flex items-center gap-1.5 text-xs text-ink-400">
-            <Spinner className="text-brand-500" />
-            正在拉取涨停池
-          </span>
-        ) : snapshot && !snapshot.available ? (
-          <span className="min-w-0 truncate text-xs text-amber-700">
-            {snapshot.unavailableReason ?? '涨停池数据不可用'}
-          </span>
-        ) : sentiment ? (
-          <span className="inline-flex min-w-0 flex-wrap items-center gap-2 text-xs text-ink-500">
-            <Tag tone={toneLabel[sentiment.tone] ?? 'neutral'}>{sentiment.tone}</Tag>
-            <span className="truncate">
-              涨停 {sentiment.limitUpCount} 家
-              {` · 跌停 ${sentiment.limitDownCount == null ? '待补充' : `${sentiment.limitDownCount} 家`}`}
-              {snapshot?.marketTurnover
-                ? ` · 量能 ${snapshot.marketTurnover.label} ${formatSignedPercent(snapshot.marketTurnover.volumeChangePercent)}`
-                : ''}
-              {sentiment.brokenCount === null ? '' : ` · 炸板率 ${formatPercent(sentiment.sealBreakRatioPercent)}`}
-              {` · 最高 ${sentiment.maxConsecutiveBoards} 连板 · ${snapshot?.tradeDate ?? ''}`}
-            </span>
-          </span>
-        ) : null}
-        <span className="ml-auto inline-flex items-center gap-2">
-          <Button
-            variant="secondary"
-            icon={<RefreshCw className="h-4 w-4" />}
-            loading={loading || breadthLoading}
-            onClick={onRefresh}
-          >
-            刷新
-          </Button>
-          <Button variant="primary" onClick={onOpen}>
-            查看看板
-          </Button>
-        </span>
-      </div>
-    </Card>
-  )
 }
 
 interface LimitUpBoardDetailProps extends MarketBreadthProps {
@@ -214,7 +118,7 @@ interface LimitUpBoardDetailProps extends MarketBreadthProps {
   onSelectIndustry?: (industry: string) => void
 }
 
-/** 浮层内的完整看板内容。 */
+/** 首页内的完整看板内容。 */
 export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthLoading, breadthError, onRefresh, onSelectIndustry }: LimitUpBoardDetailProps) {
   return (
     <div className="flex flex-col gap-4">
@@ -407,7 +311,7 @@ function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
         {industryGroups.map(([industry, stocks]) => {
           const maxBoards = Math.max(...stocks.map(stock => stock.consecutiveBoards))
           return (
-            <button key={industry} type="button" aria-label={`查看${industry}涨停及上涨股票`}
+            <button key={industry} type="button" aria-label={`查看${industry}涨停明细`}
               onClick={() => onSelectIndustry?.(industry)}
               className="group flex min-w-0 flex-col rounded-xl border border-line-soft bg-white p-3 text-left outline-none transition hover:border-brand-300 hover:bg-brand-50/30 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-brand-300">
               <span className="flex items-center justify-between gap-2">

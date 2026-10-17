@@ -2,7 +2,7 @@ import { forwardRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { RefreshCw, Settings, ArrowLeft } from 'lucide-react'
 import { useAppStore } from '../../store/appStore'
-import { pageMeta, pathToPage, type PageKey } from './pageMeta'
+import { pageMeta, pathToPage } from './pageMeta'
 import { Spinner } from '../ui/Loader'
 
 export const Header = forwardRef<HTMLElement>(function Header(_props, ref) {
@@ -11,8 +11,8 @@ export const Header = forwardRef<HTMLElement>(function Header(_props, ref) {
   const loading = useAppStore((s) => s.loading)
   const loadAll = useAppStore((s) => s.loadAll)
 
-  const key = (location.pathname.replace(/^\//, '').trim() as PageKey) || 'shortTerm'
-  const page = pathToPage[key] ?? 'shortTerm'
+  const key = location.pathname.replace(/^\/+|\/+$/g, '').trim()
+  const page = pathToPage[key] ?? 'limitUp'
   const meta = pageMeta[page]
 
   const isSettings = page === 'settings'
@@ -28,11 +28,11 @@ export const Header = forwardRef<HTMLElement>(function Header(_props, ref) {
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={() => navigate(isSettings ? '/short-term' : '/settings')}
+          onClick={() => navigate(isSettings ? '/limit-up' : '/settings')}
           className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-3 py-2 text-sm font-medium text-ink-600 transition hover:border-brand-300 hover:text-brand-600"
         >
           {isSettings ? <ArrowLeft className="h-4 w-4" /> : <Settings className="h-4 w-4" />}
-          {isSettings ? '返回短线' : '系统配置'}
+          {isSettings ? '返回首页' : '系统配置'}
         </button>
         <button
           type="button"

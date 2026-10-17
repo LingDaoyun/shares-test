@@ -1,4 +1,4 @@
-export type PageKey = 'market' | 'shortTerm' | 'potentialLeader' | 'overseas' | 'policy' | 'watchlist' | 'tradeReview' | 'rules' | 'settings'
+export type PageKey = 'limitUp' | 'market' | 'shortTerm' | 'potentialLeader' | 'overseas' | 'policy' | 'watchlist' | 'tradeReview' | 'rules' | 'settings'
 
 export interface PageMeta {
   eyebrow: string
@@ -7,6 +7,11 @@ export interface PageMeta {
 }
 
 export const pageMeta: Record<PageKey, PageMeta> = {
+  limitUp: {
+    eyebrow: 'LIMIT UP',
+    title: '涨停看板',
+    description: '按行业查看涨停分布、连板高度和封板时间，跟踪当日市场情绪。'
+  },
   market: {
     eyebrow: 'LONG VALUE',
     title: '长期价投',
@@ -55,6 +60,7 @@ export const pageMeta: Record<PageKey, PageMeta> = {
 }
 
 export const navItems: { key: PageKey; label: string }[] = [
+  { key: 'limitUp', label: '涨停看板' },
   { key: 'shortTerm', label: '短线右侧' },
   { key: 'potentialLeader', label: '五日观察' },
   { key: 'market', label: '长期价投' },
@@ -67,7 +73,8 @@ export const navItems: { key: PageKey; label: string }[] = [
 ]
 
 export const pathToPage: Record<string, PageKey> = {
-  '': 'shortTerm',
+  '': 'limitUp',
+  'limit-up': 'limitUp',
   market: 'market',
   'short-term': 'shortTerm',
   'potential-leader': 'potentialLeader',

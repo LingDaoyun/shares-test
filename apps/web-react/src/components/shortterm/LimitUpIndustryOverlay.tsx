@@ -1,13 +1,10 @@
-import { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
-import { fetchShortTermLimitUpIndustry } from '../../api/client'
 import { Button } from '../ui/Button'
 import { Tag } from '../ui/Badge'
 import { DetailOverlay } from '../ui/DetailOverlay'
-import { Loader } from '../ui/Loader'
 import { LeaderCatchUpPanel } from './LeaderCatchUpPanel'
 import { changeClass, formatAmount, formatDateTime, formatPercent, formatPerSharePrice, formatSignedPercent } from '../../lib/format'
-import type { ShortTermIndustryRisingStock, ShortTermLimitUpIndustrySnapshot, ShortTermLimitUpStock } from '../../types'
+import type { ShortTermLimitUpStock } from '../../types'
 
 export interface LimitUpIndustrySelection {
   industry: string
@@ -20,36 +17,12 @@ export function LimitUpIndustryOverlay({ selection, onClose }: {
   selection: LimitUpIndustrySelection
   onClose: () => void
 }) {
-  const [snapshot, setSnapshot] = useState<ShortTermLimitUpIndustrySnapshot | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [retryCount, setRetryCount] = useState(0)
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    setError(null)
-    fetchShortTermLimitUpIndustry(selection.industry, selection.tradeDate)
-      .then((data) => {
-        if (data.tradeDate !== selection.tradeDate || data.industry !== selection.industry) {
-          throw new Error('行业详情与看板的行业或日期不一致，请重试。')
-        }
-        if (!cancelled) setSnapshot(data)
-      })
-      .catch((reason: unknown) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : '行业详情获取失败')
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [selection.industry, selection.tradeDate, retryCount])
-
-  // Keep the complete card snapshot; the industry response may use a different grouping or fetch time.
   const sealed = selection.limitUpStocks
 
   return (
     <DetailOverlay
       open
-      title={`${selection.industry} · 涨停与上涨股票`}
+      title={`${selection.industry} · 涨停明细`}
       subtitle={`${selection.tradeDate} · 已涨停 ${sealed.length} 家`}
       onClose={onClose}
     >
@@ -61,33 +34,7 @@ export function LimitUpIndustryOverlay({ selection, onClose }: {
         <section className="flex flex-col gap-2">
           <h3 className="text-sm font-semibold text-ink-900">已涨停 · {sealed.length} 家</h3>
           <p className="text-xs text-ink-500">全部涨停股票，按连板高度及首次封板时间排列。</p>
-          <StockTable stocks={sealed} sealed />
-        </section>
-        <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold text-ink-900">
-            未涨停上涨股{snapshot?.risingAvailable ? ` · ${snapshot.risingStocks.length} 家` : ''}
-          </h3>
-          <p className="text-xs text-ink-500">同一行业内按涨幅从高到低排列，最多 30 家。</p>
-          {loading ? <Loader text="行业上涨股票加载中" /> : null}
-          {error ? (
-            <div className="flex flex-col items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              <span>行业详情更新失败：{error}</span>
-              <Button onClick={() => setRetryCount(count => count + 1)}>重试</Button>
-            </div>
-          ) : null}
-          {!loading && !error && snapshot ? (
-            snapshot.risingAvailable ? (
-              <>
-                <StockTable stocks={snapshot.risingStocks} />
-                <p className="text-[11px] text-ink-400">{snapshot.tradeDate} · {snapshot.quoteSource}</p>
-              </>
-            ) : (
-              <div className="flex flex-col items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
-                <span>{snapshot.dataGaps.join('；') || '行业未涨停上涨股暂缺。'}</span>
-                <Button onClick={() => setRetryCount(count => count + 1)}>重试</Button>
-              </div>
-            )
-          ) : null}
+          <StockTable stocks={sealed} />
         </section>
         <LeaderCatchUpPanel key={`${selection.tradeDate}:${selection.industry}`} industry={selection.industry} tradeDate={selection.tradeDate} sealedStocks={sealed} />
       </div>
@@ -95,17 +42,14 @@ export function LimitUpIndustryOverlay({ selection, onClose }: {
   )
 }
 
-function StockTable({ stocks, sealed = false }: {
-  stocks: (ShortTermLimitUpStock | ShortTermIndustryRisingStock)[]
-  sealed?: boolean
-}) {
-  if (!stocks.length) return <p className="py-3 text-xs text-ink-500">{sealed ? '该行业暂无涨停股票。' : '该行业暂无符合条件的未涨停上涨股。'}</p>
+function StockTable({ stocks }: { stocks: ShortTermLimitUpStock[] }) {
+  if (!stocks.length) return <p className="py-3 text-xs text-ink-500">该行业暂无涨停股票。</p>
   return (
     <div className="overflow-x-auto rounded-xl border border-line-soft">
-      <table className={`w-full text-left text-xs ${sealed ? 'min-w-[900px]' : 'min-w-[600px]'}`} aria-label={sealed ? '已涨停股票' : '未涨停上涨股票'}>
+      <table className="w-full min-w-[900px] text-left text-xs" aria-label="已涨停股票">
         <thead className="bg-line-soft/70 text-ink-500">
           <tr>
-            {['名称 / 代码', '现价', '涨幅', '成交额', '换手率', ...(sealed ? ['连板', '首次封板', '末次封板', '炸板次数', '封板资金'] : ['行情时间'])].map(label => (
+            {['名称 / 代码', '现价', '涨幅', '成交额', '换手率', '连板', '首次封板', '末次封板', '炸板次数', '封板资金'].map(label => (
               <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{label}</th>
             ))}
           </tr>
@@ -118,19 +62,15 @@ function StockTable({ stocks, sealed = false }: {
               <td className={`px-3 py-2 tabular ${changeClass(stock.changePercent)}`}>{formatSignedPercent(stock.changePercent)}</td>
               <td className="whitespace-nowrap px-3 py-2 tabular">{formatAmount(stock.amount)}</td>
               <td className="px-3 py-2 tabular">{formatPercent(stock.turnoverRate)}</td>
-              {sealed && 'consecutiveBoards' in stock ? (
-                <>
-                  <td className="whitespace-nowrap px-3 py-2">
-                    <Tag tone={stock.consecutiveBoards >= 3 ? 'danger' : stock.consecutiveBoards >= 2 ? 'warning' : 'neutral'}>
-                      {stock.statDays > 0 ? `${stock.statDays}天${stock.statBoards > 0 ? stock.statBoards : stock.consecutiveBoards}板` : `${stock.consecutiveBoards} 板`}
-                    </Tag>
-                  </td>
-                  <td className="px-3 py-2 tabular">{stock.firstSealTime?.slice(0, 5) ?? '—'}</td>
-                  <td className="px-3 py-2 tabular">{stock.lastSealTime?.slice(0, 5) ?? '—'}</td>
-                  <td className="whitespace-nowrap px-3 py-2 tabular">{stock.sealBreakCount > 0 ? `${stock.sealBreakCount} 次` : '—'}</td>
-                  <td className="whitespace-nowrap px-3 py-2 tabular">{formatAmount(stock.sealFunds)}</td>
-                </>
-              ) : 'marketTimestamp' in stock ? <td className="whitespace-nowrap px-3 py-2 tabular">{formatDateTime(stock.marketTimestamp)}</td> : null}
+              <td className="whitespace-nowrap px-3 py-2">
+                <Tag tone={stock.consecutiveBoards >= 3 ? 'danger' : stock.consecutiveBoards >= 2 ? 'warning' : 'neutral'}>
+                  {stock.statDays > 0 ? `${stock.statDays}天${stock.statBoards > 0 ? stock.statBoards : stock.consecutiveBoards}板` : `${stock.consecutiveBoards} 板`}
+                </Tag>
+              </td>
+              <td className="px-3 py-2 tabular">{stock.firstSealTime?.slice(0, 5) ?? '—'}</td>
+              <td className="px-3 py-2 tabular">{stock.lastSealTime?.slice(0, 5) ?? '—'}</td>
+              <td className="whitespace-nowrap px-3 py-2 tabular">{stock.sealBreakCount > 0 ? `${stock.sealBreakCount} 次` : '—'}</td>
+              <td className="whitespace-nowrap px-3 py-2 tabular">{formatAmount(stock.sealFunds)}</td>
             </tr>
           ))}
         </tbody>

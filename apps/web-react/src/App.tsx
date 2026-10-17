@@ -69,6 +69,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error
   }
 }
 
+const LimitUpPage = lazyPage(() => import('./pages/LimitUpPage').then((m) => m.LimitUpPage))
 const MarketScanPage = lazyPage(() => import('./pages/MarketScanPage').then((m) => m.MarketScanPage))
 const ShortTermPage = lazyPage(() => import('./pages/ShortTermPage').then((m) => m.ShortTermPage))
 const FiveDayPage = lazyPage(() => import('./pages/FiveDayPage').then((m) => m.FiveDayPage))
@@ -86,7 +87,8 @@ export default function App() {
         <Suspense fallback={<div className="mx-auto max-w-[1480px] px-5 py-10"><Loader text="页面加载中" /></div>}>
           <Routes>
             <Route element={<AppShell />}>
-              <Route index element={<Navigate to="/short-term" replace />} />
+              <Route index element={<Navigate to="/limit-up" replace />} />
+              <Route path="limit-up" element={<LimitUpPage />} />
               <Route path="market" element={<MarketScanPage />} />
               <Route path="short-term" element={<ShortTermPage />} />
               <Route path="potential-leader" element={<FiveDayPage />} />
@@ -99,7 +101,7 @@ export default function App() {
               <Route path="trade-review" element={<TradeReviewPage />} />
               <Route path="rules" element={<RulesPage />} />
               <Route path="settings" element={<SettingsPage />} />
-              <Route path="*" element={<Navigate to="/short-term" replace />} />
+              <Route path="*" element={<Navigate to="/limit-up" replace />} />
             </Route>
           </Routes>
         </Suspense>

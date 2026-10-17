@@ -9,7 +9,6 @@ import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOverlay'
 import { Loader } from '../components/ui/Loader'
-import { LimitUpBoardPanel } from '../components/shortterm/LimitUpBoardPanel'
 import { DailyShortTermPanel } from '../components/shortterm/DailyShortTermPanel'
 import { UpperShadowCandidateDetail, UpperShadowCandidateRow } from '../components/shortterm/UpperShadowCandidateView'
 import { IndustryLeaderOverlay, type IndustryLeaderSelection } from '../components/shortterm/IndustryLeaderOverlay'
@@ -169,7 +168,6 @@ export function ShortTermPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <LimitUpBoardPanel />
       <Card
         title={
           <span className="inline-flex items-center gap-2">

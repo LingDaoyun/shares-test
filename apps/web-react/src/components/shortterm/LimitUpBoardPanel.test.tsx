@@ -2,7 +2,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermMarketBreadth } from '../../types'
-import { LimitUpBoardDetail, LimitUpBoardEntry } from './LimitUpBoardPanel'
+import { LimitUpBoardDetail } from './LimitUpBoardPanel'
 
 const snapshot: ShortTermLimitUpBoardSnapshot = {
   tradeDate: '2026-08-21',
@@ -95,12 +95,10 @@ const breadth: ShortTermMarketBreadth = {
   totalCount: 5560, source: '东方财富行情'
 }
 
-describe.each(['entry', 'detail'] as const)('Market breadth timing in %s', (view) => {
+describe('Market breadth timing', () => {
   function renderBreadth(value: ShortTermMarketBreadth) {
     const props = { snapshot, breadth: value, loading: false, error: null, onRefresh: () => undefined }
-    return renderToStaticMarkup(view === 'entry'
-      ? <LimitUpBoardEntry {...props} onOpen={() => undefined} />
-      : <LimitUpBoardDetail {...props} />)
+    return renderToStaticMarkup(<LimitUpBoardDetail {...props} />)
   }
 
   it('shows the quote timestamp range separately from the fetch time and labels missing timestamps', () => {
@@ -127,77 +125,6 @@ describe.each(['entry', 'detail'] as const)('Market breadth timing in %s', (view
     expect(html).toContain('源时间 2026-08-21 15:00:00')
     expect(html).not.toContain(' 至 ')
     expect(html).not.toContain('只缺少源时间')
-  })
-})
-
-describe('LimitUpBoardEntry', () => {
-  it('renders a one-line summary without the full tables', () => {
-    const html = renderToStaticMarkup(
-      <LimitUpBoardEntry
-        snapshot={snapshot}
-        loading={false}
-        error={null}
-        onRefresh={() => undefined}
-        onOpen={() => undefined}
-      />
-    )
-
-    expect(html).toContain('涨停看板')
-    expect(html).toContain('情绪冰点')
-    expect(html).toContain('涨停 2 家')
-    expect(html).toContain('跌停 0 家')
-    expect(html).toContain('炸板率')
-    expect(html).toContain('33.33%')
-    expect(html).toContain('最高 2 连板')
-    expect(html).toContain('量能 显著缩量 -10.18%')
-    expect(html).toContain('2026-08-21')
-    expect(html).toContain('查看看板')
-    expect(html).not.toContain('行业聚合')
-    expect(html).not.toContain('涨停明细')
-  })
-
-  it('renders the unavailable reason inline instead of blocking the page', () => {
-    const html = renderToStaticMarkup(
-      <LimitUpBoardEntry
-        snapshot={{
-          tradeDate: '2026-08-16',
-          fetchedAt: '2026-08-16T01:00:00Z',
-          available: false,
-          unavailableReason: '当日涨停池为空（可能是非交易日、盘前或数据源尚未生成）',
-          stocks: [],
-          brokenBoardAvailable: false,
-          brokenStocks: [],
-          industryStats: [],
-          sentiment: null,
-          marketTurnover: null,
-          dataGaps: []
-        }}
-        loading={false}
-        error={null}
-        onRefresh={() => undefined}
-        onOpen={() => undefined}
-      />
-    )
-
-    expect(html).toContain('当日涨停池为空')
-    // 涨跌统计独立于涨停池，仍允许打开详情查看统计或错误原因。
-    expect(html).toContain('查看看板')
-    expect(html).not.toContain('<button disabled=""')
-  })
-
-  it('surfaces fetch failures inline with a retry entry', () => {
-    const html = renderToStaticMarkup(
-      <LimitUpBoardEntry
-        snapshot={null}
-        loading={false}
-        error="接口超时"
-        onRefresh={() => undefined}
-        onOpen={() => undefined}
-      />
-    )
-
-    expect(html).toContain('获取失败：接口超时')
-    expect(html).toContain('刷新')
   })
 })
 
@@ -229,7 +156,7 @@ describe('LimitUpBoardDetail', () => {
     ]
     groups.forEach((group, index) => {
       const expected = expectedGroups[index]
-      expect(group.getAttribute('aria-label')).toBe(`查看${expected.industry}涨停及上涨股票`)
+      expect(group.getAttribute('aria-label')).toBe(`查看${expected.industry}涨停明细`)
       expect(group.textContent).toContain(`涨停 ${expected.count} 家`)
       const positions = expected.rows.map(name => group.textContent!.indexOf(name))
       expect(positions.every(position => position >= 0)).toBe(true)
@@ -250,7 +177,7 @@ describe('LimitUpBoardDetail', () => {
     )
     const cards = Array.from(container.querySelectorAll('section[aria-label="涨停行业卡片"] button'))
     expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(
-      stocks.map(stock => `查看${stock.industry}涨停及上涨股票`)
+      stocks.map(stock => `查看${stock.industry}涨停明细`)
     )
   })
 
@@ -272,11 +199,6 @@ describe('LimitUpBoardDetail', () => {
     const missingMetrics = missing.match(/<dl[^>]*>([\s\S]*?)<\/dl>/)?.[1]
     expect(missingMetrics).toContain('跌停')
     expect(missingMetrics).toContain('待补充')
-    const entry = renderToStaticMarkup(
-      <LimitUpBoardEntry snapshot={missingSnapshot} loading={false} error={null} onRefresh={() => undefined} onOpen={() => undefined} />
-    )
-    expect(entry).toContain('跌停 待补充')
-    expect(entry).not.toContain('跌停 0 家')
   })
 
   it('renders the board metrics and industry previews inside the overlay body', () => {
