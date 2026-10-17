@@ -50,7 +50,8 @@ export function policyEvidence(theme: PolicyTheme, now = new Date()) {
   }).sort((a, b) => {
     const first = publication(a.publishedAt)
     const second = publication(b.publishedAt)
-    return (second.day ?? '').localeCompare(first.day ?? '') || (second.instant ?? 0) - (first.instant ?? 0)
+    return (b.sourceInfo?.authorityRank ?? 0) - (a.sourceInfo?.authorityRank ?? 0)
+      || (second.day ?? '').localeCompare(first.day ?? '') || (second.instant ?? 0) - (first.instant ?? 0)
   })
   const recent = (days: number) => eligible.filter(signal => { const age = dayAge(signal); return age !== null && age <= days }).length
   return {

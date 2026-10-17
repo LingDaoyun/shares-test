@@ -38,6 +38,29 @@ describe('daily policy research board', () => {
   })
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT })
   async function render() { await act(async () => { root.render(<PolicyIndustryPage />) }) }
+  it('shows source authority prominently and keeps a local repost distinct from its claimed origin', async () => {
+    const signals = [{ ...theme.signals[0], source: '工信部规划解读', url: 'https://www.miit.gov.cn/article',
+      sourceInfo: { publisher: '工业和信息化部', authorityTier: 'CENTRAL_DEPARTMENT', authorityLabel: '中央部门官网', authorityRank: 95, siteHost: 'www.miit.gov.cn', attributedSource: '电子信息司' } },
+    { ...theme.signals[0], summary: '地方转载算力规划', source: '湖北省经信厅', url: 'https://jxt.hubei.gov.cn/article',
+      sourceInfo: { publisher: 'jxt.hubei.gov.cn', authorityTier: 'LOCAL_GOVERNMENT', authorityLabel: '地方政府官网', authorityRank: 80, siteHost: 'jxt.hubei.gov.cn', attributedSource: '工信微报' } }]
+    vi.mocked(fetchPolicyDaily).mockResolvedValue({ ...daily, themes: [{ ...theme, signals }] })
+    await render()
+    expect(host.querySelector('article')?.textContent).toContain('中央部门官网')
+    expect(host.querySelector('article')?.textContent).toContain('工业和信息化部')
+    await detail(); await click('政策与新闻')
+    const article = document.querySelector('a[href="https://jxt.hubei.gov.cn/article"]')?.closest('article')
+    expect(article?.textContent).toContain('地方政府官网')
+    expect(article?.textContent).toContain('网页标注来源：工信微报')
+    expect(article?.textContent).not.toContain('中央部门官网')
+  })
+
+  it('retains unclassified policy links without pretending they are completed industry reviews', async () => {
+    vi.mocked(fetchPolicyDaily).mockResolvedValue({ ...daily, unclassifiedSignals: [{ ...theme.signals[0], summary: '尚未归类的政策', url: 'https://www.gov.cn/unclassified' }] })
+    await render()
+    expect(host.textContent).toContain('待归类政策 · 1 条')
+    expect(host.querySelector('a[href="https://www.gov.cn/unclassified"]')?.textContent).toContain('尚未归类的政策')
+    expect(reviewPolicyTheme).not.toHaveBeenCalled()
+  })
   async function click(text: string) {
     const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === text || item.getAttribute('aria-label') === text)
     expect(button).toBeDefined(); expect(button!.disabled).toBe(false)

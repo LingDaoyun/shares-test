@@ -1,5 +1,7 @@
 package com.aistock.research.policy;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -10,7 +12,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.Executor;
@@ -307,6 +313,164 @@ class PolicyDailyServiceTest {
         for (int index = 9; index >= 2; index--) order.verify(reviews).review(same(collected.get(index)));
         verify(themes, times(1)).listThemesWithStatus();
         verify(reviews, times(8)).review(any(PolicyTheme.class));
+    }
+
+    @Test
+    void reviewsEveryThemeAcrossRepeatedRunsEvenWhenThereAreMoreThanTwoBudgets() {
+        List<PolicyTheme> collected = IntStream.range(0, 20)
+                .mapToObj(index -> theme("T" + index, "2026-10-16", 100 - index)).toList();
+        when(themes.listThemesWithStatus()).thenReturn(new PolicyThemeCollection(collected, List.of()));
+        Map<String, List<PolicyAiReview>> savedHistory = new HashMap<>();
+        when(reviews.history(anyString())).thenAnswer(call -> savedHistory.getOrDefault(call.getArgument(0), List.of()));
+        when(reviews.review(any(PolicyTheme.class))).thenAnswer(call -> {
+            PolicyTheme theme = call.getArgument(0);
+            PolicyAiReview result = successfulReview();
+            savedHistory.computeIfAbsent(theme.themeCode(), ignored -> new ArrayList<>()).add(result);
+            return result;
+        });
+        var covered = new HashSet<String>();
+        for (int round = 0; round < 6; round++) {
+            clock.set("2026-10-" + (17 + round) + "T01:00:00Z");
+            service.refresh();
+            executor.runNext();
+            assertThat(service.current().reviewedThemeCodes()).hasSize(8);
+            covered.addAll(service.current().reviewedThemeCodes());
+            if (round == 2) assertThat(covered).hasSize(20);
+        }
+        assertThat(savedHistory.values()).allSatisfy(history -> assertThat(history).hasSizeGreaterThanOrEqualTo(2));
+        verify(reviews, times(48)).review(any(PolicyTheme.class));
+    }
+
+    @Test
+    void prioritizesNeverReviewedThenOldestSuccessfulIncludingManualReviewHistory() {
+        service = new PolicyDailyService(themes, reviews, repository, clock, executor, 2);
+        when(themes.listThemesWithStatus()).thenReturn(collection(
+                theme("MANUAL", "2026-10-16", 99), theme("OLDEST", "2026-10-16", 90),
+                theme("NEVER", "2026-10-16", 40)));
+        clock.set("2026-10-10T01:00:00Z");
+        PolicyAiReview oldest = successfulReview();
+        clock.set("2026-10-16T01:00:00Z");
+        PolicyAiReview manual = successfulReview();
+        when(reviews.history("OLDEST")).thenReturn(List.of(oldest));
+        when(reviews.history("MANUAL")).thenReturn(List.of(oldest, manual));
+        clock.set("2026-10-17T01:00:00Z");
+
+        service.refresh();
+        executor.runNext();
+
+        assertThat(service.current().reviewedThemeCodes()).containsExactly("NEVER", "OLDEST");
+        verify(reviews, never()).review(argThat((PolicyTheme theme) -> "MANUAL".equals(theme.themeCode())));
+    }
+
+    @Test
+    void unsuccessfulReviewsRemainPendingAndDoNotDisplaceTheirOlderSuccessfulHistory() {
+        service = new PolicyDailyService(themes, reviews, repository, clock, executor, 1);
+        PolicyTheme pending = theme("PENDING", "2026-10-16", 40);
+        when(themes.listThemesWithStatus()).thenReturn(collection(theme("REVIEWED", "2026-10-16", 99), pending));
+        PolicyAiReview reviewed = successfulReview();
+        when(reviews.history("REVIEWED")).thenReturn(List.of(reviewed));
+        PolicyAiReview invalid = mock(PolicyAiReview.class);
+        when(invalid.reviewedAt()).thenReturn(clock.instant());
+        when(reviews.history("PENDING")).thenReturn(List.of(invalid, PolicyAiReview.unavailable("PENDING", "待复核", "失败")));
+        when(reviews.review(pending)).thenReturn(PolicyAiReview.unavailable("PENDING", "待复核", "失败"));
+
+        for (int round = 0; round < 2; round++) {
+            service.refresh();
+            executor.runNext();
+            assertThat(service.current().reviewedThemeCodes()).isEmpty();
+            assertThat(service.current().dataGaps()).anyMatch(gap -> gap.contains("未完成"));
+        }
+        verify(reviews, times(2)).review(pending);
+    }
+
+    @Test
+    void historyFailureFallsBackToStrengthForTheWholeRunAndReportsTheGap() {
+        service = new PolicyDailyService(themes, reviews, repository, clock, executor, 1);
+        when(themes.listThemesWithStatus()).thenReturn(collection(
+                theme("HIGH", "2026-10-16", 99), theme("UNKNOWN_HISTORY", "2026-10-16", 40)));
+        PolicyAiReview reviewed = successfulReview();
+        when(reviews.history("HIGH")).thenReturn(List.of(reviewed));
+        when(reviews.history("UNKNOWN_HISTORY")).thenThrow(new IllegalStateException("private upstream details"));
+
+        service.refresh();
+        executor.runNext();
+
+        assertThat(service.current().reviewedThemeCodes()).containsExactly("HIGH");
+        assertThat(service.current().dataGaps()).anyMatch(gap -> gap.contains("历史") && gap.contains("排序"));
+        assertThat(service.current().dataGaps()).noneMatch(gap -> gap.contains("private"));
+    }
+
+    @Test
+    void oldJsonAndLegacyConstructorsExposeAnEmptyUnclassifiedList() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        PolicyDailySnapshot oldSnapshot = mapper.readValue("""
+                {"status":"READY","themes":[],"reviewedThemeCodes":[],"dataGaps":[]}
+                """, PolicyDailySnapshot.class);
+        JsonNode snapshotJson = mapper.valueToTree(oldSnapshot);
+        assertThat(snapshotJson.path("unclassifiedSignals").isArray()).isTrue();
+        assertThat(snapshotJson.path("unclassifiedSignals")).isEmpty();
+        JsonNode legacySnapshot = mapper.valueToTree(PolicyDailySnapshot.idle());
+        assertThat(legacySnapshot.path("unclassifiedSignals").isArray()).isTrue();
+        JsonNode legacyCollection = mapper.valueToTree(collection());
+        assertThat(legacyCollection.path("unclassifiedSignals").isArray()).isTrue();
+        PolicyThemeCollection oldCollection = mapper.readValue("{\"themes\":[],\"dataGaps\":[]}", PolicyThemeCollection.class);
+        JsonNode collectionJson = mapper.valueToTree(oldCollection);
+        assertThat(collectionJson.path("unclassifiedSignals").isArray()).isTrue();
+    }
+
+    @Test
+    void persistsUnclassifiedEvidenceThroughProgressCompletionRestartAndFailure() throws Exception {
+        PolicySignal signal = new PolicySignal("政府网", "待归类", "文化遗产保护规划", 80,
+                "https://www.gov.cn/unclassified", null);
+        when(themes.listThemesWithStatus()).thenReturn(new PolicyThemeCollection(
+                List.of(theme("A", "2026-10-16", 80)), List.of(), List.of(signal)));
+        service.refresh();
+        executor.runNext();
+
+        assertThat(service.current().unclassifiedSignals()).containsExactly(signal);
+        var states = org.mockito.ArgumentCaptor.forClass(PolicyDailyState.class);
+        verify(repository, atLeast(3)).save(states.capture());
+        assertThat(states.getAllValues()).filteredOn(state -> !state.snapshot().themes().isEmpty())
+                .allSatisfy(state -> assertThat(state.snapshot().unclassifiedSignals()).containsExactly(signal));
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        PolicyDailySnapshot decoded = mapper.readValue(mapper.writeValueAsString(service.current()), PolicyDailySnapshot.class);
+        assertThat(decoded.unclassifiedSignals()).containsExactly(signal);
+        when(repository.load()).thenReturn(Optional.of(states.getValue()));
+        PolicyDailyService restarted = new PolicyDailyService(themes, reviews, repository, clock, executor, 8);
+        assertThat(restarted.current().unclassifiedSignals()).containsExactly(signal);
+
+        when(themes.listThemesWithStatus()).thenThrow(new IllegalStateException("collection unavailable"));
+        assertThat(restarted.refresh().unclassifiedSignals()).containsExactly(signal);
+        executor.runNext();
+        assertThat(restarted.current().status()).isEqualTo("FAILED");
+        assertThat(restarted.current().unclassifiedSignals()).containsExactly(signal);
+
+        when(repository.load()).thenReturn(Optional.of(new PolicyDailyState(new PolicyDailySnapshot("RUNNING",
+                PolicyDailySnapshot.SCHEDULED_TIME, clock.instant(), null, List.of(), List.of(), List.of(), List.of(signal)),
+                null, null)));
+        PolicyDailyService interrupted = new PolicyDailyService(themes, reviews, repository, clock, executor, 8);
+        assertThat(interrupted.current().status()).isEqualTo("FAILED");
+        assertThat(interrupted.current().unclassifiedSignals()).containsExactly(signal);
+    }
+
+    @Test
+    void publishesOnlyUnclassifiedEvidenceWithoutCallingAnLlmAndPreservesItOnAnEmptyRun() {
+        PolicySignal signal = new PolicySignal("政府网", "待归类", "尚未归入产业的政策", 80,
+                "https://www.gov.cn/unclassified", "2025-01-01");
+        when(themes.listThemesWithStatus()).thenReturn(new PolicyThemeCollection(List.of(), List.of(), List.of(signal)));
+        service.refresh();
+        executor.runNext();
+
+        assertThat(service.current().unclassifiedSignals()).containsExactly(signal);
+        assertThat(service.current().dataGaps()).noneMatch(gap -> gap.contains("未采集到"));
+        assertThat(service.current().unclassifiedSignals().get(0).publishedAt()).isEqualTo("2025-01-01");
+        verifyNoInteractions(reviews);
+
+        when(themes.listThemesWithStatus()).thenReturn(collection());
+        service.refresh();
+        executor.runNext();
+        assertThat(service.current().status()).isEqualTo("FAILED");
+        assertThat(service.current().unclassifiedSignals()).containsExactly(signal);
     }
 
     @Test

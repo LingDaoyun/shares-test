@@ -261,6 +261,16 @@ export interface PolicySignal {
   publishedAt: string | null
   excerpt?: string | null
   planningBaseline?: boolean
+  sourceInfo?: PolicySourceInfo | null
+}
+
+export interface PolicySourceInfo {
+  publisher: string
+  authorityTier: string
+  authorityLabel: string
+  authorityRank: number
+  siteHost: string
+  attributedSource: string | null
 }
 
 export interface PolicyTheme {
@@ -323,6 +333,7 @@ export interface PolicyDailySnapshot {
   themes: PolicyTheme[]
   reviewedThemeCodes: string[]
   dataGaps: string[]
+  unclassifiedSignals?: PolicySignal[]
 }
 
 export interface PolicyCompanyCandidate {

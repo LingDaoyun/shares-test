@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class PolicyAiReviewService {
     private static final long CACHE_SECONDS = 1800;
-    private static final String PROMPT_VERSION = "policy-trend-v3-passages";
+    private static final String PROMPT_VERSION = "policy-trend-v4-provenance";
     private static final String STORAGE_FAILURE_GAP = "本次研判未保存到历史，数据库暂时不可用。";
     private static final List<String> TREND_TEXT = List.of("thesis", "policy_increment", "market_confirmation");
     private static final List<String> TREND_LISTS = List.of("benefit_chain", "short_term_catalysts",
@@ -154,6 +154,8 @@ public class PolicyAiReviewService {
                 + "正文片段并非全文，需注意上下文、适用范围和实施条件；规则标签不是独立Agent事实验证。"
                 + "planning_baseline为长期规划背景；按来源发布日期解读，旧规划不能当作今日新催化，远期目标不能当作近期兑现。"
                 + "published_at是来源网页的发布日期，转载日期不等于文件印发日；正文片段可能来自删减转载，不可称为已核验完整原文。"
+                + "source_info标明发布网站及按域名识别的来源级别；attributedSource仅为网页自称来源，不证明原始发文机关。"
+                + "优先参考中央政府及部门官网，但来源级别不等于具体条款已落地。背景提及、历史回顾和应用场景不能推断为该产业新增扶持措施。"
                 + "仅依据输入材料，所有趋势、受益链和催化均为有条件的AI推演，不是已核实事实。"
                 + "没有新增政策与历史政策对照时，不得断言超预期，policy_increment必须说明增量待核实。"
                 + "未提供板块量价序列，不得声称资金流入、行情确认或价格已经突破；列出需要观察的价格、成交与持续性条件。"
@@ -295,6 +297,7 @@ public class PolicyAiReviewService {
             item.put("summary", signal.summary()); item.put("confidence", signal.confidence());
             item.put("published_at", signal.publishedAt()); item.put("url", signal.url());
             item.put("excerpt", signal.excerpt()); item.put("planning_baseline", signal.planningBaseline());
+            item.put("source_info", signal.sourceInfo() == null ? PolicySourceInfo.from(signal.url(), null) : signal.sourceInfo());
             return item;
         }).sorted(Comparator.comparing(this::serialize)).toList());
         payload.put("company_pool", candidates(theme).stream().map(company -> {

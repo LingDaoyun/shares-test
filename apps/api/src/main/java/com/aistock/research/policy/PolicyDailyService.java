@@ -21,7 +21,10 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -79,7 +82,8 @@ public class PolicyDailyService {
             List<String> gaps = new ArrayList<>(previous.dataGaps());
             gaps.add("上次每日任务因应用重启中断（" + displayNow() + " 北京时间），可手动刷新重试。");
             persist(new PolicyDailyState(new PolicyDailySnapshot("FAILED", PolicyDailySnapshot.SCHEDULED_TIME,
-                    previous.startedAt(), clock.instant(), previous.themes(), previous.reviewedThemeCodes(), gaps),
+                    previous.startedAt(), clock.instant(), previous.themes(), previous.reviewedThemeCodes(), gaps,
+                    previous.unclassifiedSignals()),
                     state.lastAutomaticAttemptDate(), state.lastSuccessfulDate()));
         }
     }
@@ -112,9 +116,10 @@ public class PolicyDailyService {
         Instant startedAt = clock.instant();
         LocalDate runDate = startedAt.atZone(SHANGHAI).toLocalDate();
         List<String> runningGaps = new ArrayList<>(previous.dataGaps());
-        if (!previous.themes().isEmpty()) runningGaps.add("每日采集与研判进行中，当前仍展示上次保存的主题与研判覆盖。");
+        if (!previous.themes().isEmpty() || !previous.unclassifiedSignals().isEmpty())
+            runningGaps.add("每日采集与研判进行中，当前仍展示上次保存的主题、政策线索与研判覆盖。");
         PolicyDailySnapshot running = new PolicyDailySnapshot("RUNNING", PolicyDailySnapshot.SCHEDULED_TIME,
-                startedAt, null, previous.themes(), previous.reviewedThemeCodes(), runningGaps);
+                startedAt, null, previous.themes(), previous.reviewedThemeCodes(), runningGaps, previous.unclassifiedSignals());
         PolicyDailyState next = new PolicyDailyState(running,
                 automatic ? runDate : state.lastAutomaticAttemptDate(), state.lastSuccessfulDate());
         try {
@@ -132,26 +137,25 @@ public class PolicyDailyService {
         try {
             PolicyThemeCollection collection = themeService.listThemesWithStatus();
             List<PolicyTheme> collected = collection.themes();
-            boolean hasEvidence = collected.stream().anyMatch(this::hasEvidence);
-            if (!hasEvidence && previous.themes().stream().anyMatch(this::hasEvidence)) {
-                fail(previous, startedAt, "本次采集没有可核验的政策信号，已保留上次主题");
+            List<PolicySignal> unclassified = collection.unclassifiedSignals();
+            boolean hasEvidence = collected.stream().anyMatch(this::hasEvidence) || unclassified.stream().anyMatch(this::realSignal);
+            if (!hasEvidence && (previous.themes().stream().anyMatch(this::hasEvidence)
+                    || previous.unclassifiedSignals().stream().anyMatch(this::realSignal))) {
+                fail(previous, startedAt, "本次采集没有可核验的政策信号，已保留上次主题与政策线索");
                 return;
             }
             List<String> gaps = new ArrayList<>(collection.dataGaps());
             List<String> reviewed = new ArrayList<>();
             List<PolicyTheme> eligible = collected.stream()
                     .filter(theme -> signals(theme).stream().anyMatch(signal -> eligibleSignal(signal, runDate)))
-                    .sorted(Comparator.comparing((PolicyTheme theme) -> theme.strengthScore() == null ? BigDecimal.ZERO : theme.strengthScore())
-                            .reversed().thenComparing(theme -> newestDate(theme, runDate), Comparator.reverseOrder())
-                            .thenComparing(PolicyTheme::themeCode))
                     .toList();
             if (!hasEvidence) gaps.add("本次未采集到可核验的政策标题与原文链接，未调用 AI 研判。");
             int skipped = collected.size() - eligible.size();
             if (skipped > 0) gaps.add(skipped + " 个主题没有长期规划正文、近90天或日期待核验的有效信号，未进入每日研判。");
             if (eligible.size() > maxReviewThemes) gaps.add("每日 AI 预算最多 " + maxReviewThemes + " 个主题，另有 "
                     + (eligible.size() - maxReviewThemes) + " 个有证据主题未研判，可单独复核。");
-            List<PolicyTheme> planned = eligible.stream().limit(maxReviewThemes).toList();
-            publishProgress(collected, reviewed, gaps, startedAt, 0, planned.size());
+            List<PolicyTheme> planned = prioritizeReviews(eligible, runDate, gaps).stream().limit(maxReviewThemes).toList();
+            publishProgress(collected, unclassified, reviewed, gaps, startedAt, 0, planned.size());
             int processed = 0;
             for (PolicyTheme theme : planned) {
                 if (signals(theme).stream().anyMatch(signal -> eligibleSignal(signal, runDate) && signalDate(signal) == null)) {
@@ -170,10 +174,10 @@ public class PolicyDailyService {
                     gaps.add(theme.name() + "：AI 研判失败，可稍后单独复核。");
                     log.warn("Daily policy review failed for {} ({})", theme.themeCode(), exception.getClass().getSimpleName());
                 }
-                publishProgress(collected, reviewed, gaps, startedAt, ++processed, planned.size());
+                publishProgress(collected, unclassified, reviewed, gaps, startedAt, ++processed, planned.size());
             }
             PolicyDailySnapshot result = new PolicyDailySnapshot(gaps.isEmpty() ? "READY" : "PARTIAL",
-                    PolicyDailySnapshot.SCHEDULED_TIME, startedAt, clock.instant(), collected, reviewed, gaps);
+                    PolicyDailySnapshot.SCHEDULED_TIME, startedAt, clock.instant(), collected, reviewed, gaps, unclassified);
             synchronized (this) {
                 persist(new PolicyDailyState(result, state.lastAutomaticAttemptDate(),
                         hasEvidence ? runDate : state.lastSuccessfulDate()));
@@ -184,13 +188,39 @@ public class PolicyDailyService {
         }
     }
 
-    private synchronized void publishProgress(List<PolicyTheme> collected, List<String> reviewed,
+    private List<PolicyTheme> prioritizeReviews(List<PolicyTheme> eligible, LocalDate runDate, List<String> gaps) {
+        Comparator<PolicyTheme> evidenceOrder = Comparator.comparing((PolicyTheme theme) ->
+                        theme.strengthScore() == null ? BigDecimal.ZERO : theme.strengthScore())
+                .reversed().thenComparing(theme -> newestDate(theme, runDate), Comparator.reverseOrder())
+                .thenComparing(PolicyTheme::themeCode);
+        Map<String, Instant> lastReviewed = new HashMap<>();
+        for (PolicyTheme theme : eligible) {
+            try {
+                List<PolicyAiReview> history = reviewService.history(theme.themeCode());
+                if (history == null) continue;
+                history.stream().filter(Objects::nonNull)
+                        .filter(review -> review.reviewedAt() != null && review.trendPlan() != null
+                                && !review.reviewedAt().isAfter(clock.instant()))
+                        .map(PolicyAiReview::reviewedAt).max(Comparator.naturalOrder())
+                        .ifPresent(time -> lastReviewed.put(theme.themeCode(), time));
+            } catch (RuntimeException exception) {
+                // An unreadable history is not evidence that a theme has never been reviewed.
+                gaps.add("部分成功研判历史读取失败，本轮按政策强度与日期排序；已保存历史仍保留。");
+                log.warn("Daily policy history unavailable for {} ({})", theme.themeCode(), exception.getClass().getSimpleName());
+                return eligible.stream().sorted(evidenceOrder).toList();
+            }
+        }
+        return eligible.stream().sorted(Comparator.comparing((PolicyTheme theme) -> lastReviewed.get(theme.themeCode()),
+                Comparator.nullsFirst(Comparator.naturalOrder())).thenComparing(evidenceOrder)).toList();
+    }
+
+    private synchronized void publishProgress(List<PolicyTheme> collected, List<PolicySignal> unclassified, List<String> reviewed,
                                               List<String> gaps, Instant startedAt, int processed, int planned) {
         List<String> progressGaps = new ArrayList<>(gaps);
         progressGaps.add("政策采集已完成；AI 研判进度 " + processed + "/" + planned
                 + "，其中 " + reviewed.size() + " 个主题已完成有效研判。");
         PolicyDailySnapshot progress = new PolicyDailySnapshot("RUNNING", PolicyDailySnapshot.SCHEDULED_TIME,
-                startedAt, null, collected, reviewed, progressGaps);
+                startedAt, null, collected, reviewed, progressGaps, unclassified);
         persist(new PolicyDailyState(progress, state.lastAutomaticAttemptDate(), state.lastSuccessfulDate()));
     }
 
@@ -198,14 +228,14 @@ public class PolicyDailyService {
         List<String> gaps = new ArrayList<>(previous.dataGaps());
         gaps.add(reason + "（" + displayNow() + " 北京时间）；可手动刷新重试。");
         PolicyDailyState failed = new PolicyDailyState(new PolicyDailySnapshot("FAILED", PolicyDailySnapshot.SCHEDULED_TIME,
-                startedAt, clock.instant(), previous.themes(), previous.reviewedThemeCodes(), gaps),
+                startedAt, clock.instant(), previous.themes(), previous.reviewedThemeCodes(), gaps, previous.unclassifiedSignals()),
                 state.lastAutomaticAttemptDate(), state.lastSuccessfulDate());
         try {
             persist(failed);
         } catch (RuntimeException exception) {
             gaps.add("失败状态暂未写入数据库，应用重启后将恢复最后一次已保存快照。");
             state = new PolicyDailyState(new PolicyDailySnapshot("FAILED", PolicyDailySnapshot.SCHEDULED_TIME,
-                    startedAt, clock.instant(), previous.themes(), previous.reviewedThemeCodes(), gaps),
+                    startedAt, clock.instant(), previous.themes(), previous.reviewedThemeCodes(), gaps, previous.unclassifiedSignals()),
                     state.lastAutomaticAttemptDate(), state.lastSuccessfulDate());
             log.warn("Could not persist daily policy failure ({})", exception.getClass().getSimpleName());
         }

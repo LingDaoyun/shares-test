@@ -2,6 +2,7 @@ package com.aistock.research.integration.gov;
 
 import com.aistock.research.configuration.PolicySourceConfig;
 import com.aistock.research.configuration.RuntimeConfigStore;
+import com.aistock.research.policy.PolicySourceInfo;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jsoup.Jsoup;
@@ -9,6 +10,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
@@ -20,9 +22,13 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.time.Clock;
+import java.time.ZoneId;
+import java.time.YearMonth;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -36,8 +42,9 @@ import java.util.regex.Pattern;
 public class GovPolicyClient {
 
     private static final Logger logger = LoggerFactory.getLogger(GovPolicyClient.class);
+    private static final ZoneId POLICY_ZONE = ZoneId.of("Asia/Shanghai");
     private static final Pattern DATE_PATTERN = Pattern.compile("(20\\d{2})[-年./](\\d{1,2})[-月./](\\d{1,2})");
-    private static final int MAX_BODY_CHARS = 40_000;
+    private static final Pattern URL_MONTH_PATTERN = Pattern.compile("/(20\\d{2})[-/]?(0[1-9]|1[0-2])(?:[-/]?([0-2]\\d|3[01]))?(?:/|_)");
     private static final List<String> ARTICLE_SELECTORS = List.of(".TRS_Editor", ".view.TRS_UEDITOR", ".TRS_UEDITOR", "#UCAP-CONTENT", "#con_con", "#zoom",
             "#zoomcon", ".pages_content", "#article-content", ".article-content", ".article_content",
             ".content-article", ".xxgk_content", ".bt_content", "article");
@@ -45,15 +52,22 @@ public class GovPolicyClient {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final RuntimeConfigStore runtimeConfigStore;
+    private final Clock clock;
 
+    @Autowired
     public GovPolicyClient(
             RestClient restClient,
             ObjectMapper objectMapper,
             RuntimeConfigStore runtimeConfigStore
     ) {
+        this(restClient, objectMapper, runtimeConfigStore, Clock.system(POLICY_ZONE));
+    }
+
+    GovPolicyClient(RestClient restClient, ObjectMapper objectMapper, RuntimeConfigStore runtimeConfigStore, Clock clock) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
         this.runtimeConfigStore = runtimeConfigStore;
+        this.clock = clock;
     }
 
     public List<GovPolicyItem> fetchLatestPolicies(int limit) {
@@ -69,7 +83,7 @@ public class GovPolicyClient {
         List<String> failedSources = new ArrayList<>();
         PageCache pages = new PageCache();
         List<PolicySourceConfig> sources = List.copyOf(runtimeConfigStore.readPolicySources());
-        int perSourceLimit = Math.max(8, (int) Math.ceil(limit / (double) Math.max(sources.size(), 1)));
+        int perSourceLimit = Math.max(40, limit);
         for (PolicySourceConfig source : sources) {
             try {
                 List<GovPolicyItem> fetched = fetchFromSource(source, perSourceLimit, pages);
@@ -98,12 +112,12 @@ public class GovPolicyClient {
         if (isDocumentSource(source.type())) {
             GovPolicyItem item = parseDocument(source, body, null, null);
             if (item == null) throw new IllegalStateException("No reliable article body");
-            return List.of(item);
+            return isRecentCandidate(item) ? List.of(item) : List.of();
         }
         if ("json".equalsIgnoreCase(source.type()) || source.url().endsWith(".json")) {
-            return parseJsonSource(source, body, limit);
+            return recentCandidates(parseJsonSource(source, body), limit);
         }
-        return parseHtmlSource(source, body, limit);
+        return recentCandidates(parseHtmlSource(source, body), limit);
     }
 
     private boolean isDocumentSource(String type) {
@@ -143,24 +157,30 @@ public class GovPolicyClient {
 
     private List<GovPolicyItem> enrichPlanningBodies(List<GovPolicyItem> selected, PageCache pages, List<String> gaps) {
         List<GovPolicyItem> result = new ArrayList<>();
-        int attempts = 0;
+        Set<GovPolicyItem> bodyCandidates = new HashSet<>(selected.stream()
+                .filter(item -> item.bodyText() == null && !isDocumentSource(item.sourceType()) && item.title().contains("规划"))
+                .sorted(Comparator.comparingInt((GovPolicyItem item) -> PolicySourceInfo.from(item.url(), null).authorityRank()).reversed()
+                        .thenComparing(Comparator.comparingInt((GovPolicyItem item) ->
+                                Math.min(item.sourceWeight(), PolicySourceInfo.from(item.url(), null).authorityRank())).reversed())
+                        .thenComparing(candidateOrder()))
+                .limit(4).toList());
         boolean capped = false;
         for (GovPolicyItem item : selected) {
             if (item.bodyText() != null || isDocumentSource(item.sourceType()) || !item.title().contains("规划")) {
                 result.add(item);
                 continue;
             }
-            if (attempts >= 4) {
+            if (!bodyCandidates.contains(item)) {
                 capped = true;
                 result.add(item);
                 continue;
             }
-            attempts++;
             try {
                 GovPolicyItem enriched = parseDocument(new PolicySourceConfig(item.source(), item.sourceType(), item.url(), item.sourceWeight()),
                         fetchBody(item.url(), pages), item.title(), item.publishedAt());
                 if (enriched == null) throw new IllegalStateException("No reliable article body");
-                result.add(enriched);
+                // A verified article date supersedes list metadata; an old article is not a new catalyst.
+                if (isRecentCandidate(enriched)) result.add(enriched);
             } catch (Exception exception) {
                 result.add(item);
                 gaps.add(item.source() + "：规划正文未补全，已保留标题线索。");
@@ -184,7 +204,8 @@ public class GovPolicyClient {
         if (title == null || title.isBlank()) return null;
         String published = publicationDate(document);
         return new GovPolicyItem(source.name(), source.type(), title, source.url(),
-                published == null ? fallbackDate : published, sourceWeight(source), text, "plan".equalsIgnoreCase(source.type()));
+                published == null ? fallbackDate : published, sourceWeight(source), text, "plan".equalsIgnoreCase(source.type()),
+                attributedSource(document));
     }
 
     private String articleText(Document document) {
@@ -198,10 +219,7 @@ public class GovPolicyClient {
             String text = content.wholeText().replace('\u00a0', ' ').replaceAll("[\\t\\x0B\\f\\r ]+", " ")
                     .replaceAll(" *\\n *", "\n").replaceAll("\\n{3,}", "\n\n").trim();
             if (text.length() < 20) continue;
-            if (text.length() > MAX_BODY_CHARS) {
-                String suffix = "\n[正文超过采集上限，后续内容未收录]";
-                text = text.substring(0, MAX_BODY_CHARS - suffix.length()) + suffix;
-            }
+            // fetchBody already bounds the whole response to 4 MB. Preserve later chapters for matching.
             return text;
         }
         return null;
@@ -218,7 +236,7 @@ public class GovPolicyClient {
 
     private String publicationDate(Document document) {
         String meta = metaContent(document, Set.of("pubdate", "publishdate", "pubtime", "dc.date.issued",
-                "article:published_time", "datepublished", "publication_date"));
+                "article:published_time", "datepublished", "publication_date", "firstpublishedtime"));
         String parsed = reliableDate(meta);
         if (parsed != null) return parsed;
         for (Element time : document.select("time[itemprop=datePublished],.pubtime,#pubtime,#con_time,#NewsArticlePubDay,.publish-time,.article-date,.publish-date")) {
@@ -226,6 +244,17 @@ public class GovPolicyClient {
             if (parsed != null) return parsed;
         }
         return null;
+    }
+
+    private String attributedSource(Document document) {
+        String meta = metaContent(document, Set.of("contentsource", "articlesource", "source", "dc.source", "来源"));
+        if (meta != null) return meta;
+        Element articleHeader = document.selectFirst(".pages-date");
+        if (articleHeader == null) return null;
+        Element header = articleHeader.clone();
+        header.select(".pages_print,.share,script,style").remove();
+        Matcher source = Pattern.compile("(?:来源|稿源)\\s*[:：]\\s*(.{1,160})$").matcher(header.text());
+        return source.find() ? source.group(1).trim() : null;
     }
 
     private String reliableDate(String value) {
@@ -238,15 +267,12 @@ public class GovPolicyClient {
         return null;
     }
 
-    private List<GovPolicyItem> parseJsonSource(PolicySourceConfig source, String body, int limit) {
+    private List<GovPolicyItem> parseJsonSource(PolicySourceConfig source, String body) {
         try {
             JsonNode root = objectMapper.readTree(body);
             List<GovPolicyItem> items = new ArrayList<>();
             if (root.isArray()) {
                 for (JsonNode item : root) {
-                    if (items.size() >= limit) {
-                        break;
-                    }
                     String title = firstText(item, "TITLE", "title", "name");
                     String url = firstText(item, "URL", "url", "href");
                     String publishedAt = firstText(item, "DOCRELPUBTIME", "PUBTIME", "date", "publishedAt");
@@ -268,16 +294,13 @@ public class GovPolicyClient {
         }
     }
 
-    private List<GovPolicyItem> parseHtmlSource(PolicySourceConfig source, String body, int limit) {
+    private List<GovPolicyItem> parseHtmlSource(PolicySourceConfig source, String body) {
         Document document = Jsoup.parse(body, source.url());
         List<GovPolicyItem> items = new ArrayList<>();
         for (Element link : document.select("a[href]")) {
-            if (items.size() >= limit) {
-                break;
-            }
             String title = cleanTitle(link.text());
             String href = link.attr("abs:href");
-            if (!looksLikePolicyTitle(title) || href == null || href.isBlank() || href.startsWith("javascript:")) {
+            if (!looksLikePolicyTitle(title) || !isArticleLink(link, href)) {
                 continue;
             }
             items.add(new GovPolicyItem(
@@ -290,6 +313,60 @@ public class GovPolicyClient {
             ));
         }
         return items;
+    }
+
+    private boolean isArticleLink(Element link, String href) {
+        if (href == null || href.isBlank() || !(href.startsWith("https://") || href.startsWith("http://"))) return false;
+        if (link.attr("href").startsWith("#")) return false;
+        if (link.closest("nav,header,footer,.nav,.navigation,.breadcrumb") != null) return false;
+        try {
+            String path = URI.create(href).getPath();
+            // Section roots and index pages are navigation, even when their labels contain “公告” or “政策”.
+            return path != null && !path.endsWith("/")
+                    && !path.matches("(?i).*/(?:index(?:_\\d+)?|list(?:_\\d+)?)\\.(?:s?html?|jsp)$");
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
+    private List<GovPolicyItem> recentCandidates(List<GovPolicyItem> items, int limit) {
+        Map<String, GovPolicyItem> unique = new LinkedHashMap<>();
+        items.stream().filter(this::isRecentCandidate).forEach(item -> unique.putIfAbsent(dedupKey(item), item));
+        return unique.values().stream().sorted(candidateOrder()).limit(limit).toList();
+    }
+
+    private Comparator<GovPolicyItem> candidateOrder() {
+        return Comparator.comparing((GovPolicyItem item) -> publicationDay(item.publishedAt()),
+                Comparator.nullsLast(Comparator.reverseOrder()));
+    }
+
+    private LocalDate publicationDay(String value) {
+        String valid = reliableDate(value);
+        if (valid == null) return null;
+        try { return OffsetDateTime.parse(valid.replace(' ', 'T')).atZoneSameInstant(POLICY_ZONE).toLocalDate(); }
+        catch (RuntimeException ignored) { }
+        String date = extractDate(valid);
+        try { return date == null ? null : LocalDate.parse(date); } catch (RuntimeException ignored) { return null; }
+    }
+
+    private boolean isRecentCandidate(GovPolicyItem item) {
+        if (item.planningBaseline()) return true;
+        LocalDate today = LocalDate.now(clock.withZone(POLICY_ZONE));
+        LocalDate cutoff = today.minusDays(90);
+        LocalDate published = publicationDay(item.publishedAt());
+        if (published != null) return !published.isBefore(cutoff) && !published.isAfter(today);
+        // URL dates can prove an archive is stale, but never become an invented publication date.
+        if (item.url() != null) {
+            try {
+                String path = URI.create(item.url()).getPath();
+                Matcher month = URL_MONTH_PATTERN.matcher(path == null ? "" : path);
+                if (month.find()) {
+                    LocalDate latestPossible = YearMonth.of(Integer.parseInt(month.group(1)), Integer.parseInt(month.group(2))).atEndOfMonth();
+                    if (latestPossible.isBefore(cutoff)) return false;
+                }
+            } catch (RuntimeException ignored) { }
+        }
+        return true;
     }
 
     private String listPublicationDate(Element link) {
@@ -370,28 +447,17 @@ public class GovPolicyClient {
             bySource.computeIfAbsent(item.source(), ignored -> new ArrayList<>()).add(item);
         }
 
-        int index = 0;
-        while (selected.size() < limit) {
-            boolean added = false;
-            for (List<GovPolicyItem> sourceItems : bySource.values()) {
-                if (index < sourceItems.size()) {
-                    selected.add(sourceItems.get(index));
-                    added = true;
-                    if (selected.size() >= limit) {
-                        return selected;
-                    }
-                }
-            }
-            if (!added) {
-                break;
-            }
-            index++;
+        // Keep a minimum of one item per usable source, then let reliable recency fill the pool.
+        for (List<GovPolicyItem> sourceItems : bySource.values()) {
+            sourceItems.sort(candidateOrder());
+            if (!sourceItems.isEmpty()) selected.add(sourceItems.get(0));
+            if (selected.size() >= limit) return selected;
         }
 
         if (selected.size() < limit) {
             List<GovPolicyItem> remaining = items.stream()
                     .filter(item -> !selected.contains(item))
-                    .sorted(java.util.Comparator.comparing(GovPolicyItem::sourceWeight).reversed())
+                    .sorted(candidateOrder())
                     .limit(limit - selected.size())
                     .toList();
             selected.addAll(remaining);

@@ -63,7 +63,7 @@ class RuntimeConfigStoreTest {
 
         assertThat(store.readLlm().model()).isEqualTo("existing-model");
         assertThat(repository.findById("LLM").orElseThrow().getRevision()).isEqualTo(7);
-        assertThat(store.readPolicySources()).hasSize(12);
+        assertThat(store.readPolicySources()).hasSize(13);
     }
 
     @Test
@@ -189,7 +189,7 @@ class RuntimeConfigStoreTest {
                 .isInstanceOf(RuntimeConfigRevisionConflictException.class);
 
         assertThat(store.readLlm().model()).isEqualTo("newer-model");
-        assertThat(store.readPolicySources()).hasSize(12);
+        assertThat(store.readPolicySources()).hasSize(13);
     }
 
     @Test

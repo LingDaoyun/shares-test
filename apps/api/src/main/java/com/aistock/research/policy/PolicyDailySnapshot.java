@@ -11,7 +11,8 @@ public record PolicyDailySnapshot(
         Instant completedAt,
         List<PolicyTheme> themes,
         List<String> reviewedThemeCodes,
-        List<String> dataGaps
+        List<String> dataGaps,
+        List<PolicySignal> unclassifiedSignals
 ) {
     public static final String SCHEDULED_TIME = "每天08:30（北京时间）";
 
@@ -19,6 +20,12 @@ public record PolicyDailySnapshot(
         themes = themes == null ? List.of() : List.copyOf(themes);
         reviewedThemeCodes = reviewedThemeCodes == null ? List.of() : List.copyOf(reviewedThemeCodes);
         dataGaps = dataGaps == null ? List.of() : List.copyOf(dataGaps);
+        unclassifiedSignals = unclassifiedSignals == null ? List.of() : List.copyOf(unclassifiedSignals);
+    }
+
+    public PolicyDailySnapshot(String status, String scheduledTime, Instant startedAt, Instant completedAt,
+                               List<PolicyTheme> themes, List<String> reviewedThemeCodes, List<String> dataGaps) {
+        this(status, scheduledTime, startedAt, completedAt, themes, reviewedThemeCodes, dataGaps, List.of());
     }
 
     static PolicyDailySnapshot idle() {

@@ -16,6 +16,7 @@ import java.util.List;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.LocalDate;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -40,7 +41,8 @@ class GovPolicyClientTest {
         client = new GovPolicyClient(
                 builder.build(),
                 new ObjectMapper(),
-                store
+                store,
+                Clock.fixed(Instant.parse("2026-10-17T12:00:00Z"), ZoneOffset.UTC)
         );
     }
 
@@ -311,6 +313,132 @@ class GovPolicyClientTest {
                 """, new MediaType("text", "html", UTF_8)));
         assertThat(client.fetchLatestPoliciesWithStatus(40).items())
                 .hasSize(2).allMatch(item -> item.publishedAt() == null);
+        server.verify();
+    }
+
+    @Test
+    void scansPastOldJsonPrefixBeforeApplyingCandidateLimit() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("中央政策", "json", "https://policy.example/list.json", 100)));
+        String old = java.util.stream.IntStream.range(0, 45).mapToObj(i ->
+                "{\"title\":\"过期产业政策通知" + i + "\",\"url\":\"https://policy.example/2017/old" + i
+                        + "\",\"date\":\"2017-01-01\"}").collect(java.util.stream.Collectors.joining(","));
+        server.expect(requestTo("https://policy.example/list.json")).andRespond(withSuccess(
+                "[" + old + ",{\"title\":\"集成电路布图设计保护条例\",\"url\":\"https://policy.example/chip\",\"date\":\""
+                        + LocalDate.of(2026, 10, 17).minusDays(3) + "\"}]", MediaType.APPLICATION_JSON));
+        GovPolicyFetchResult result = client.fetchLatestPoliciesWithStatus(8);
+        assertThat(result.items()).extracting(GovPolicyItem::title).containsExactly("集成电路布图设计保护条例");
+        server.verify();
+    }
+
+    @Test
+    void skipsNavigationAndHistoricalUrlWithoutInventingPublicationDate() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("政策列表", "html", "https://policy.example/list", 90)));
+        String old = java.util.stream.IntStream.range(0, 12).mapToObj(i ->
+                "<li><a href='/2017-07/old" + i + ".htm'>能源产业技术支持通知" + i + "</a></li>")
+                .collect(java.util.stream.Collectors.joining());
+        server.expect(requestTo("https://policy.example/list")).andRespond(withSuccess(
+                "<nav><a href='/category/'>农业农村部公告目录</a></nav>" + old
+                        + "<li><a href='/future-target'>到2030年1月1日实现电池产业升级的实施方案</a></li>"
+                        + "<li><a href='/recent'>半导体技术研发支持通知</a><span>" + LocalDate.of(2026, 10, 17).minusDays(1) + "</span></li>",
+                new MediaType("text", "html", UTF_8)));
+        GovPolicyFetchResult result = client.fetchLatestPoliciesWithStatus(8);
+        assertThat(result.items()).extracting(GovPolicyItem::title)
+                .containsExactly("半导体技术研发支持通知", "到2030年1月1日实现电池产业升级的实施方案");
+        assertThat(result.items().get(1).publishedAt()).isNull();
+        server.verify();
+    }
+
+    @Test
+    void bodyPublicationDateOverridesRecentListDateWithoutPromotingOldDocument() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("政策列表", "json", "https://policy.example/list.json", 90)));
+        server.expect(requestTo("https://policy.example/list.json")).andRespond(withSuccess(
+                "[{\"title\":\"未来能源产业规划\",\"url\":\"https://policy.example/plan\",\"date\":\""
+                        + LocalDate.of(2026, 10, 17) + "\"}]", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://policy.example/plan")).andRespond(withSuccess(
+                "<meta name='PubDate' content='2017-07-07'><div class='TRS_Editor'><p>到2030年推动能源装备关键技术研发以及产业升级。</p></div>",
+                new MediaType("text", "html", UTF_8)));
+        assertThat(client.fetchLatestPoliciesWithStatus(8).items()).isEmpty();
+        server.verify();
+    }
+
+    @Test
+    void retainsLateBodyEvidenceAndOriginalAttributionForConfiguredBaseline() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("地方转载", "plan", "https://policy.example/plan", 90)));
+        server.expect(requestTo("https://policy.example/plan")).andRespond(withSuccess(
+                "<h1>未来产业规划</h1><meta name='ContentSource' content='工业和信息化部'><meta name='PubDate' content='2021-01-01'>"
+                        + "<div class='TRS_Editor'><p>" + "规划前文用于交代背景。".repeat(5000)
+                        + "</p><p>后续章节提出推进量子信息与集成电路关键技术研发。</p></div>",
+                new MediaType("text", "html", UTF_8)));
+        GovPolicyItem item = client.fetchLatestPoliciesWithStatus(8).items().get(0);
+        assertThat(item.bodyText().contains("后续章节提出推进量子信息与集成电路关键技术研发")).isTrue();
+        assertThat(item.attributedSource()).isEqualTo("工业和信息化部");
+        assertThat(item.publishedAt()).isEqualTo("2021-01-01");
+        assertThat(item.planningBaseline()).isTrue();
+        server.verify();
+    }
+
+    @Test
+    void bodyBudgetPrioritizesOfficialPlanningOverClaimedHighWeight() {
+        when(store.readPolicySources()).thenReturn(java.util.stream.IntStream.range(0, 5)
+                .mapToObj(i -> new PolicySourceConfig("来源" + i, "json",
+                        (i == 4 ? "https://www.miit.gov.cn" : "https://policy.example") + "/list" + i + ".json", i == 4 ? 90 : 100))
+                .toList());
+        for (int i = 0; i < 5; i++) {
+            String host = i == 4 ? "https://www.miit.gov.cn" : "https://policy.example";
+            server.expect(requestTo(host + "/list" + i + ".json")).andRespond(withSuccess(
+                    "[{\"title\":\"产业技术发展规划" + i + "\",\"url\":\"" + host + "/plan" + i + "\"}]",
+                    MediaType.APPLICATION_JSON));
+        }
+        // A missing fetch or an unexpected fifth request must fail the real client boundary.
+        for (int i : new int[] {0, 1, 2, 4}) {
+            String host = i == 4 ? "https://www.miit.gov.cn" : "https://policy.example";
+            server.expect(requestTo(host + "/plan" + i)).andRespond(withSuccess(
+                    "<div class='TRS_Editor'><p>稳步推进量子信息与集成电路关键技术研发工作。</p></div>",
+                    new MediaType("text", "html", UTF_8)));
+        }
+        GovPolicyFetchResult result = client.fetchLatestPoliciesWithStatus(8);
+        assertThat(result.items().stream().filter(item -> item.url().startsWith("https://www.miit.gov.cn/")).findFirst().orElseThrow().bodyText())
+                .contains("量子信息");
+        assertThat(result.items().stream().filter(item -> item.bodyText() != null)).hasSize(4);
+        assertThat(result.failedSources()).anyMatch(gap -> gap.contains("上限"));
+        server.verify();
+    }
+
+    @Test
+    void governmentOutlineUsesFirstPublicationMetadataAndArticleHeaderAttribution() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("中国政府网纲要", "plan", "https://www.gov.cn/yaowen/liebiao/202603/content_7062633.htm", 100)));
+        server.expect(requestTo("https://www.gov.cn/yaowen/liebiao/202603/content_7062633.htm")).andRespond(withSuccess("""
+                <meta name="firstpublishedtime" content="2026-03-13-21:44:00"><h1>国民经济和社会发展第十五个五年规划纲要</h1>
+                <header>来源：导航推荐</header>
+                <div class="pages-date">2026-03-13 21:44<span class="font">来源： 新华社</span>
+                  <div class="pages_print"><span>字号：默认 大 超大</span><span>打印</span></div></div>
+                <div id="UCAP-CONTENT"><p>统筹推进量子信息、集成电路和银发经济发展。</p></div>
+                <footer>来源：页脚推荐</footer>
+                """, new MediaType("text", "html", UTF_8)));
+        GovPolicyItem item = client.fetchLatestPoliciesWithStatus(8).items().get(0);
+        assertThat(item.publishedAt()).isEqualTo("2026-03-13");
+        assertThat(item.attributedSource()).isEqualTo("新华社");
+        assertThat(item.bodyText()).contains("银发经济").doesNotContain("来源", "字号");
+        server.verify();
+    }
+
+    @Test
+    void ninetyDayCutoffUsesShanghaiDateForOffsetTimestamps() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("中央政策", "json", "https://policy.example/list.json", 100)));
+        server.expect(requestTo("https://policy.example/list.json")).andRespond(withSuccess("""
+                [
+                  {"title":"半导体近期支持通知","url":"https://policy.example/recent","date":"2026-07-18T18:00:00Z"},
+                  {"title":"半导体过期支持通知","url":"https://policy.example/old","date":"2026-07-18T14:00:00Z"}
+                ]
+                """, MediaType.APPLICATION_JSON));
+        assertThat(client.fetchLatestPoliciesWithStatus(8).items()).singleElement()
+                .satisfies(item -> assertThat(item.publishedAt()).isEqualTo("2026-07-18T18:00:00Z"));
         server.verify();
     }
 }

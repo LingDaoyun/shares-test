@@ -81,79 +81,23 @@ public class PolicyThemeService {
                 .filter(theme -> isCoreTheme(theme.themeCode()) || !theme.signals().isEmpty())
                 .sorted(Comparator.comparing(PolicyTheme::strengthScore).reversed())
                 .toList();
-        return new PolicyThemeCollection(themes, dataGaps.stream().distinct().toList());
+        List<PolicySignal> unclassified = policies.stream()
+                .filter(policy -> themeDefinitions().stream().noneMatch(definition -> matchesPolicy(policy, definition.keywords())))
+                .map(policy -> new PolicySignal(policy.source(), "待归类政策", policy.title(), 0, policy.url(),
+                        policy.publishedAt(), null, policy.planningBaseline(), sourceInfo(policy)))
+                .toList();
+        return new PolicyThemeCollection(themes, dataGaps.stream().distinct().toList(), unclassified);
     }
 
-    private record ThemeDefinition(String code, String name, List<String> keywords,
-                                   List<String> chainSegments, List<String> risks, List<String> industries) {
-    }
-
-    private List<ThemeDefinition> themeDefinitions() {
-        return List.of(
-                new ThemeDefinition("NEW_QUALITY_PRODUCTIVITY", "新质生产力与高端制造",
-                        List.of("新质生产力", "制造", "机器人", "工业母机", "工业软件", "高端装备", "设备更新", "专精特新"),
-                        List.of("工业母机", "机器人核心零部件", "工业软件", "高端传感器"),
-                        List.of("概念拥挤", "订单兑现慢", "设备周期波动"),
-                        List.of("机械", "设备", "高端装备", "机器人", "自动化", "仪器", "工业软件", "软件开发", "电子元件", "新材料", "光学", "家电")),
-                new ThemeDefinition("DIGITAL_INFRA", "数字经济与算力基础设施",
-                        List.of("数字经济", "数字基础设施", "数字化", "数据要素", "算力", "人工智能", "数据中心", "通信网络", "数据安全", "工业互联网"),
-                        List.of("算力中心", "液冷", "光模块", "数据安全", "行业应用软件"),
-                        List.of("估值波动大", "技术迭代快", "海外限制"),
-                        List.of("软件", "通信", "计算机", "互联网", "数据", "信息技术", "电子信息", "网络", "光模块", "电子元件", "半导体")),
-                new ThemeDefinition("GREEN_TRANSITION", "绿色低碳与能源转型",
-                        List.of("低碳", "能源", "电网", "储能", "电池", "节能", "循环经济", "碳中和", "光伏", "风电"),
-                        List.of("储能", "电网设备", "新能源运营", "节能改造", "循环经济"),
-                        List.of("产能过剩", "价格战", "补贴退坡"),
-                        List.of("电力", "电池", "光伏", "风电", "新能源", "环保", "储能", "电网", "电源", "节能")),
-                new ThemeDefinition("SOLID_STATE_BATTERY", "固态电池",
-                        List.of("固态电池", "固态动力电池", "固体电解质", "固态电解质"),
-                        List.of("固态电解质", "正负极材料", "电池制造设备", "电芯与系统集成"),
-                        List.of("技术路线和量产良率待验证", "成本与规模化应用进度不确定", "电池行业候选不代表已具备固态电池业务，需核验公告及主营"),
-                        List.of("电池", "电解质", "电池材料", "锂电", "储能")),
-                new ThemeDefinition("CONSUMPTION", "消费与以旧换新",
-                        List.of("消费", "以旧换新", "家电", "商贸"),
-                        List.of("家电", "零售", "消费服务"), List.of("补贴落地节奏", "终端需求兑现"),
-                        List.of("家电", "白色家电", "零售", "商业百货", "旅游酒店", "酒店旅游", "家用轻工", "纺织服装")),
-                new ThemeDefinition("SEMICONDUCTOR", "半导体与国产替代",
-                        List.of("半导体", "集成电路", "芯片", "光刻", "先进封装"),
-                        List.of("芯片设计", "半导体设备", "半导体材料", "封装测试"), List.of("技术验证周期", "出口限制", "资本开支波动"),
-                        List.of("半导体", "集成电路", "芯片", "电子化学品")),
-                new ThemeDefinition("INNOVATIVE_MEDICINE", "创新药与医疗",
-                        List.of("创新药", "生物医药", "医疗器械", "医保", "药品", "医疗卫生", "医药"),
-                        List.of("创新药", "医疗器械", "医疗服务"), List.of("临床及审批不确定性", "医保支付及集采压力"),
-                        List.of("化学制药", "生物制品", "生物制药", "中药", "医疗器械", "医疗服务", "医药商业")),
-                new ThemeDefinition("AUTO_TRANSPORT", "汽车与交通运输",
-                        List.of("汽车", "智能网联", "交通运输", "低空经济", "航空运输", "轨道交通", "充电基础设施", "车路云"),
-                        List.of("汽车整车", "汽车零部件", "轨道交通", "物流"), List.of("需求与价格竞争", "基础设施建设节奏"),
-                        List.of("汽车", "交运设备", "运输设备", "航空机场", "铁路公路", "航运港口", "交通运输", "物流")),
-                new ThemeDefinition("AGRICULTURE_FOOD", "农业与食品",
-                        List.of("农业", "农村", "粮食", "种业", "农机", "农产品", "食品安全", "畜牧", "渔业"),
-                        List.of("种业", "种植", "养殖", "食品加工"), List.of("农产品价格周期", "天气与生物安全风险"),
-                        List.of("农牧饲渔", "农林牧渔", "种植", "养殖", "种业", "农业", "食品", "农产品加工")),
-                new ThemeDefinition("URBAN_RENEWAL", "房地产与城市更新",
-                        List.of("房地产", "住房", "城市更新", "城中村", "保障房", "保障性住房", "市政", "建筑业", "城市基础设施"),
-                        List.of("城市更新", "工程建设", "建筑材料", "物业服务"), List.of("项目资金到位节奏", "销售与回款风险"),
-                        List.of("房地产", "工程建设", "建筑装饰", "建筑材料", "建筑建材", "水泥建材")),
-                new ThemeDefinition("FINANCE_CAPITAL", "金融与资本市场",
-                        List.of("金融", "资本市场", "证券", "保险", "银行", "上市公司监管", "股票回购", "并购重组"),
-                        List.of("银行", "证券", "保险"), List.of("政策传导与信用风险", "市场交易活跃度波动"),
-                        List.of("银行", "证券", "保险", "多元金融", "金融行业")),
-                new ThemeDefinition("RESOURCE_METALS", "有色金属与矿产资源",
-                        List.of("有色金属", "稀土", "关键矿产", "矿产资源", "战略矿产", "铜产业", "铝产业", "锂资源", "稀有金属", "黄金产业"),
-                        List.of("矿产开发", "金属冶炼", "资源回收"), List.of("商品价格波动", "矿权与环保约束"),
-                        List.of("有色金属", "小金属", "工业金属", "能源金属", "贵金属", "有色冶炼", "采掘")),
-                new ThemeDefinition("DEFENSE_AEROSPACE", "国防与航天",
-                        List.of("国防", "军工", "航天", "卫星", "航空装备", "航空发动机"),
-                        List.of("航空装备", "航天装备", "卫星应用"), List.of("采购及验收节奏", "项目披露有限"),
-                        List.of("航天航空", "军工", "航空装备", "飞机制造", "航天装备", "卫星"))
-        );
+    private List<PolicyThemeCatalog.Definition> themeDefinitions() {
+        return PolicyThemeCatalog.definitions();
     }
 
     private boolean isCoreTheme(String code) {
         return Set.of("NEW_QUALITY_PRODUCTIVITY", "DIGITAL_INFRA", "GREEN_TRANSITION").contains(code);
     }
 
-    private PolicyTheme buildTheme(ThemeDefinition definition, List<GovPolicyItem> policies,
+    private PolicyTheme buildTheme(PolicyThemeCatalog.Definition definition, List<GovPolicyItem> policies,
                                    List<CompanyProfile> companies) {
         List<PolicySignal> signals = signalsFor(policies, definition.keywords());
         List<String> risks = new ArrayList<>(definition.risks());
@@ -176,15 +120,19 @@ public class PolicyThemeService {
 
     private List<GovPolicyItem> fetchPoliciesSafely(List<String> dataGaps) {
         try {
-            GovPolicyFetchResult result = govPolicyClient.fetchLatestPoliciesWithStatus(40);
+            GovPolicyFetchResult result = govPolicyClient.fetchLatestPoliciesWithStatus(120);
             for (String failure : result.failedSources()) {
                 // GovPolicyClient joins the configured source name and root exception with this separator.
                 // Keep only that name; never publish raw upstream response bodies, URLs or credentials.
                 int separator = failure == null ? -1 : failure.indexOf('：');
                 String name = separator > 0 ? failure.substring(0, separator).trim() : "";
                 if (name.length() > 80 || name.contains(":") || name.contains("/") || name.contains("\n") || name.contains("\r")) name = "";
+                String detail = separator >= 0 ? failure.substring(separator + 1).trim() : "";
+                // Only fixed collector diagnostics may be shown, never exception text or response bodies.
+                Set<String> safeDetails = Set.of("规划正文未补全，已保留标题线索。", "规划正文补抓达到4篇上限，其余标题尚无正文。",
+                        "未解析到政策或产业新闻，来源覆盖待核验", "正文采集失败或未识别可靠正文", "政策来源采集失败");
                 dataGaps.add(name.isBlank() ? "部分政策源采集失败，本次覆盖不完整。"
-                        : name + "：政策源采集失败，本次覆盖不完整。");
+                        : name + "：" + (safeDetails.contains(detail) ? detail : "政策源采集失败，本次覆盖不完整。"));
             }
             List<GovPolicyItem> policies = deduplicatePolicies(result.items());
             if (policies.isEmpty()) dataGaps.add("政策源未取得有效数据，本次没有可用政策线索。");
@@ -205,7 +153,7 @@ public class PolicyThemeService {
         if (companyFallback != null) {
             List<List<String>> groups = themeDefinitions().stream()
                     .filter(definition -> !signalsFor(policies, definition.keywords()).isEmpty())
-                    .map(ThemeDefinition::industries).toList();
+                    .map(PolicyThemeCatalog.Definition::industries).toList();
             PolicyCompanyFallbackClient.Result fallback = companyFallback.fetch(groups);
             dataGaps.addAll(fallback.dataGaps());
             if (!fallback.companies().isEmpty()) {
@@ -437,7 +385,7 @@ public class PolicyThemeService {
 
         Set<String> sources = matched.stream().map(GovPolicyItem::source).collect(Collectors.toSet());
         BigDecimal sourceReliability = matched.stream()
-                .map(policy -> BigDecimal.valueOf(policy.sourceWeight()))
+                .map(policy -> BigDecimal.valueOf(effectiveSourceWeight(policy)))
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .divide(BigDecimal.valueOf(matched.size()), 2, RoundingMode.HALF_UP);
         BigDecimal crossSourceBonus = BigDecimal.valueOf(Math.min(sources.size() * 4L, 16));
@@ -452,13 +400,17 @@ public class PolicyThemeService {
     }
 
     private List<PolicySignal> signalsFor(List<GovPolicyItem> policies, List<String> keywords) {
-        Comparator<GovPolicyItem> order = Comparator.comparing((GovPolicyItem policy) -> publication(policy).date(),
+        Comparator<GovPolicyItem> order = Comparator.comparingInt((GovPolicyItem policy) -> sourceInfo(policy).authorityRank()).reversed()
+                .thenComparing((GovPolicyItem policy) -> publication(policy).date(),
                                 Comparator.nullsLast(Comparator.reverseOrder()))
                         .thenComparing(Comparator.comparingInt((GovPolicyItem policy) -> signalConfidence(policy, keywords)).reversed());
         List<GovPolicyItem> matched = policies.stream().filter(policy -> matchesPolicy(policy, keywords)).sorted(order).toList();
-        // Reserve space for explicitly configured planning documents even after recent headlines accumulate.
+        // Keep long-term context without letting old plans displace recent catalysts.
         List<GovPolicyItem> selected = new ArrayList<>(matched.stream().filter(GovPolicyItem::planningBaseline).limit(2).toList());
-        selected.addAll(matched.stream().filter(policy -> !selected.contains(policy)).limit(6 - selected.size()).toList());
+        selected.addAll(matched.stream().filter(policy -> !policy.planningBaseline())
+                .sorted(Comparator.comparing((GovPolicyItem policy) -> publication(policy).date(),
+                        Comparator.nullsLast(Comparator.reverseOrder())).thenComparing(order))
+                .limit(6 - selected.size()).toList());
         return selected.stream().sorted(order)
                 .map(policy -> new PolicySignal(
                         policy.source(),
@@ -468,7 +420,8 @@ public class PolicyThemeService {
                         policy.url(),
                         policy.publishedAt(),
                         matchingExcerpt(policy, keywords),
-                        policy.planningBaseline()
+                        policy.planningBaseline(),
+                        sourceInfo(policy)
                 ))
                 .toList();
     }
@@ -484,7 +437,7 @@ public class PolicyThemeService {
                 .map(String::trim).filter(sentence -> containsAny(sentence, keywords)).distinct().limit(4)
                 .map(sentence -> {
                     if (sentence.length() <= 1600) return sentence;
-                    int match = keywords.stream().mapToInt(sentence::indexOf).filter(index -> index >= 0).min().orElse(0);
+                    int match = keywords.stream().mapToInt(keyword -> keywordIndex(sentence, keyword)).filter(index -> index >= 0).min().orElse(0);
                     if (match < 1300) return sentence.substring(0, 1600) + "…";
                     int start = Math.max(300, match - 200);
                     return sentence.substring(0, 300) + "…\n" + sentence.substring(start, Math.min(sentence.length(), start + 1300)) + "…";
@@ -496,14 +449,24 @@ public class PolicyThemeService {
         if (text == null) {
             return false;
         }
-        return keywords.stream().anyMatch(text::contains);
+        return keywords.stream().anyMatch(keyword -> keywordIndex(text, keyword) >= 0);
+    }
+
+    private int keywordIndex(String text, String keyword) {
+        String normalized = Normalizer.normalize(text, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
+        String term = Normalizer.normalize(keyword, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
+        if (term.matches("[a-z0-9-]+")) {
+            var matcher = java.util.regex.Pattern.compile("(?<![a-z0-9])" + java.util.regex.Pattern.quote(term) + "(?![a-z0-9])").matcher(normalized);
+            return matcher.find() ? matcher.start() : -1;
+        }
+        return normalized.indexOf(term);
     }
 
     private int signalConfidence(GovPolicyItem policy, List<String> keywords) {
         String text = (policy.title() == null ? "" : policy.title()) + "\n" + (policy.bodyText() == null ? "" : policy.bodyText());
-        int keywordHits = (int) keywords.stream().filter(text::contains).count();
+        int keywordHits = (int) keywords.stream().filter(keyword -> keywordIndex(text, keyword) >= 0).count();
         int confidence = 35
-                + Math.min(policy.sourceWeight() / 3, 30)
+                + Math.min(effectiveSourceWeight(policy) / 3, 30)
                 + Math.min(keywordHits * 8, 24);
         int fresh = recencyPoints(policy);
         if (fresh > 0) {
@@ -521,7 +484,16 @@ public class PolicyThemeService {
                 : recencyPoints(policy) > 0 ? "90天内发布" : "90天前发布";
         return (matchingExcerpt(policy, keywords) == null ? "标题关键词匹配" : "正文片段关键词匹配")
                 + (policy.planningBaseline() ? " / 长期规划" : "")
-                + " / 来源权重 " + policy.sourceWeight() + " / " + timing;
+                + " / " + sourceInfo(policy).authorityLabel()
+                + " / 来源权重 " + effectiveSourceWeight(policy) + " / " + timing;
+    }
+
+    private PolicySourceInfo sourceInfo(GovPolicyItem policy) {
+        return PolicySourceInfo.from(policy.url(), policy.attributedSource());
+    }
+
+    private int effectiveSourceWeight(GovPolicyItem policy) {
+        return Math.min(Math.max(1, policy.sourceWeight()), sourceInfo(policy).authorityRank());
     }
 
     private int recencyPoints(GovPolicyItem policy) {
@@ -581,6 +553,9 @@ public class PolicyThemeService {
         boolean firstPlan = first.planningBaseline() && first.bodyText() != null && !first.bodyText().isBlank();
         boolean secondPlan = second.planningBaseline() && second.bodyText() != null && !second.bodyText().isBlank();
         if (firstPlan != secondPlan) return firstPlan ? first : second;
+        boolean firstBody = first.bodyText() != null && !first.bodyText().isBlank();
+        boolean secondBody = second.bodyText() != null && !second.bodyText().isBlank();
+        if (firstBody != secondBody) return firstBody ? first : second;
         LocalDate firstDate = publication(first).date();
         LocalDate secondDate = publication(second).date();
         // A repost must not make an old policy appear newly published.
@@ -590,9 +565,6 @@ public class PolicyThemeService {
             return firstDate.isBefore(secondDate) ? first : second;
         }
         if (first.planningBaseline() != second.planningBaseline()) return first.planningBaseline() ? first : second;
-        boolean firstBody = first.bodyText() != null && !first.bodyText().isBlank();
-        boolean secondBody = second.bodyText() != null && !second.bodyText().isBlank();
-        if (firstBody != secondBody) return firstBody ? first : second;
-        return second.sourceWeight() > first.sourceWeight() ? second : first;
+        return effectiveSourceWeight(second) > effectiveSourceWeight(first) ? second : first;
     }
 }
