@@ -49,10 +49,10 @@ describe('AppShell', () => {
     expect(document.querySelector('[data-testid="nav-rail"]')).not.toBeNull()
   })
 
-  it('keeps the global header on the default short-term route', async () => {
+  it('opens the default home without the global header', async () => {
     await renderShell(root, '/')
 
-    expect(document.querySelector('[data-testid="global-header"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="global-header"]')).toBeNull()
     expect(document.querySelector('[data-testid="nav-rail"]')).not.toBeNull()
   })
 
