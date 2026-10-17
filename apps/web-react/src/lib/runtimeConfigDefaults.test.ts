@@ -17,7 +17,7 @@ describe('runtime config defaults', () => {
     const first = defaultPolicySources()
     first[0].name = 'changed'
 
-    expect(defaultPolicySources()).toHaveLength(10)
+    expect(defaultPolicySources()).toHaveLength(11)
     expect(defaultPolicySources()[0].name).toBe('中国政府网')
     const defaults = defaultPolicySources()
     expect(defaults[defaults.length - 1].name).toBe('交通运输部')

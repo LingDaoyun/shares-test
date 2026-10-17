@@ -27,6 +27,12 @@ server:
   port: 19080
 
 research:
+  policy:
+    daily:
+      enabled: true
+      max-review-themes: 8
+      initial-delay-ms: 10000
+      check-delay-ms: 60000
   short-term:
     daily-scan:
       cron: "0 0 14 * * MON-FRI"

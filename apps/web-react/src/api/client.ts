@@ -98,7 +98,7 @@ export function updateLlmRuntimeConfig(request: LlmRuntimeConfig) {
 
 export function reviewPolicyTheme(themeCode: string) {
   return http
-    .post<PolicyAiReview>(`/policy/themes/${encodeURIComponent(themeCode)}/ai-review`)
+    .post<PolicyAiReview>(`/policy/themes/${encodeURIComponent(themeCode)}/ai-review`, undefined, { timeout: 360000 })
     .then((res) => res.data)
 }
 
@@ -112,6 +112,18 @@ export function updatePolicySources(request: PolicySourceConfig[]) {
 
 export function fetchPolicyThemes() {
   return http.get<PolicyTheme[]>('/policy/themes').then((res) => res.data)
+}
+
+export function fetchPolicyReviewHistory(themeCode: string) {
+  return http.get<PolicyAiReview[]>(`/policy/themes/${encodeURIComponent(themeCode)}/ai-reviews`).then(res => res.data)
+}
+
+export function fetchPolicyDaily() {
+  return http.get<import('../types').PolicyDailySnapshot>('/policy/daily').then(res => res.data)
+}
+
+export function refreshPolicyDaily() {
+  return http.post<import('../types').PolicyDailySnapshot>('/policy/daily/refresh').then(res => res.data)
 }
 
 export interface TechTrackingParams {

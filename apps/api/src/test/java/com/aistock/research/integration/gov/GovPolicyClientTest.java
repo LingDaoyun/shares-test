@@ -117,6 +117,36 @@ class GovPolicyClientTest {
     }
 
     @Test
+    void reportsAnUnusableSourceInsteadOfTreatingEmptyHtmlAsCompleteCoverage() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("产业新闻源", "html", "https://policy.example/list", 90)));
+        server.expect(requestTo("https://policy.example/list")).andRespond(withSuccess(
+                "<a href='/search'>产业政策检索服务</a>", new MediaType("text", "html", UTF_8)));
+        GovPolicyFetchResult result = client.fetchLatestPoliciesWithStatus(40);
+        assertThat(result.items()).isEmpty();
+        assertThat(result.failedSources()).singleElement().asString().contains("产业新闻源", "未解析到");
+        server.verify();
+    }
+
+    @Test
+    void collectsIndustrialNewsAlongsidePolicyDocumentsAndRejectsNavigation() {
+        when(store.readPolicySources()).thenReturn(List.of(
+                new PolicySourceConfig("产业新闻源", "html", "https://policy.example/list", 90)));
+        server.expect(requestTo("https://policy.example/list")).andRespond(withSuccess("""
+                <li><a href='/news'>新能源汽车产业项目集中投产</a><span>2026-10-17</span></li>
+                <li><a href='/fund'>超长期特别国债支持消费品以旧换新资金已全部下达</a><span>2026-09-30</span></li>
+                <li><a href='/plan'>人工智能产业发展行动方案</a><span>2026-09-29</span></li>
+                <li><a href='/navigation'>新能源产业政策检索服务</a></li>
+                <li><a href='/other'>机关开展内部职工文体活动</a></li>
+                """, new MediaType("text", "html", UTF_8)));
+
+        assertThat(client.fetchLatestPoliciesWithStatus(40).items())
+                .extracting(GovPolicyItem::title)
+                .containsExactly("新能源汽车产业项目集中投产", "超长期特别国债支持消费品以旧换新资金已全部下达", "人工智能产业发展行动方案");
+        server.verify();
+    }
+
+    @Test
     void htmlPublicationDateRetainsItsAvailableDayPrecision() {
         when(store.readPolicySources()).thenReturn(List.of(
                 new PolicySourceConfig("HTML政策源", "html", "https://policy.example/list", 80)));

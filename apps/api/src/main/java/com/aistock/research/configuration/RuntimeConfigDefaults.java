@@ -26,6 +26,7 @@ public class RuntimeConfigDefaults {
         return List.of(
                 source("中国政府网", "json", "https://www.gov.cn/zhengce/zuixin/ZUIXINZHENGCE.json", 100),
                 source("国家发展改革委", "html", "https://www.ndrc.gov.cn/xxgk/zcfb/ghwb/", 92),
+                source("国家发展改革委产业动态", "html", "https://www.ndrc.gov.cn/fggz/", 88),
                 source("工业和信息化部", "html", "https://www.miit.gov.cn/zwgk/zcwj/", 90),
                 source("科学技术部", "html", "https://www.most.gov.cn/xxgk/xinxifenlei/fdzdgknr/fgzc/gfxwj/", 86),
                 source("财政部", "html", "https://www.mof.gov.cn/zhengwuxinxi/caizhengxinwen/", 82),

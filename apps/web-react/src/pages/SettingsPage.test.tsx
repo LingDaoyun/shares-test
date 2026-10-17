@@ -95,7 +95,7 @@ describe('SettingsPage section actions', () => {
     await change(model, 'unsaved-model')
     await click(buttonIn('政策源配置', '重置为默认'))
 
-    expect(section('政策源配置').querySelectorAll('input[placeholder="来源名称"]')).toHaveLength(10)
+    expect(section('政策源配置').querySelectorAll('input[placeholder="来源名称"]')).toHaveLength(defaultPolicySources().length)
     expect(fieldIn('大模型配置', '模型').value).toBe('unsaved-model')
     expect(mockedUpdatePolicies).not.toHaveBeenCalled()
     expect(mockedUpdateLlm).not.toHaveBeenCalled()
@@ -127,13 +127,19 @@ describe('SettingsPage section actions', () => {
   })
 
   it('switches provider credentials and endpoint as one safe preset', async () => {
-    const provider = selectIn('大模型配置', 'Provider')
+    const provider = selectIn('大模型配置', '模型供应商')
 
     await changeSelect(provider, 'openai')
 
     expect(fieldIn('大模型配置', '模型').value).toBe('gpt-5.5')
     expect(fieldIn('大模型配置', 'Base URL').value).toBe('https://api.openai.com/v1')
-    expect(fieldIn('大模型配置', 'API Key 环境变量名').value).toBe('OPENAI_API_KEY')
+    expect(fieldIn('大模型配置', 'OpenAI API 密钥').type).toBe('password')
+    expect(useAppStore.getState().runtimeConfigForm.llm.apiKeyEnv).toBe('OPENAI_API_KEY')
+    await change(fieldIn('大模型配置', 'OpenAI API 密钥'), 'test-api-key')
+    await click(buttonIn('大模型配置', '保存配置'))
+    expect(mockedUpdateLlm).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'openai', apiKeyEnv: 'OPENAI_API_KEY', apiKey: 'test-api-key'
+    }))
   })
 
   function section(title: string) {

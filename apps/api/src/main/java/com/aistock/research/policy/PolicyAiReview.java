@@ -20,7 +20,9 @@ public record PolicyAiReview(
         List<String> mustVerify,
         Integer confidence,
         Instant reviewedAt,
-        List<String> dataGaps
+        List<String> dataGaps,
+        PolicyTrendPlan trendPlan,
+        List<PolicySignal> evidenceSnapshot
 ) {
     public PolicyAiReview {
         confirmations = confirmations == null ? List.of() : List.copyOf(confirmations);
@@ -28,6 +30,29 @@ public record PolicyAiReview(
         risks = risks == null ? List.of() : List.copyOf(risks);
         mustVerify = mustVerify == null ? List.of() : List.copyOf(mustVerify);
         dataGaps = dataGaps == null ? List.of() : List.copyOf(dataGaps);
+        evidenceSnapshot = evidenceSnapshot == null ? List.of() : List.copyOf(evidenceSnapshot);
+    }
+
+    public PolicyAiReview(String themeCode, String themeName, String provider, String model,
+                          Integer relevanceScore, String direction, String directionLabel, String phase,
+                          String phaseLabel, String logicSummary, List<String> confirmations,
+                          List<String> disagreements, List<String> risks, List<String> mustVerify,
+                          Integer confidence, Instant reviewedAt, List<String> dataGaps) {
+        this(themeCode, themeName, provider, model, relevanceScore, direction, directionLabel, phase,
+                phaseLabel, logicSummary, confirmations, disagreements, risks, mustVerify, confidence,
+                reviewedAt, dataGaps, null, List.of());
+    }
+
+    public PolicyAiReview withDataGaps(List<String> gaps) {
+        return new PolicyAiReview(themeCode, themeName, provider, model, relevanceScore, direction,
+                directionLabel, phase, phaseLabel, logicSummary, confirmations, disagreements, risks,
+                mustVerify, confidence, reviewedAt, gaps, trendPlan, evidenceSnapshot);
+    }
+
+    public PolicyAiReview withEvidence(List<PolicySignal> evidence) {
+        return new PolicyAiReview(themeCode, themeName, provider, model, relevanceScore, direction,
+                directionLabel, phase, phaseLabel, logicSummary, confirmations, disagreements, risks,
+                mustVerify, confidence, reviewedAt, dataGaps, trendPlan, evidence);
     }
 
     public static PolicyAiReview unconfigured(String themeCode, String themeName) {

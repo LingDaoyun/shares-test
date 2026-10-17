@@ -38,4 +38,9 @@ public class PolicyThemeController {
             return ResponseEntity.notFound().build();
         }
     }
+
+    @GetMapping("/{themeCode}/ai-reviews")
+    public List<PolicyAiReview> aiReviews(@PathVariable String themeCode) {
+        return aiReviewService.history(themeCode);
+    }
 }

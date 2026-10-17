@@ -5,16 +5,27 @@ import com.aistock.research.company.CompanyService;
 import com.aistock.research.integration.eastmoney.EastMoneyAnnualIndicator;
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
 import com.aistock.research.integration.gov.GovPolicyClient;
+import com.aistock.research.integration.gov.GovPolicyFetchResult;
 import com.aistock.research.integration.gov.GovPolicyItem;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.text.Normalizer;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -22,123 +33,226 @@ import java.util.stream.Collectors;
 @Service
 public class PolicyThemeService {
 
+    private static final ZoneId POLICY_ZONE = ZoneId.of("Asia/Shanghai");
     private final GovPolicyClient govPolicyClient;
     private final CompanyService companyService;
     private final EastMoneyClient eastMoneyClient;
+    private final PolicyCompanyFallbackClient companyFallback;
+    private final Clock clock;
 
+    @Autowired
     public PolicyThemeService(
             GovPolicyClient govPolicyClient,
             CompanyService companyService,
-            EastMoneyClient eastMoneyClient
+            EastMoneyClient eastMoneyClient,
+            PolicyCompanyFallbackClient companyFallback
     ) {
+        this(govPolicyClient, companyService, eastMoneyClient, Clock.system(POLICY_ZONE), companyFallback);
+    }
+
+    PolicyThemeService(GovPolicyClient govPolicyClient, CompanyService companyService,
+                       EastMoneyClient eastMoneyClient, Clock clock) {
+        this(govPolicyClient, companyService, eastMoneyClient, clock, null);
+    }
+
+    public PolicyThemeService(GovPolicyClient govPolicyClient, CompanyService companyService, EastMoneyClient eastMoneyClient) {
+        this(govPolicyClient, companyService, eastMoneyClient, Clock.system(POLICY_ZONE), null);
+    }
+
+    PolicyThemeService(GovPolicyClient govPolicyClient, CompanyService companyService,
+                       EastMoneyClient eastMoneyClient, Clock clock, PolicyCompanyFallbackClient companyFallback) {
         this.govPolicyClient = govPolicyClient;
         this.companyService = companyService;
         this.eastMoneyClient = eastMoneyClient;
+        this.companyFallback = companyFallback;
+        this.clock = clock.withZone(POLICY_ZONE);
     }
 
     public List<PolicyTheme> listThemes() {
-        List<GovPolicyItem> policies = fetchPoliciesSafely();
-        List<CompanyProfile> companyProfiles = fetchCompaniesSafely();
-        List<PolicyTheme> themes = List.of(
-                new PolicyTheme(
-                        "NEW_QUALITY_PRODUCTIVITY",
-                        "新质生产力与高端制造",
-                        "国家级",
-                        "2026-2030",
-                        scoreFor(policies, List.of("现代化", "科技", "制造", "产业", "设备", "应急", "安全")),
-                        List.of("工业母机", "机器人核心零部件", "工业软件", "高端传感器"),
-                        signalsFor(policies, "长期规划", List.of("现代化", "科技", "制造", "产业", "设备", "应急", "安全")),
-                        List.of("概念拥挤", "订单兑现慢", "设备周期波动"),
-                        companyPool(companyProfiles, "NEW_QUALITY_PRODUCTIVITY",
-                                List.of("高端装备", "工业软件", "核心零部件", "智能制造"))
-                ),
-                new PolicyTheme(
-                        "DIGITAL_INFRA",
-                        "数字经济与算力基础设施",
-                        "部委/地方共振",
-                        "2025-2030",
-                        scoreFor(policies, List.of("数字", "数据", "网络", "信息", "智能", "算力", "人工智能")),
-                        List.of("算力中心", "液冷", "光模块", "数据安全", "行业应用软件"),
-                        signalsFor(policies, "专项工程", List.of("数字", "数据", "网络", "信息", "智能", "算力", "人工智能")),
-                        List.of("估值波动大", "技术迭代快", "海外限制"),
-                        companyPool(companyProfiles, "DIGITAL_INFRA",
-                                List.of("算力基础设施", "数据安全", "行业软件", "通信网络"))
-                ),
-                new PolicyTheme(
-                        "GREEN_TRANSITION",
-                        "绿色低碳与能源转型",
-                        "国家级",
-                        "长期",
-                        scoreFor(policies, List.of("绿色", "低碳", "能源", "生态", "环保", "农业", "农村")),
-                        List.of("储能", "电网设备", "新能源运营", "节能改造", "循环经济"),
-                        signalsFor(policies, "政策兑现", List.of("绿色", "低碳", "能源", "生态", "环保", "农业", "农村")),
-                        List.of("产能过剩", "价格战", "补贴退坡"),
-                        companyPool(companyProfiles, "GREEN_TRANSITION",
-                                List.of("电网设备", "储能", "新能源运营", "节能环保"))
-                )
-        );
-        return themes.stream()
+        return listThemesWithStatus().themes();
+    }
+
+    public PolicyThemeCollection listThemesWithStatus() {
+        List<String> dataGaps = new ArrayList<>();
+        List<GovPolicyItem> policies = fetchPoliciesSafely(dataGaps);
+        List<CompanyProfile> companyProfiles = fetchCompaniesSafely(dataGaps, policies);
+        List<PolicyTheme> themes = themeDefinitions().stream()
+                .map(definition -> buildTheme(definition, policies, companyProfiles))
+                .filter(theme -> isCoreTheme(theme.themeCode()) || !theme.signals().isEmpty())
                 .sorted(Comparator.comparing(PolicyTheme::strengthScore).reversed())
                 .toList();
+        return new PolicyThemeCollection(themes, dataGaps.stream().distinct().toList());
+    }
+
+    private record ThemeDefinition(String code, String name, List<String> keywords,
+                                   List<String> chainSegments, List<String> risks, List<String> industries) {
+    }
+
+    private List<ThemeDefinition> themeDefinitions() {
+        return List.of(
+                new ThemeDefinition("NEW_QUALITY_PRODUCTIVITY", "新质生产力与高端制造",
+                        List.of("新质生产力", "制造", "机器人", "工业母机", "工业软件", "高端装备", "设备更新", "专精特新"),
+                        List.of("工业母机", "机器人核心零部件", "工业软件", "高端传感器"),
+                        List.of("概念拥挤", "订单兑现慢", "设备周期波动"),
+                        List.of("机械", "设备", "高端装备", "机器人", "自动化", "仪器", "工业软件", "软件开发", "电子元件", "新材料", "光学", "家电")),
+                new ThemeDefinition("DIGITAL_INFRA", "数字经济与算力基础设施",
+                        List.of("数字经济", "数字基础设施", "数字化", "数据要素", "算力", "人工智能", "数据中心", "通信网络", "数据安全", "工业互联网"),
+                        List.of("算力中心", "液冷", "光模块", "数据安全", "行业应用软件"),
+                        List.of("估值波动大", "技术迭代快", "海外限制"),
+                        List.of("软件", "通信", "计算机", "互联网", "数据", "信息技术", "电子信息", "网络", "光模块", "电子元件", "半导体")),
+                new ThemeDefinition("GREEN_TRANSITION", "绿色低碳与能源转型",
+                        List.of("低碳", "能源", "电网", "储能", "节能", "循环经济", "碳中和", "光伏", "风电"),
+                        List.of("储能", "电网设备", "新能源运营", "节能改造", "循环经济"),
+                        List.of("产能过剩", "价格战", "补贴退坡"),
+                        List.of("电力", "电池", "光伏", "风电", "新能源", "环保", "储能", "电网", "电源", "节能")),
+                new ThemeDefinition("CONSUMPTION", "消费与以旧换新",
+                        List.of("消费", "以旧换新", "家电", "商贸"),
+                        List.of("家电", "零售", "消费服务"), List.of("补贴落地节奏", "终端需求兑现"),
+                        List.of("家电", "白色家电", "零售", "商业百货", "旅游酒店", "酒店旅游", "家用轻工", "纺织服装")),
+                new ThemeDefinition("SEMICONDUCTOR", "半导体与国产替代",
+                        List.of("半导体", "集成电路", "芯片", "光刻", "先进封装"),
+                        List.of("芯片设计", "半导体设备", "半导体材料", "封装测试"), List.of("技术验证周期", "出口限制", "资本开支波动"),
+                        List.of("半导体", "集成电路", "芯片", "电子化学品")),
+                new ThemeDefinition("INNOVATIVE_MEDICINE", "创新药与医疗",
+                        List.of("创新药", "生物医药", "医疗器械", "医保", "药品", "医疗卫生", "医药"),
+                        List.of("创新药", "医疗器械", "医疗服务"), List.of("临床及审批不确定性", "医保支付及集采压力"),
+                        List.of("化学制药", "生物制品", "生物制药", "中药", "医疗器械", "医疗服务", "医药商业")),
+                new ThemeDefinition("AUTO_TRANSPORT", "汽车与交通运输",
+                        List.of("汽车", "智能网联", "交通运输", "低空经济", "航空运输", "轨道交通", "充电基础设施", "车路云"),
+                        List.of("汽车整车", "汽车零部件", "轨道交通", "物流"), List.of("需求与价格竞争", "基础设施建设节奏"),
+                        List.of("汽车", "交运设备", "运输设备", "航空机场", "铁路公路", "航运港口", "交通运输", "物流")),
+                new ThemeDefinition("AGRICULTURE_FOOD", "农业与食品",
+                        List.of("农业", "农村", "粮食", "种业", "农机", "农产品", "食品安全", "畜牧", "渔业"),
+                        List.of("种业", "种植", "养殖", "食品加工"), List.of("农产品价格周期", "天气与生物安全风险"),
+                        List.of("农牧饲渔", "农林牧渔", "种植", "养殖", "种业", "农业", "食品", "农产品加工")),
+                new ThemeDefinition("URBAN_RENEWAL", "房地产与城市更新",
+                        List.of("房地产", "住房", "城市更新", "城中村", "保障房", "保障性住房", "市政", "建筑业", "城市基础设施"),
+                        List.of("城市更新", "工程建设", "建筑材料", "物业服务"), List.of("项目资金到位节奏", "销售与回款风险"),
+                        List.of("房地产", "工程建设", "建筑装饰", "建筑材料", "建筑建材", "水泥建材")),
+                new ThemeDefinition("FINANCE_CAPITAL", "金融与资本市场",
+                        List.of("金融", "资本市场", "证券", "保险", "银行", "上市公司监管", "股票回购", "并购重组"),
+                        List.of("银行", "证券", "保险"), List.of("政策传导与信用风险", "市场交易活跃度波动"),
+                        List.of("银行", "证券", "保险", "多元金融", "金融行业")),
+                new ThemeDefinition("RESOURCE_METALS", "有色金属与矿产资源",
+                        List.of("有色金属", "稀土", "关键矿产", "矿产资源", "战略矿产", "铜产业", "铝产业", "锂资源", "稀有金属", "黄金产业"),
+                        List.of("矿产开发", "金属冶炼", "资源回收"), List.of("商品价格波动", "矿权与环保约束"),
+                        List.of("有色金属", "小金属", "工业金属", "能源金属", "贵金属", "有色冶炼", "采掘")),
+                new ThemeDefinition("DEFENSE_AEROSPACE", "国防与航天",
+                        List.of("国防", "军工", "航天", "卫星", "航空装备", "航空发动机"),
+                        List.of("航空装备", "航天装备", "卫星应用"), List.of("采购及验收节奏", "项目披露有限"),
+                        List.of("航天航空", "军工", "航空装备", "飞机制造", "航天装备", "卫星"))
+        );
+    }
+
+    private boolean isCoreTheme(String code) {
+        return Set.of("NEW_QUALITY_PRODUCTIVITY", "DIGITAL_INFRA", "GREEN_TRANSITION").contains(code);
+    }
+
+    private PolicyTheme buildTheme(ThemeDefinition definition, List<GovPolicyItem> policies,
+                                   List<CompanyProfile> companies) {
+        List<PolicySignal> signals = signalsFor(policies, definition.keywords());
+        List<String> risks = new ArrayList<>(definition.risks());
+        risks.add("仅依据本次采集的政策标题线索，尚未核验全文条款；样本不代表完整90天政策覆盖");
+        if (policies.isEmpty()) risks.add("政策源未取得有效数据");
+        if (signals.isEmpty()) risks.add("当前采集样本未匹配到本主题政策线索");
+        List<PolicyCompanyCandidate> pool = signals.isEmpty() ? List.of()
+                : isCoreTheme(definition.code()) ? companyPool(companies, definition.industries(), definition.chainSegments())
+                : industryCompanyPool(companies, definition.industries(), definition.chainSegments());
+        return new PolicyTheme(definition.code(), definition.name(), "政策线索", "2–12周观察",
+                scoreFor(policies, definition.keywords()), definition.chainSegments(), signals, List.copyOf(risks), pool);
     }
 
     public Map<String, PolicyTheme> themeIndex() {
         return listThemes().stream().collect(java.util.stream.Collectors.toMap(PolicyTheme::themeCode, theme -> theme));
     }
 
-    private List<GovPolicyItem> fetchPoliciesSafely() {
+    private List<GovPolicyItem> fetchPoliciesSafely(List<String> dataGaps) {
         try {
-            return govPolicyClient.fetchLatestPolicies(40);
-        } catch (IllegalStateException exception) {
-            return List.of(new GovPolicyItem(
-                    "系统降级",
-                    "fallback",
-                    "中国政府网最新政策数据暂时不可用",
-                    "https://www.gov.cn/zhengce/zuixin/",
-                    null,
-                    20
-            ));
-        }
-    }
-
-    private List<CompanyProfile> fetchCompaniesSafely() {
-        try {
-            return companyService.listCompanies();
-        } catch (IllegalStateException exception) {
+            GovPolicyFetchResult result = govPolicyClient.fetchLatestPoliciesWithStatus(40);
+            for (String failure : result.failedSources()) {
+                // GovPolicyClient joins the configured source name and root exception with this separator.
+                // Keep only that name; never publish raw upstream response bodies, URLs or credentials.
+                int separator = failure == null ? -1 : failure.indexOf('：');
+                String name = separator > 0 ? failure.substring(0, separator).trim() : "";
+                if (name.length() > 80 || name.contains(":") || name.contains("/") || name.contains("\n") || name.contains("\r")) name = "";
+                dataGaps.add(name.isBlank() ? "部分政策源采集失败，本次覆盖不完整。"
+                        : name + "：政策源采集失败，本次覆盖不完整。");
+            }
+            List<GovPolicyItem> policies = deduplicatePolicies(result.items());
+            if (policies.isEmpty()) dataGaps.add("政策源未取得有效数据，本次没有可用政策线索。");
+            return policies;
+        } catch (RuntimeException exception) {
+            dataGaps.add("政策源采集失败，本次没有可用政策线索。");
             return List.of();
         }
     }
 
+    private List<CompanyProfile> fetchCompaniesSafely(List<String> dataGaps, List<GovPolicyItem> policies) {
+        try {
+            List<CompanyProfile> companies = companyService.listCompanies();
+            if (!companies.isEmpty()) return companies;
+        } catch (RuntimeException exception) {
+            // Collection status contains fixed messages only; details remain outside public snapshots.
+        }
+        if (companyFallback != null) {
+            List<List<String>> groups = themeDefinitions().stream()
+                    .filter(definition -> !signalsFor(policies, definition.keywords()).isEmpty())
+                    .map(ThemeDefinition::industries).toList();
+            PolicyCompanyFallbackClient.Result fallback = companyFallback.fetch(groups);
+            dataGaps.addAll(fallback.dataGaps());
+            if (!fallback.companies().isEmpty()) {
+                dataGaps.add("实时公司源不可用，本轮使用新浪行业分类备用样本；行业与主营待核验，行情和财务暂缺。");
+                return fallback.companies();
+            }
+        }
+        dataGaps.add("公司样本未取得有效数据，上市公司关联暂不可用。");
+        return List.of();
+    }
+
     private List<PolicyCompanyCandidate> companyPool(
             List<CompanyProfile> companies,
-            String themeCode,
+            List<String> industries,
             List<String> chainSegments
     ) {
         return companies.stream()
-                .filter(company -> themeCode.equals(company.themeCode()))
+                .filter(company -> containsAny(company.industry(), industries))
                 .filter(company -> company.name() != null && !company.name().contains("ST"))
                 .sorted(Comparator.comparing(this::companyPoolScore).reversed())
                 .limit(12)
-                .map(company -> toCompanyCandidate(company, chainSegments))
-                .sorted(Comparator.comparing(PolicyCompanyCandidate::financialQualityScore).reversed()
+                .map(company -> toCompanyCandidate(company, chainSegments, true, true))
+                .sorted(Comparator.comparing(PolicyCompanyCandidate::financialQualityScore, Comparator.nullsLast(Comparator.reverseOrder()))
                         .thenComparing(candidate -> candidate.amount() == null ? BigDecimal.ZERO : candidate.amount(), Comparator.reverseOrder()))
                 .limit(5)
                 .toList();
     }
 
-    private PolicyCompanyCandidate toCompanyCandidate(CompanyProfile company, List<String> chainSegments) {
-        EastMoneyAnnualIndicator annualIndicator = annualIndicatorSafely(company);
-        BigDecimal financialScore = financialQualityScore(company, annualIndicator);
+    private List<PolicyCompanyCandidate> industryCompanyPool(List<CompanyProfile> companies,
+                                                            List<String> industries, List<String> chainSegments) {
+        return companies.stream()
+                .filter(company -> company.name() != null && !company.name().contains("ST"))
+                .filter(company -> containsAny(company.industry(), industries))
+                .sorted(Comparator.comparing((CompanyProfile company) -> financialQualityScore(company, null)).reversed()
+                        .thenComparing(company -> nullToZero(company.amount()), Comparator.reverseOrder()))
+                .limit(5)
+                .map(company -> toCompanyCandidate(company, chainSegments, false, true))
+                .toList();
+    }
+
+    private PolicyCompanyCandidate toCompanyCandidate(CompanyProfile company, List<String> chainSegments,
+                                                       boolean fetchAnnual, boolean industryMatch) {
+        boolean fallback = PolicyCompanyFallbackClient.SOURCE_NAME.equals(company.dataSource());
+        EastMoneyAnnualIndicator annualIndicator = fetchAnnual && !fallback ? annualIndicatorSafely(company) : null;
+        BigDecimal financialScore = fallback ? null : financialQualityScore(company, annualIndicator);
         List<String> dataGaps = companyDataGaps(company, annualIndicator);
         return new PolicyCompanyCandidate(
                 company.symbol(),
                 company.name(),
                 company.industry(),
                 inferChainSegment(company, chainSegments),
-                "产业龙头研究候选",
-                leadershipRationale(company),
+                fetchAnnual ? "行业匹配研究候选，待主营核验" : "行业关键词相关，待主营核验",
+                leadershipRationale(company, industryMatch),
                 financialScore,
-                financialQualityLabel(financialScore),
+                fallback ? "财报资料待核验" : financialQualityLabel(financialScore),
                 company.latestPrice(),
                 company.peTtm(),
                 company.pbRatio(),
@@ -245,9 +359,14 @@ public class PolicyThemeService {
         return "财报质量待核验";
     }
 
-    private List<String> leadershipRationale(CompanyProfile company) {
+    private List<String> leadershipRationale(CompanyProfile company, boolean industryMatch) {
         List<String> rationale = new ArrayList<>();
-        rationale.add("政策主题匹配度 " + company.themeRelevance());
+        if (PolicyCompanyFallbackClient.SOURCE_NAME.equals(company.dataSource())) {
+            rationale.add("行业来源：新浪行业成分分类（主营及分类时效待核验）；" + company.quoteUrl());
+        }
+        rationale.add(industryMatch
+                ? "行业关键词相关，待主营核验；不代表已取得政策相关订单"
+                : "公司名称与行业关键词映射，待主营及订单核验；规则匹配度 " + company.themeRelevance());
         if (company.amount() != null && company.amount().compareTo(new BigDecimal("1000000000")) >= 0) {
             rationale.add("成交额靠前，具备持续跟踪流动性");
         }
@@ -266,7 +385,7 @@ public class PolicyThemeService {
     private List<String> companyDataGaps(CompanyProfile company, EastMoneyAnnualIndicator annualIndicator) {
         List<String> gaps = new ArrayList<>();
         boolean hasAnnual = annualIndicator != null
-                || (company.financialReportDate() != null && !company.financialReportDate().isBlank());
+                || hasProfileFinancials(company);
         BigDecimal roe = annualIndicator == null ? factor(company, "roe_annual") : nullToZero(annualIndicator.roe());
         BigDecimal cashFlow = annualIndicator == null
                 ? factor(company, "operating_cash_flow_per_share")
@@ -274,8 +393,8 @@ public class PolicyThemeService {
         if (!hasAnnual) {
             gaps.add("最近年度财报指标未匹配，需要读取年报");
         }
-        if (roe.compareTo(new BigDecimal("0.08")) < 0
-                || cashFlow.compareTo(BigDecimal.ZERO) <= 0) {
+        if (hasAnnual && (roe.compareTo(new BigDecimal("0.08")) < 0
+                || cashFlow.compareTo(BigDecimal.ZERO) <= 0)) {
             gaps.add("最近年度 ROE 或现金流质量不足，需要继续核验");
         }
         gaps.add("仍需核验主营收入中该产业方向占比");
@@ -283,13 +402,13 @@ public class PolicyThemeService {
     }
 
     private String inferChainSegment(CompanyProfile company, List<String> chainSegments) {
-        String text = (company.name() + " " + company.industry()).toLowerCase();
+        String text = company.industry() == null ? "" : company.industry().toLowerCase(Locale.ROOT);
         for (String segment : chainSegments) {
             if (text.contains(segment.toLowerCase())) {
                 return segment;
             }
         }
-        return chainSegments.isEmpty() ? "产业链位置待核验" : chainSegments.get(0);
+        return "产业链环节待核验";
     }
 
     private BigDecimal factor(CompanyProfile company, String key) {
@@ -305,7 +424,7 @@ public class PolicyThemeService {
                 .filter(policy -> containsAny(policy.title(), keywords))
                 .toList();
         if (matched.isEmpty()) {
-            return new BigDecimal("58.00");
+            return new BigDecimal("0.00");
         }
 
         Set<String> sources = matched.stream().map(GovPolicyItem::source).collect(Collectors.toSet());
@@ -315,7 +434,7 @@ public class PolicyThemeService {
                 .divide(BigDecimal.valueOf(matched.size()), 2, RoundingMode.HALF_UP);
         BigDecimal crossSourceBonus = BigDecimal.valueOf(Math.min(sources.size() * 4L, 16));
         BigDecimal hitBonus = BigDecimal.valueOf(Math.min(matched.size() * 3L, 18));
-        BigDecimal recencyBonus = BigDecimal.valueOf(Math.min(matched.stream().filter(this::isRecent).count() * 2L, 8));
+        BigDecimal recencyBonus = BigDecimal.valueOf(Math.min(matched.stream().mapToInt(this::recencyPoints).sum(), 12));
         BigDecimal score = BigDecimal.valueOf(42)
                 .add(sourceReliability.multiply(new BigDecimal("0.28")))
                 .add(crossSourceBonus)
@@ -324,31 +443,18 @@ public class PolicyThemeService {
         return score.min(new BigDecimal("96")).setScale(2, RoundingMode.HALF_UP);
     }
 
-    private List<PolicySignal> signalsFor(List<GovPolicyItem> policies, String signalType, List<String> keywords) {
-        List<PolicySignal> matched = policies.stream()
+    private List<PolicySignal> signalsFor(List<GovPolicyItem> policies, List<String> keywords) {
+        return policies.stream()
                 .filter(policy -> containsAny(policy.title(), keywords))
-                .sorted(Comparator.comparing((GovPolicyItem policy) -> signalConfidence(policy, keywords)).reversed())
+                .sorted(Comparator.comparing((GovPolicyItem policy) -> publication(policy).date(),
+                                Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(Comparator.comparingInt((GovPolicyItem policy) -> signalConfidence(policy, keywords)).reversed()))
                 .limit(6)
                 .map(policy -> new PolicySignal(
                         policy.source(),
-                        signalType + " / " + agentVerdict(policy, keywords),
+                        evidenceLabel(policy),
                         policy.title(),
                         signalConfidence(policy, keywords),
-                        policy.url(),
-                        policy.publishedAt()
-                ))
-                .toList();
-        if (!matched.isEmpty()) {
-            return matched;
-        }
-        return policies.stream()
-                .sorted(Comparator.comparing((GovPolicyItem policy) -> signalConfidence(policy, keywords)).reversed())
-                .limit(4)
-                .map(policy -> new PolicySignal(
-                        policy.source(),
-                        "最新政策 / 待交叉验证",
-                        policy.title(),
-                        Math.max(45, policy.sourceWeight() / 2),
                         policy.url(),
                         policy.publishedAt()
                 ))
@@ -368,9 +474,10 @@ public class PolicyThemeService {
         int confidence = 35
                 + Math.min(policy.sourceWeight() / 3, 30)
                 + Math.min(keywordHits * 8, 24);
-        if (isRecent(policy)) {
-            confidence += 20;
-        } else if (policy.publishedAt() == null || policy.publishedAt().isBlank()) {
+        int fresh = recencyPoints(policy);
+        if (fresh > 0) {
+            confidence += fresh * 2;
+        } else if (publication(policy).date() == null) {
             confidence -= 8;
         } else {
             confidence -= 12;
@@ -378,34 +485,72 @@ public class PolicyThemeService {
         return Math.max(35, Math.min(confidence, 96));
     }
 
-    private String agentVerdict(GovPolicyItem policy, List<String> keywords) {
-        List<String> agents = new ArrayList<>();
-        if (containsAny(policy.title(), keywords)) {
-            agents.add("政策原文Agent命中");
-        }
-        if (policy.sourceWeight() >= 85) {
-            agents.add("权威来源Agent确认");
-        }
-        if (isRecent(policy)) {
-            agents.add("时效Agent确认");
-        } else {
-            agents.add("时效Agent待验证");
-        }
-        if (agents.isEmpty()) {
-            return "待交叉验证";
-        }
-        return String.join("+", agents);
+    private String evidenceLabel(GovPolicyItem policy) {
+        String timing = publication(policy).date() == null ? "发布时间待核验"
+                : recencyPoints(policy) > 0 ? "90天内发布" : "90天前发布";
+        return "标题关键词匹配 / 来源权重 " + policy.sourceWeight() + " / " + timing;
     }
 
-    private boolean isRecent(GovPolicyItem policy) {
+    private int recencyPoints(GovPolicyItem policy) {
+        LocalDate date = publication(policy).date();
+        if (date == null) return 0;
+        long age = ChronoUnit.DAYS.between(date, LocalDate.now(clock));
+        if (age < 0 || age > 90) return 0;
+        if (age <= 7) return 8;
+        if (age <= 30) return 5;
+        return 2;
+    }
+
+    private record Publication(LocalDate date, Instant instant) {
+    }
+
+    private Publication publication(GovPolicyItem policy) {
         if (policy.publishedAt() == null || policy.publishedAt().isBlank()) {
-            return false;
+            return new Publication(null, null);
+        }
+        String value = policy.publishedAt().trim();
+        try {
+            Instant instant = OffsetDateTime.parse(value.replace(' ', 'T')).toInstant();
+            return new Publication(instant.atZone(POLICY_ZONE).toLocalDate(), instant);
+        } catch (DateTimeParseException ignored) {
+            // Sources also provide local publication timestamps or dates without a time.
         }
         try {
-            LocalDate date = LocalDate.parse(policy.publishedAt().substring(0, Math.min(10, policy.publishedAt().length())));
-            return date.isAfter(LocalDate.now().minusYears(2));
-        } catch (DateTimeParseException | StringIndexOutOfBoundsException exception) {
-            return false;
+            Instant instant = LocalDateTime.parse(value.replace(' ', 'T')).atZone(POLICY_ZONE).toInstant();
+            return new Publication(instant.atZone(POLICY_ZONE).toLocalDate(), instant);
+        } catch (DateTimeParseException ignored) {
+            // Preserve unknown precision rather than inventing a publication time.
         }
+        try {
+            return new Publication(LocalDate.parse(value), null);
+        } catch (DateTimeParseException ignored) {
+            return new Publication(null, null);
+        }
+    }
+
+    private List<GovPolicyItem> deduplicatePolicies(List<GovPolicyItem> policies) {
+        Map<String, GovPolicyItem> unique = new LinkedHashMap<>();
+        for (GovPolicyItem policy : policies) {
+            if (policy == null || policy.title() == null || policy.title().isBlank()) continue;
+            Publication publication = publication(policy);
+            if (publication.date() != null && publication.date().isAfter(LocalDate.now(clock))) continue;
+            if (publication.instant() != null && publication.instant().isAfter(clock.instant())) continue;
+            String key = Normalizer.normalize(policy.title(), Normalizer.Form.NFKC)
+                    .replaceAll("[\\p{P}\\p{Z}\\s]+", "").toLowerCase(Locale.ROOT);
+            if (!key.isBlank()) unique.merge(key, policy, this::representativePolicy);
+        }
+        return List.copyOf(unique.values());
+    }
+
+    private GovPolicyItem representativePolicy(GovPolicyItem first, GovPolicyItem second) {
+        LocalDate firstDate = publication(first).date();
+        LocalDate secondDate = publication(second).date();
+        // A repost must not make an old policy appear newly published.
+        if (firstDate == null && secondDate != null) return second;
+        if (secondDate == null && firstDate != null) return first;
+        if (firstDate != null && !firstDate.equals(secondDate)) {
+            return firstDate.isBefore(secondDate) ? first : second;
+        }
+        return second.sourceWeight() > first.sourceWeight() ? second : first;
     }
 }

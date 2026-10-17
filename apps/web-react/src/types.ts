@@ -291,6 +291,36 @@ export interface PolicyAiReview {
   confidence: number | null
   reviewedAt: string | null
   dataGaps: string[]
+  trendPlan?: PolicyTrendPlan | null
+  evidenceSnapshot?: PolicySignal[]
+}
+
+export interface PolicyTrendPlan {
+  thesis: string
+  policyIncrement: string
+  benefitChain: string[]
+  shortTermCatalysts: string[]
+  mediumTermCatalysts: string[]
+  validationSignals: string[]
+  invalidationSignals: string[]
+  marketConfirmation: string
+  companyAssessments?: Array<{
+    symbol: string
+    companyName: string
+    relevance: 'DIRECT' | 'INDUSTRY' | 'UNCERTAIN'
+    rationale: string
+    verificationNeeded: string
+  }>
+}
+
+export interface PolicyDailySnapshot {
+  status: 'IDLE' | 'RUNNING' | 'READY' | 'PARTIAL' | 'FAILED'
+  scheduledTime: string
+  startedAt: string | null
+  completedAt: string | null
+  themes: PolicyTheme[]
+  reviewedThemeCodes: string[]
+  dataGaps: string[]
 }
 
 export interface PolicyCompanyCandidate {
@@ -300,7 +330,7 @@ export interface PolicyCompanyCandidate {
   chainSegment: string
   researchRole: string
   leadershipRationale: string[]
-  financialQualityScore: number
+  financialQualityScore: number | null
   financialQualityLabel: string
   latestPrice: number | null
   peTtm: number | null

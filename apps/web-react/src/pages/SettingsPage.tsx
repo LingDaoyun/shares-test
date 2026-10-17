@@ -47,6 +47,7 @@ export function SettingsPage() {
   const [llmSaving, setLlmSaving] = useState(false)
   const [policyLoading, setPolicyLoading] = useState(false)
   const [policySaving, setPolicySaving] = useState(false)
+  const providerLabel = PROVIDERS.find((provider) => provider.value === form.llm.provider)?.label ?? '当前供应商'
 
   const patchLlm = (patch: Partial<typeof form.llm>) => {
     setRuntimeConfigForm({ ...form, llm: { ...form.llm, ...patch } })
@@ -174,14 +175,14 @@ export function SettingsPage() {
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <Tag tone={form.llm.apiKeyConfigured ? 'success' : 'danger'}>
-              {form.llm.apiKeyConfigured ? 'Key 已配置' : 'Key 缺失'}
+              {form.llm.apiKeyConfigured ? 'API 密钥已配置' : 'API 密钥未配置'}
             </Tag>
             <Tag>数据库配置 · 模型修订 {form.llmRevision}</Tag>
           </div>
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Provider">
+          <Field label="模型供应商">
             <select className="field" value={form.llm.provider} onChange={(e) => changeProvider(e.target.value)}>
               {PROVIDERS.map((p) => (
                 <option key={p.value} value={p.value}>{p.label}</option>
@@ -201,17 +202,14 @@ export function SettingsPage() {
               ))}
             </select>
           </Field>
-          <Field label="API Key">
+          <Field label={`${providerLabel} API 密钥`}>
             <input
               type="password"
               className="field"
-              placeholder="留空则保留数据库中已有 Key"
+              placeholder="留空则保留已配置的密钥"
               value={form.llm.apiKey ?? ''}
               onChange={(e) => patchLlm({ apiKey: e.target.value })}
             />
-          </Field>
-          <Field label="API Key 环境变量名">
-            <input className="field" placeholder="例如 DEEPSEEK_API_KEY" value={form.llm.apiKeyEnv} onChange={(e) => patchLlm({ apiKeyEnv: e.target.value })} />
           </Field>
           <Field label="最大输出 Token">
             <input

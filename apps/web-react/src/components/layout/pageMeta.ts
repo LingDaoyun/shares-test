@@ -35,7 +35,7 @@ export const pageMeta: Record<PageKey, PageMeta> = {
   policy: {
     eyebrow: 'POLICY INDUSTRY',
     title: '政策解读',
-    description: '从国家规划、部委政策和官方新闻中提炼产业方向，再交给 AI 做多 Agent 趋势复核。'
+    description: '每日追踪政府政策与产业新闻，结合 Agent 研判观察未来几周到三个月的产业方向。'
   },
   watchlist: {
     eyebrow: 'SPECIAL ATTENTION',

@@ -57,7 +57,9 @@ public class GovPolicyClient {
         int perSourceLimit = Math.max(8, (int) Math.ceil(limit / (double) Math.max(sources.size(), 1)));
         for (PolicySourceConfig source : sources) {
             try {
-                for (GovPolicyItem item : fetchFromSource(source, perSourceLimit)) {
+                List<GovPolicyItem> fetched = fetchFromSource(source, perSourceLimit);
+                if (fetched.isEmpty()) failedSources.add(source.name() + "：未解析到政策或产业新闻，来源覆盖待核验");
+                for (GovPolicyItem item : fetched) {
                     items.putIfAbsent(dedupKey(item), item);
                 }
             } catch (Exception exception) {
@@ -175,7 +177,21 @@ public class GovPolicyClient {
                 || title.contains("政策")
                 || title.contains("目录")
                 || title.contains("指南")
-                || title.contains("公告");
+                || title.contains("公告")
+                || looksLikeIndustrialNews(title);
+    }
+
+    private boolean looksLikeIndustrialNews(String title) {
+        boolean industry = List.of("产业", "制造", "工业", "消费", "以旧换新", "农业", "农产品", "粮食",
+                        "能源", "天然气", "电力", "电网", "储能", "光伏", "风电", "煤炭", "石化",
+                        "汽车", "交通", "物流", "铁路", "航空", "航天", "半导体", "芯片", "算力", "人工智能",
+                        "数据中心", "医药", "医疗", "创新药", "住房", "房地产", "城市更新", "金融", "资本市场",
+                        "旅游", "稀土", "有色金属", "矿产", "机器人", "通信", "软件")
+                .stream().anyMatch(title::contains);
+        boolean development = List.of("投资", "项目", "建设", "投产", "开工", "落地", "订单", "资金",
+                        "补贴", "下达", "增长", "运行", "产量", "产能", "突破", "试点", "推进", "支持", "发布", "启动")
+                .stream().anyMatch(title::contains);
+        return industry && development;
     }
 
     private List<GovPolicyItem> selectDiversePolicies(

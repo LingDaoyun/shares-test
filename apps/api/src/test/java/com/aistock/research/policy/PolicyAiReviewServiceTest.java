@@ -16,6 +16,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 class PolicyAiReviewServiceTest {
 
@@ -23,6 +25,21 @@ class PolicyAiReviewServiceTest {
     private final PolicyThemeService themeService = mock(PolicyThemeService.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final PolicyAiReviewService service = new PolicyAiReviewService(llmChatClient, themeService, objectMapper);
+
+    @Test
+    void doesNotChargeForAThemeWithoutEvidence() {
+        PolicyTheme original = digitalInfraTheme();
+        when(themeService.themeIndex()).thenReturn(Map.of("DIGITAL_INFRA", new PolicyTheme(
+                original.themeCode(), original.name(), original.policyLevel(), original.timeHorizon(),
+                original.strengthScore(), original.chainSegments(), List.of(), original.risks(), original.companyPool())));
+        when(llmChatClient.currentConfig()).thenReturn(config(true));
+
+        PolicyAiReview review = service.review("DIGITAL_INFRA");
+
+        assertThat(review.reviewedAt()).isNull();
+        assertThat(review.dataGaps()).anyMatch(gap -> gap.contains("证据"));
+        verify(llmChatClient, never()).completeJson(anyString(), anyString(), anyString(), any());
+    }
 
     @Test
     void returnsUnconfiguredReviewWithoutCallingLlmWhenApiKeyMissing() {
@@ -51,7 +68,13 @@ class PolicyAiReviewServiceTest {
                   "disagreements": ["部分信号属于地方试点，不宜按全国推广解读"],
                   "risks": ["订单兑现节奏低于预期"],
                   "must_verify": ["核实文件编号与发布机关"],
-                  "confidence": 78
+                  "confidence": 78,
+                  "trend_plan": {
+                    "thesis":"观察未来几周算力配套落地", "policy_increment":"增量待核实",
+                    "benefit_chain":["算力投资带动配套"],"short_term_catalysts":[],"medium_term_catalysts":[],
+                    "validation_signals":["预算落地"],"invalidation_signals":["项目延期"],
+                    "market_confirmation":"量价尚待观察", "company_assessments":[]
+                  }
                 }
                 """));
 
@@ -97,7 +120,7 @@ class PolicyAiReviewServiceTest {
         assertThat(review.directionLabel()).isEqualTo("方向待定");
         assertThat(review.phaseLabel()).isEqualTo("阶段待定");
         assertThat(review.logicSummary()).isNull();
-        assertThat(review.dataGaps()).hasSize(3);
+        assertThat(review.dataGaps()).hasSize(4);
     }
 
     @Test

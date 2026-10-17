@@ -1,207 +1,139 @@
 // @vitest-environment jsdom
-
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchPolicyThemes, reviewPolicyTheme } from '../api/client'
-import { toast } from '../components/ui/Toast'
+import { fetchPolicyDaily, fetchPolicyReviewHistory, refreshPolicyDaily, reviewPolicyTheme } from '../api/client'
 import { useAppStore } from '../store/appStore'
 import { PolicyIndustryPage } from './PolicyIndustryPage'
+import type { PolicyAiReview, PolicyDailySnapshot, PolicyTheme } from '../types'
 
-vi.mock('../api/client', () => ({
-  fetchPolicyThemes: vi.fn(),
-  reviewPolicyTheme: vi.fn()
-}))
+vi.mock('../api/client', () => ({ fetchPolicyDaily: vi.fn(), fetchPolicyReviewHistory: vi.fn(), refreshPolicyDaily: vi.fn(), reviewPolicyTheme: vi.fn() }))
+const theme: PolicyTheme = {
+  themeCode: 'DIGITAL_INFRA', name: '数字经济与算力', policyLevel: '政策线索', timeHorizon: '2–12周观察', strengthScore: 60,
+  chainSegments: ['算力设备'], risks: ['订单需要验证'], signals: [{ source: '政府网', summary: '推进算力设施建设方案', signalType: '标题关键词匹配', confidence: 60, url: 'https://www.gov.cn/policy-test', publishedAt: '2026-10-17' }],
+  companyPool: [{ symbol: '000977', companyName: '浪潮信息', industry: '计算机设备', chainSegment: '算力设备', researchRole: '行业相关候选', leadershipRationale: ['行业关键词匹配'], financialQualityScore: 65, financialQualityLabel: '财报待核验', latestPrice: null, peTtm: null, pbRatio: null, amount: null, actionLabel: '观察', dataGaps: ['主营占比待核验'] }],
+}
+const review: PolicyAiReview = {
+  themeCode: theme.themeCode, themeName: theme.name, provider: 'deepseek', model: 'test-model', relevanceScore: 70,
+  direction: 'POSITIVE', directionLabel: '政策利好', phase: 'EARLY', phaseLabel: '发酵初期', logicSummary: '旧研判摘要',
+  confirmations: [], disagreements: ['落实节奏待验证'], risks: [], mustVerify: ['核实原文适用范围'], confidence: 65,
+  reviewedAt: '2026-10-17T00:40:00Z', dataGaps: [], evidenceSnapshot: theme.signals,
+  trendPlan: { thesis: '观察设备订单能否逐步兑现', policyIncrement: '缺少旧政策对照', benefitChain: ['建设支持→设备需求'], shortTermCatalysts: ['跟踪配套细则'], mediumTermCatalysts: ['跟踪招标与订单'], validationSignals: ['公告出现实际订单'], invalidationSignals: ['计划被取消'], marketConfirmation: '量价待验证', companyAssessments: [{ symbol: '000977', companyName: '浪潮信息', relevance: 'INDUSTRY', rationale: '设备行业相关', verificationNeeded: '核验主营收入' }] },
+}
+const daily: PolicyDailySnapshot = { status: 'READY', scheduledTime: '每天08:30（北京时间）', startedAt: '2026-10-17T00:30:00Z', completedAt: '2026-10-17T00:40:00Z', themes: [theme], reviewedThemeCodes: [theme.themeCode], dataGaps: [] }
 
-vi.mock('../components/ui/Toast', () => ({
-  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn(), loading: vi.fn(), dismiss: vi.fn() }
-}))
-
-const mockedFetchPolicyThemes = vi.mocked(fetchPolicyThemes)
-const mockedReviewPolicyTheme = vi.mocked(reviewPolicyTheme)
-
-describe('PolicyIndustryPage', () => {
+describe('daily policy research board', () => {
   let host: HTMLDivElement
   let root: Root
-
   beforeEach(() => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     vi.clearAllMocks()
-    host = document.createElement('div')
-    document.body.append(host)
-    root = createRoot(host)
-    mockedFetchPolicyThemes.mockResolvedValue(policyThemes as never)
+    localStorage.clear()
+    vi.mocked(fetchPolicyDaily).mockResolvedValue(daily)
+    vi.mocked(fetchPolicyReviewHistory).mockResolvedValue([review])
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { callback(0); return 1 })
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined)
+    useAppStore.setState({ llmConfig: { provider: 'deepseek', model: 'test-model', apiKeyConfigured: true } as never })
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  })
+  afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT })
+  async function render() { await act(async () => { root.render(<PolicyIndustryPage />) }) }
+  async function click(text: string) {
+    const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === text || item.getAttribute('aria-label') === text)
+    expect(button).toBeDefined(); expect(button!.disabled).toBe(false)
+    await act(async () => { button!.focus(); button!.click() })
+  }
+  async function detail() { await click(`查看${theme.name}趋势详情`) }
+
+  it('reads saved intelligence and reviews without launching paid analysis', async () => {
+    await render()
+    expect(host.textContent).toContain('每日产业情报')
+    expect(host.textContent).toContain('每天08:30')
+    expect(host.textContent).toContain('观察设备订单能否逐步兑现')
+    expect(host.textContent).toContain('标题级采集')
+    expect(reviewPolicyTheme).not.toHaveBeenCalled()
+    expect(refreshPolicyDaily).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('opens source articles and validated company assessments in separate detail tabs', async () => {
+    await render(); await detail(); await click('政策与新闻')
+    expect(document.querySelector<HTMLAnchorElement>('[role="dialog"] a')?.href).toBe('https://www.gov.cn/policy-test')
+    await click('上市公司')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('浪潮信息')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('设备行业相关')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('核验主营收入')
+    await click('研判记录 · 1')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('研判时的政策来源')
+  })
+
+  it('keeps the last successful analysis when a manual update fails', async () => {
+    vi.mocked(reviewPolicyTheme).mockRejectedValue(new Error('模型接口超时'))
+    await render(); await detail(); await click('更新 AI 研判')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('已保留上次结果')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('观察设备订单能否逐步兑现')
+  })
+
+  it('replaces the visible analysis on a successful manual review', async () => {
+    vi.mocked(reviewPolicyTheme).mockResolvedValue({ ...review, reviewedAt: '2026-10-17T01:00:00Z', trendPlan: { ...review.trendPlan!, thesis: '新的验证重点' } })
+    await render(); await detail(); await click('更新 AI 研判')
+    expect(host.textContent).toContain('新的验证重点')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('研判记录 · 2')
+  })
+
+  it('keeps a new manual review when an older history response arrives later', async () => {
+    await render()
+    let resolveHistory!: (value: PolicyAiReview[]) => void
+    vi.mocked(fetchPolicyReviewHistory).mockReturnValueOnce(new Promise(resolve => { resolveHistory = resolve }))
+    await click('读取结果')
+    const latest = { ...review, reviewedAt: '2026-10-17T01:00:00Z', trendPlan: { ...review.trendPlan!, thesis: '刚完成的新研判' } }
+    vi.mocked(reviewPolicyTheme).mockResolvedValue(latest)
+    await detail(); await click('更新 AI 研判')
+    expect(host.textContent).toContain('刚完成的新研判')
+
+    await act(async () => { resolveHistory([review]) })
+
+    expect(host.textContent).toContain('刚完成的新研判')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('研判记录 · 2')
+    await click('关闭详情')
+    vi.mocked(fetchPolicyReviewHistory).mockResolvedValue([review, latest, review])
+    await click('读取结果'); await detail()
+    expect(host.textContent).toContain('刚完成的新研判')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('研判记录 · 2')
+  })
+
+  it('shows model-specific risks in both the current analysis and saved history', async () => {
+    vi.mocked(fetchPolicyReviewHistory).mockResolvedValue([{ ...review, risks: ['新增产能可能压低行业利润率'] }])
+    await render(); await detail()
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('新增产能可能压低行业利润率')
+    await click('研判记录 · 1')
+    expect(document.querySelector('[role="dialog"] details')?.textContent).toContain('新增产能可能压低行业利润率')
+  })
+
+  it('prevents manual model calls when configuration is unavailable', async () => {
     useAppStore.setState({ llmConfig: null })
+    await render(); await detail()
+    expect([...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === '更新 AI 研判')?.disabled).toBe(true)
+    expect(reviewPolicyTheme).not.toHaveBeenCalled()
   })
 
-  afterEach(() => {
-    act(() => root.unmount())
-    host.remove()
-    delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
-    vi.restoreAllMocks()
+  it('starts a background collection and polls until the saved snapshot is ready', async () => {
+    vi.useFakeTimers()
+    vi.mocked(fetchPolicyDaily).mockResolvedValueOnce({ ...daily, status: 'IDLE', themes: [], reviewedThemeCodes: [] }).mockResolvedValue(daily)
+    vi.mocked(refreshPolicyDaily).mockResolvedValue({ ...daily, status: 'RUNNING', themes: [], reviewedThemeCodes: [] })
+    await render(); await click('立即采集与研判')
+    expect(host.textContent).toContain('正在采集与研判')
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(host.textContent).toContain('本轮完成')
+    expect(host.textContent).toContain(theme.name)
+    expect(refreshPolicyDaily).toHaveBeenCalledTimes(1)
   })
 
-  it('loads official policy themes and company pool without AI interpretation panel', async () => {
-    await act(async () => {
-      root.render(<PolicyIndustryPage />)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    const text = host.textContent ?? ''
-    expect(mockedFetchPolicyThemes).toHaveBeenCalled()
-    expect(text).toContain('政策产业看板')
-    expect(text).toContain('新质生产力与高端制造')
-    expect(text).toContain('工业母机')
-    expect(text).toContain('公司池')
-    expect(text).toContain('三一重工')
-    expect(text).toContain('财报质量较好')
-    expect(text).toContain('不荐股')
-    expect(text).toContain('政策原文Agent命中')
-    expect(text).not.toContain('AI 政策解读')
-    expect(text).not.toContain('AI解读')
-    expect(text).not.toContain('历史解读')
+  it('keeps the watchlist in this browser and filters by it', async () => {
+    await render(); await click(`关注${theme.name}`); await click('我的关注')
+    expect(host.textContent).toContain(theme.name)
+    expect(JSON.parse(localStorage.getItem('ai-stock.policy-tracked.v1')!)).toEqual([theme.themeCode])
+    await click(`取消关注${theme.name}`)
+    expect(host.textContent).toContain('没有符合筛选条件的产业')
   })
-
-  it('hides the AI review entry when no model key is configured', async () => {
-    await renderPage()
-
-    expect(host.textContent).not.toContain('AI 复核')
-  })
-
-  it('runs the real agent review and renders structured verdict when configured', async () => {
-    useAppStore.setState({
-      llmConfig: {
-        provider: 'deepseek',
-        model: 'deepseek-v4-pro',
-        baseUrl: 'https://api.deepseek.com',
-        responseFormat: 'json_object',
-        strictJsonSchema: false,
-        apiKeyConfigured: true,
-        apiKeySource: 'env:DEEPSEEK_API_KEY',
-        thinking: null,
-        maxCompletionTokens: 8192,
-        temperature: null
-      }
-    })
-    mockedReviewPolicyTheme.mockResolvedValue({
-      themeCode: 'NEW_QUALITY_PRODUCTIVITY',
-      themeName: '新质生产力与高端制造',
-      provider: 'deepseek',
-      model: 'deepseek-v4-pro',
-      relevanceScore: 86,
-      direction: 'POSITIVE',
-      directionLabel: '政策利好',
-      phase: 'ONGOING',
-      phaseLabel: '持续发酵',
-      logicSummary: '高端装备投资规划直接拉动工业母机与核心零部件需求',
-      confirmations: ['政策原文Agent命中确认'],
-      disagreements: ['部分信号属于地方试点，不宜按全国推广解读'],
-      risks: ['订单兑现节奏低于预期'],
-      mustVerify: ['核实文件编号与发布机关'],
-      confidence: 78,
-      reviewedAt: '2026-08-26T10:00:00+08:00',
-      dataGaps: []
-    })
-    await renderPage()
-
-    const button = [...host.querySelectorAll('button')].find((item) => item.textContent?.includes('AI 复核'))
-    expect(button).toBeDefined()
-    await act(async () => {
-      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    expect(mockedReviewPolicyTheme).toHaveBeenCalledWith('NEW_QUALITY_PRODUCTIVITY')
-    const text = host.textContent ?? ''
-    expect(text).toContain('AI 复核')
-    expect(text).toContain('政策利好')
-    expect(text).toContain('持续发酵')
-    expect(text).toContain('关联度 86')
-    expect(text).toContain('高端装备投资规划')
-    expect(text).toContain('复核确认')
-    expect(text).toContain('复核异议')
-    expect(text).toContain('待人工核实')
-  })
-
-  it('reports review failures without breaking the board', async () => {
-    useAppStore.setState({
-      llmConfig: { ...configuredLlmConfig, apiKeyConfigured: true }
-    })
-    mockedReviewPolicyTheme.mockRejectedValue(new Error('模型接口超时'))
-    await renderPage()
-
-    const button = [...host.querySelectorAll('button')].find((item) => item.textContent?.includes('AI 复核'))
-    await act(async () => {
-      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('AI 复核失败'))
-    expect(host.textContent).not.toContain('复核确认')
-  })
-
-  async function renderPage() {
-    await act(async () => {
-      root.render(<PolicyIndustryPage />)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-  }
 })
-
-const configuredLlmConfig = {
-  provider: 'deepseek',
-  model: 'deepseek-v4-pro',
-  baseUrl: 'https://api.deepseek.com',
-  responseFormat: 'json_object',
-  strictJsonSchema: false,
-  apiKeyConfigured: false,
-  apiKeySource: 'missing',
-  thinking: null as string | null,
-  maxCompletionTokens: 8192 as number | null,
-  temperature: null as number | null
-}
-
-const policyThemes = [
-  {
-    themeCode: 'NEW_QUALITY_PRODUCTIVITY',
-    name: '新质生产力与高端制造',
-    policyLevel: '国家级',
-    timeHorizon: '2026-2030',
-    strengthScore: 91.5,
-    chainSegments: ['工业母机', '机器人核心零部件'],
-    signals: [
-      {
-        source: '中国政府网',
-        signalType: '长期规划 / 政策原文Agent命中',
-        summary: '推动高端装备和现代化产业体系建设',
-        confidence: 92,
-        url: 'https://www.gov.cn/zhengce/example',
-        publishedAt: '2026-07-20'
-      }
-    ],
-    risks: ['概念拥挤', '订单兑现慢']
-    ,
-    companyPool: [
-      {
-        symbol: '600031',
-        companyName: '三一重工',
-        industry: '工程机械',
-        chainSegment: '高端装备',
-        researchRole: '产业龙头研究候选',
-        leadershipRationale: ['行业地位靠前', '主题匹配度高'],
-        financialQualityScore: 88,
-        financialQualityLabel: '财报质量较好',
-        latestPrice: 16.2,
-        peTtm: 18.5,
-        pbRatio: 1.9,
-        amount: 5000000000,
-        actionLabel: '不荐股',
-        dataGaps: ['仍需核验主营收入占比']
-      }
-    ]
-  }
-]
