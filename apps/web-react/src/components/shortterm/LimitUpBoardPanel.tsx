@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronRight, RefreshCw } from 'lucide-react'
+import { BarChart3, ChevronRight, RefreshCw } from 'lucide-react'
 import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
-import { isEscapeClose } from '../ui/DetailOverlay'
+import { DetailOverlay, isEscapeClose } from '../ui/DetailOverlay'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { Tag } from '../ui/Badge'
@@ -32,6 +32,7 @@ export function LimitUpBoardPanel() {
   const [breadth, setBreadth] = useState<ShortTermMarketBreadth | null>(null)
   const [breadthLoading, setBreadthLoading] = useState(false)
   const [breadthError, setBreadthError] = useState<string | null>(null)
+  const [marketOpen, setMarketOpen] = useState(false)
   const [industrySelection, setIndustrySelection] = useState<LimitUpIndustrySelection | null>(null)
   const mounted = useRef(false)
   const refreshing = useRef(false)
@@ -70,32 +71,46 @@ export function LimitUpBoardPanel() {
 
   return (
     <div onKeyDown={event => {
-      if (industrySelection && isEscapeClose(event.key, event.defaultPrevented)) {
+      if ((industrySelection || marketOpen) && isEscapeClose(event.key, event.defaultPrevented)) {
         event.preventDefault()
         event.stopPropagation()
         setIndustrySelection(null)
+        setMarketOpen(false)
       }
     }}>
       <Card>
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-base font-semibold text-ink-900">市场情绪与行业分布</h2>
-          {snapshot ? <span className="text-xs text-ink-400">{snapshot.tradeDate} · 快照 {formatDateTime(snapshot.fetchedAt)}</span> : null}
+        <div className="mb-4 flex justify-end">
+          <Button type="button" icon={<BarChart3 aria-hidden="true" className="h-4 w-4" />}
+            aria-haspopup="dialog" aria-expanded={marketOpen} onClick={() => setMarketOpen(true)}>
+            市场情绪与行业分布
+          </Button>
         </div>
-        <LimitUpBoardDetail
-          snapshot={snapshot}
-          loading={loading}
-          error={error}
-          breadth={breadth}
-          breadthLoading={breadthLoading}
-          breadthError={breadthError}
-          onRefresh={() => void refresh()}
-          onSelectIndustry={(industry) => {
-            if (!snapshot) return
+        <BoardSnapshotStatus snapshot={snapshot} loading={loading} error={error} />
+        {!error && snapshot?.available ? (
+          <LimitUpIndustryCards snapshot={snapshot} onSelectIndustry={(industry) => {
             setIndustrySelection({ industry, tradeDate: snapshot.tradeDate, fetchedAt: snapshot.fetchedAt,
               limitUpStocks: snapshot.stocks.filter(stock => (stock.industry?.trim() || '未分类') === industry) })
-          }}
-        />
+          }} />
+        ) : null}
+        {!loading && (error || !snapshot?.available) ? (
+          <Button type="button" variant="ghost" className="mt-3" loading={breadthLoading} onClick={() => void refresh()}>重新加载</Button>
+        ) : null}
       </Card>
+      {marketOpen ? (
+        <DetailOverlay open title="市场情绪与行业分布"
+          subtitle={snapshot ? `${snapshot.tradeDate} · 快照 ${formatDateTime(snapshot.fetchedAt)}` : undefined}
+          onClose={() => setMarketOpen(false)}>
+          <LimitUpBoardDetail
+            snapshot={snapshot}
+            loading={loading}
+            error={error}
+            breadth={breadth}
+            breadthLoading={breadthLoading}
+            breadthError={breadthError}
+            onRefresh={() => void refresh()}
+          />
+        </DetailOverlay>
+      ) : null}
       {industrySelection ? (
         <LimitUpIndustryOverlay key={`${industrySelection.tradeDate}:${industrySelection.industry}`}
           selection={industrySelection} onClose={() => setIndustrySelection(null)} />
@@ -115,11 +130,23 @@ interface LimitUpBoardDetailProps extends MarketBreadthProps {
   loading: boolean
   error: string | null
   onRefresh: () => void
-  onSelectIndustry?: (industry: string) => void
 }
 
-/** 首页内的完整看板内容。 */
-export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthLoading, breadthError, onRefresh, onSelectIndustry }: LimitUpBoardDetailProps) {
+function BoardSnapshotStatus({ snapshot, loading, error }: Pick<LimitUpBoardDetailProps, 'snapshot' | 'loading' | 'error'>) {
+  if (error) {
+    return <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">涨停看板获取失败：{error}</p>
+  }
+  if (!snapshot) {
+    return <p className="py-6 text-center text-sm text-ink-400">{loading ? '正在拉取涨停池数据…' : '暂无数据，请稍后重试。'}</p>
+  }
+  if (!snapshot.available) {
+    return <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">{snapshot.unavailableReason ?? '涨停池数据不可用'}</p>
+  }
+  return null
+}
+
+/** 市场情绪弹窗内的指标与行情数据。 */
+export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthLoading, breadthError, onRefresh }: LimitUpBoardDetailProps) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-2">
@@ -166,21 +193,7 @@ export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthL
           涨跌家数更新失败：{breadthError}{breadth ? '；当前保留上次快照，请注意统计时间。' : ''}
         </p>
       ) : null}
-      {error ? (
-        <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">
-          涨停看板获取失败：{error}
-        </p>
-      ) : null}
-      {!error && !snapshot ? (
-        <p className="py-6 text-center text-sm text-ink-400">
-          {loading ? '正在拉取涨停池数据…' : '暂无数据，请点击刷新。'}
-        </p>
-      ) : null}
-      {!error && snapshot && !snapshot.available ? (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
-          {snapshot.unavailableReason ?? '涨停池数据不可用'}
-        </p>
-      ) : null}
+      <BoardSnapshotStatus snapshot={snapshot} loading={loading} error={error} />
       {!error && snapshot?.available && snapshot.sentiment ? (
         <>
           <SentimentSummary
@@ -188,7 +201,6 @@ export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthL
             turnover={snapshot.marketTurnover}
             stockCount={snapshot.stocks.length}
           />
-          <LimitUpIndustryCards snapshot={snapshot} onSelectIndustry={onSelectIndustry} />
           <p className="text-[11px] leading-relaxed text-ink-400">
             {snapshot.sentiment.explanation}
             {snapshot.marketTurnover ? ` ${snapshot.marketTurnover.explanation}` : ''}
@@ -283,7 +295,7 @@ function SealBucket({ label, count, total }: { label: string; count: number; tot
   )
 }
 
-function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
+export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
   snapshot: ShortTermLimitUpBoardSnapshot
   onSelectIndustry?: (industry: string) => void
 }) {

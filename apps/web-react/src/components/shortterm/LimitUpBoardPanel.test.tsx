@@ -2,7 +2,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermMarketBreadth } from '../../types'
-import { LimitUpBoardDetail } from './LimitUpBoardPanel'
+import { LimitUpBoardDetail, LimitUpIndustryCards } from './LimitUpBoardPanel'
 
 const snapshot: ShortTermLimitUpBoardSnapshot = {
   tradeDate: '2026-08-21',
@@ -128,7 +128,7 @@ describe('Market breadth timing', () => {
   })
 })
 
-describe('LimitUpBoardDetail', () => {
+describe('LimitUpIndustryCards', () => {
   it('shows industry cards by count with only three stock previews in server order', () => {
     const stocks = [
       { ...snapshot.stocks[0], symbol: '600001', name: '饰品高标', industry: '饰品', consecutiveBoards: 6 },
@@ -143,7 +143,7 @@ describe('LimitUpBoardDetail', () => {
     Object.freeze(stocks)
     const container = document.createElement('div')
     container.innerHTML = renderToStaticMarkup(
-      <LimitUpBoardDetail snapshot={{ ...snapshot, stocks, industryStats: [] }} loading={false} error={null} onRefresh={() => undefined} />
+      <LimitUpIndustryCards snapshot={{ ...snapshot, stocks, industryStats: [] }} />
     )
 
     expect(container.querySelector('table')).toBeNull()
@@ -173,7 +173,7 @@ describe('LimitUpBoardDetail', () => {
     }))
     const container = document.createElement('div')
     container.innerHTML = renderToStaticMarkup(
-      <LimitUpBoardDetail snapshot={{ ...snapshot, stocks }} loading={false} error={null} onRefresh={() => undefined} />
+      <LimitUpIndustryCards snapshot={{ ...snapshot, stocks }} />
     )
     const cards = Array.from(container.querySelectorAll('section[aria-label="涨停行业卡片"] button'))
     expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(
@@ -181,6 +181,9 @@ describe('LimitUpBoardDetail', () => {
     )
   })
 
+})
+
+describe('LimitUpBoardDetail', () => {
   it('shows limit-down counts beside breadth and keeps missing counts distinct from zero', () => {
     const available = renderToStaticMarkup(
       <LimitUpBoardDetail snapshot={snapshot} breadth={breadth} loading={false} error={null} onRefresh={() => undefined} />
@@ -201,7 +204,7 @@ describe('LimitUpBoardDetail', () => {
     expect(missingMetrics).toContain('待补充')
   })
 
-  it('renders the board metrics and industry previews inside the overlay body', () => {
+  it('renders the market metrics without duplicating homepage industry cards', () => {
     const html = renderToStaticMarkup(
       <LimitUpBoardDetail
         snapshot={snapshot}
@@ -218,14 +221,12 @@ describe('LimitUpBoardDetail', () => {
     expect(html).toContain('显著缩量 -10.18%')
     expect(html).toContain('今日两市成交额')
     expect(html).toContain('18792.64 亿')
-    expect(html).toContain('涨停行业卡片')
-    expect(html).toContain('深中华A')
-    expect(html).toContain('09:25')
-    expect(html).toContain('2天2板')
+    expect(html).not.toContain('涨停行业卡片')
+    expect(html).not.toContain('深中华A')
     expect(html).toContain('快照口径')
   })
 
-  it('keeps the unavailable reason for a closed overlay body', () => {
+  it('keeps the unavailable reason inside the market dialog body', () => {
     const html = renderToStaticMarkup(
       <LimitUpBoardDetail
         snapshot={{

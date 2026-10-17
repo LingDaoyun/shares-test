@@ -138,6 +138,23 @@ describe('Limit-up industry third-level detail', () => {
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
   })
 
+  it('opens industry details after closing market sentiment without reloading the home board', async () => {
+    await openBoard()
+    const marketButton = Array.from(host.querySelectorAll('button'))
+      .find(button => button.textContent === '市场情绪与行业分布')
+    expect(marketButton).toBeDefined()
+    await act(async () => { marketButton!.focus(); marketButton!.click() })
+    expect(topDialog().textContent).toContain('最新可用涨跌数据')
+    await act(async () => { topDialog().querySelector<HTMLButtonElement>('button[aria-label="关闭详情"]')!.click() })
+
+    const industryCard = host.querySelector<HTMLButtonElement>('button[aria-label="查看半导体涨停明细"]')!
+    await act(async () => { industryCard.focus(); industryCard.click() })
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+    expect(topDialog().textContent).toContain('半导体 · 涨停明细')
+    expect(topDialog().textContent).not.toContain('最新可用涨跌数据')
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
+  })
+
   it('Escape closes the industry layer and restores focus to its homepage card', async () => {
     await openIndustry()
     await act(async () => { topDialog().dispatchEvent(new KeyboardEvent('keydown', {
