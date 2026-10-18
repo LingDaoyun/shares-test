@@ -2,7 +2,10 @@ package com.aistock.research.shortterm;
 
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
+import com.aistock.research.trading.TradingClockService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -15,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ShortTermResearchSetupEvaluatorTest {
     private static final LocalDate START = LocalDate.of(2026, 3, 2);
+    private static final TradingClockService CALENDAR = new TradingClockService();
     private final ShortTermResearchSetupEvaluator evaluator = new ShortTermResearchSetupEvaluator();
 
     @Test
@@ -126,6 +130,7 @@ class ShortTermResearchSetupEvaluatorTest {
         List<EastMoneyKLine> rows = breakout();
         EastMoneyQuote quote = quote(rows, true);
         ShortTermResearchSetup result = evaluate(rows.subList(40, rows.size()), quote, strength());
+        assertThat(result.historicalStructureCurrent()).isTrue();
         assertThat(result.state()).isEqualTo("UNAVAILABLE");
         assertThat(result.matched()).isFalse();
         assertThat(result.dataGaps()).isNotEmpty();
@@ -144,6 +149,77 @@ class ShortTermResearchSetupEvaluatorTest {
         ShortTermResearchSetup result = evaluate(rows, quote(rows, false), strength());
         assertThat(result.executionEvidenceReady()).isTrue();
         assertThat(result.confirmed()).isFalse();
+    }
+
+    @Test
+    void freshQuoteCannotMakeWeeksOldHistoricalStructureExecutable() {
+        List<EastMoneyKLine> rows = breakout();
+        EastMoneyQuote original = quote(rows, false);
+        // Keep the exact same price and volume evidence, but move the live quote
+        // weeks beyond the newest completed daily bar returned by the provider.
+        LocalDate liveDate = LocalDate.of(2026, 7, 23);
+        Instant liveTimestamp = Instant.parse(liveDate + "T06:47:00Z");
+        EastMoneyQuote liveQuote = new EastMoneyQuote(original.symbol(), original.name(), original.market(),
+                original.industry(), original.latestPrice(), original.changePercent(), original.turnoverRate(),
+                original.volume(), original.amount(), null, null, null, "test", "test", liveTimestamp,
+                liveDate, liveTimestamp, null, original.openPrice(), original.highPrice(), original.lowPrice(),
+                original.realtimeVolumeRatio());
+        ShortTermResearchSetup result = evaluate(rows.subList(0, rows.size() - 1), liveQuote, strength());
+
+        assertThat(result.setupType()).isEqualTo("CONTRACTION_BREAKOUT");
+        assertThat(result.executionEvidenceReady()).isFalse();
+        assertThat(result.historicalStructureCurrent()).isFalse();
+        assertThat(result.confirmed()).isFalse();
+        assertThat(result.dataGaps()).anyMatch(value -> value.contains("日线未更新"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"2026-07-27,2026-07-24", "2026-10-08,2026-09-30"})
+    void lastTradingDayRemainsUsableAcrossWeekendsAndHolidays(String live, String previous) {
+        List<EastMoneyKLine> source = breakout();
+        LocalDate liveDate = LocalDate.parse(live);
+        LocalDate cursor = LocalDate.parse(previous);
+        List<EastMoneyKLine> rows = new ArrayList<>();
+        for (int i = source.size() - 2; i >= 0; i--) {
+            EastMoneyKLine row = source.get(i);
+            rows.add(new EastMoneyKLine(row.symbol(), cursor, row.open(), row.close(), row.high(), row.low(),
+                    row.volume(), row.amount()));
+            cursor = CALENDAR.previousTradingDay(cursor);
+        }
+        EastMoneyKLine current = source.get(source.size() - 1);
+        rows.add(new EastMoneyKLine(current.symbol(), liveDate, current.open(), current.close(), current.high(),
+                current.low(), current.volume(), current.amount()));
+
+        ShortTermResearchSetup result = evaluate(rows, quote(rows, false), strength());
+
+        assertThat(result.setupType()).isEqualTo("CONTRACTION_BREAKOUT");
+        assertThat(result.executionEvidenceReady()).isTrue();
+        assertThat(result.historicalStructureCurrent()).isTrue();
+        assertThat(result.dataGaps()).noneMatch(value -> value.contains("日线未更新"));
+    }
+
+    @Test
+    void closedQuoteCannotExecuteWithOnlyThePreviousTradingDaysHistory() {
+        List<EastMoneyKLine> rows = breakout();
+        ShortTermResearchSetup result = evaluate(rows.subList(0, rows.size() - 1), quote(rows, true), strength());
+
+        assertThat(result.executionEvidenceReady()).isFalse();
+        assertThat(result.historicalStructureCurrent()).isFalse();
+        assertThat(result.confirmed()).isFalse();
+        assertThat(result.dataGaps()).anyMatch(value -> value.contains("日线未更新"));
+    }
+
+    @Test
+    void unknownHolidayCalendarCannotAuthorizeHistoricalStructure() {
+        List<EastMoneyKLine> rows = breakout().stream().map(row -> new EastMoneyKLine(row.symbol(),
+                row.tradeDate().plusYears(1), row.open(), row.close(), row.high(), row.low(), row.volume(), row.amount()))
+                .toList();
+        ShortTermResearchSetup result = evaluate(rows, quote(rows, true), strength());
+
+        assertThat(result.historicalStructureCurrent()).isFalse();
+        assertThat(result.executionEvidenceReady()).isFalse();
+        assertThat(result.confirmed()).isFalse();
+        assertThat(result.dataGaps()).anyMatch(value -> value.contains("交易日历未核实"));
     }
 
     @Test
@@ -213,7 +289,7 @@ class ShortTermResearchSetupEvaluatorTest {
             BigDecimal close = bd("10").add(bd("0.03").multiply(BigDecimal.valueOf(i)));
             rows.add(row(i, close, i >= 60 ? bd("0.07") : bd("0.30"), bd("100000")));
         }
-        rows.add(new EastMoneyKLine("600001", START.plusDays(65), bd("12.02"), bd("12.12"),
+        rows.add(new EastMoneyKLine("600001", date(65), bd("12.02"), bd("12.12"),
                 bd("12.16"), bd("11.98"), bd("160000"), bd("193920000")));
         return rows;
     }
@@ -227,13 +303,13 @@ class ShortTermResearchSetupEvaluatorTest {
         rows.add(row(66, bd("13.82"), bd("0.10"), bd("70000")));
         rows.add(row(67, bd("13.75"), bd("0.10"), bd("65000")));
         rows.add(row(68, bd("13.68"), bd("0.10"), bd("60000")));
-        rows.add(new EastMoneyKLine("600001", START.plusDays(69), bd("13.72"), bd("13.92"),
+        rows.add(new EastMoneyKLine("600001", date(69), bd("13.72"), bd("13.92"),
                 bd("13.97"), bd("13.65"), bd("130000"), bd("180960000")));
         return rows;
     }
 
     private EastMoneyKLine row(int offset, BigDecimal close, BigDecimal halfRange, BigDecimal volume) {
-        return new EastMoneyKLine("600001", START.plusDays(offset), close.subtract(bd("0.02")), close,
+        return new EastMoneyKLine("600001", date(offset), close.subtract(bd("0.02")), close,
                 close.add(halfRange), close.subtract(halfRange), volume, close.multiply(volume).multiply(bd("100")));
     }
 
@@ -251,4 +327,6 @@ class ShortTermResearchSetupEvaluatorTest {
     }
 
     private BigDecimal bd(String value) { return new BigDecimal(value); }
+
+    private LocalDate date(int offset) { return CALENDAR.tradingDayAfter(START, offset); }
 }

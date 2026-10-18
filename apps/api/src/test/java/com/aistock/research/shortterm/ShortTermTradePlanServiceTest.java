@@ -17,6 +17,45 @@ class ShortTermTradePlanServiceTest {
     private final ShortTermTradePlanService service = new ShortTermTradePlanService(new TradingClockService());
 
     @Test
+    void marketLightConstraintCapsActualPositionAndKeepsNormalPlanPrices() {
+        ShortTermTradePlan original = service.create(LocalDate.of(2026, 7, 23), bd("10"), bd("9.9"), bd("10.02"),
+                technicalWithAtrAndSupport("3", "9.72"), rules());
+        ShortTermTradePlan capped = original.withMarketConstraint(market("REPAIR", "LIGHT_TRIAL"),
+                Instant.parse("2026-07-23T06:49:00Z"), true);
+        assertThat(capped.status()).isEqualTo("ACTIONABLE");
+        assertThat(capped.maxPositionRatio()).isEqualByComparingTo("0.20");
+        assertThat(capped.hardStopPrice()).isEqualTo(original.hardStopPrice());
+        assertThat(capped.withMarketConstraint(market("TREND_EXPANSION", "NORMAL"),
+                Instant.parse("2026-07-23T06:49:00Z"), true).maxPositionRatio()).isEqualByComparingTo("0.20");
+    }
+
+    @Test
+    void unavailableMarketCannotBeOverriddenByActionableTailPlan() {
+        ShortTermTradePlan original = service.create(LocalDate.of(2026, 7, 23), bd("10"), bd("9.9"), bd("10.02"),
+                technicalWithAtrAndSupport("3", "9.72"), rules());
+        ShortTermTradePlan blocked = original.withMarketConstraint(ShortTermMarketRegime.unavailable("行情不足"),
+                Instant.parse("2026-07-23T06:49:00Z"), true);
+        assertThat(blocked.status()).isEqualTo("BLOCKED");
+        assertThat(blocked.maxPositionRatio()).isEqualByComparingTo("0");
+        assertThat(blocked.blockedReasons()).anyMatch(reason -> reason.contains("大盘"));
+    }
+
+    @Test
+    void earlierActionablePlanExpiresAtFinalOutputBoundary() {
+        ShortTermTradePlan original = service.create(LocalDate.of(2026, 7, 23), bd("10"), bd("9.9"), bd("10.02"),
+                technicalWithAtrAndSupport("3", "9.72"), rules());
+        assertThat(original.withMarketConstraint(market("TREND_EXPANSION", "NORMAL"),
+                Instant.parse("2026-07-23T06:50:00Z"), true).status()).isEqualTo("BLOCKED");
+        assertThat(original.withMarketConstraint(market("TREND_EXPANSION", "NORMAL"),
+                Instant.parse("2026-07-23T06:44:00Z"), false).status()).isEqualTo("BLOCKED");
+    }
+
+    private ShortTermMarketRegime market(String state, String action) {
+        return new ShortTermMarketRegime(state, "测试", null, null, null, null, null, null,
+                100, action, "测试市场约束", List.of());
+    }
+
+    @Test
     void createsClampedT1T2Plan() {
         ShortTermTradePlan plan = service.create(
                 LocalDate.of(2026, 7, 23),

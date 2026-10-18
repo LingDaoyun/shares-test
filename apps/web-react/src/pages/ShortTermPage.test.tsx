@@ -792,6 +792,119 @@ describe('ShortTermPage manual scan flow', () => {
     expect(startShortTermScanJob).not.toHaveBeenCalled()
   })
 
+  it('shows sampled turnover separately from comparable same-time index amount and volume', async () => {
+    const report = reportWithCandidates(['600795'])
+    report.marketRegime = { ...report.marketRegime!,
+      maxAction: 'NORMAL',
+      limitUpCount: 48, limitDownCount: 7, brokenCount: 12, sealBreakRatioPercent: 20,
+      limitCountSource: 'MEASURED_POOL',
+      liquidity: {
+        tradeDate: '2026-07-23', dataCutoffAt: '2026-07-23T14:49:00+08:00',
+        status: 'SAME_TIME', label: '同刻放量', sampleAmountYuan: 1_234_567_000_000,
+        amountCoveragePercent: 98.75, currentComparableAmountYuan: 1_100_000_000_000,
+        previousComparableAmountYuan: 1_000_000_000_000, amountChangePercent: 10,
+        currentComparableVolumeHands: 950_000_000, previousComparableVolumeHands: 1_000_000_000,
+        volumeChangePercent: -5, comparisonDate: '2026-07-22', comparisonTime: '14:49',
+        source: 'INDEX_SAME_TIME', explanation: '指数同刻累计量额作为两市活跃度代理。', dataGaps: ['样本部分成交额缺失']
+      }
+    }
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+
+    const panel = host.querySelector('[aria-label="市场环境"]')!
+    expect(panel?.textContent).toContain('正常试错')
+    expect(panel.textContent).toContain('沪深A股样本成交额12345.67 亿')
+    expect(panel.textContent).toContain('两市指数同刻成交额 / 量')
+    expect(panel.textContent).toContain('+10.00%')
+    expect(panel.textContent).toContain('-5.00%')
+    expect(panel.textContent).toContain('涨停 / 跌停（涨跌停池）48 / 7')
+    expect(panel.textContent).toContain('炸板率20.00%')
+    const provenance = panel.querySelector('details')!
+    expect(provenance.open).toBe(false)
+    expect(provenance.textContent).toContain('2026-07-22 14:49')
+    expect(provenance.textContent).toContain('2026-07-23 14:49:00')
+    expect(provenance.textContent).toContain('98.75%')
+    expect(provenance.textContent).toContain('INDEX_SAME_TIME')
+    expect(provenance.textContent).toContain('样本部分成交额缺失')
+  })
+
+  it('keeps unavailable and historical market comparisons distinct from measured zero', async () => {
+    const report = reportWithCandidates(['600795'])
+    report.marketRegime = { ...report.marketRegime!,
+      limitUpCount: null, limitDownCount: null, brokenCount: null,
+      sealBreakRatioPercent: null, limitCountSource: 'UNAVAILABLE',
+      liquidity: {
+        tradeDate: '2026-07-23', dataCutoffAt: null, status: 'UNAVAILABLE', label: '待补',
+        sampleAmountYuan: null, amountCoveragePercent: null,
+        currentComparableAmountYuan: null, previousComparableAmountYuan: null, amountChangePercent: null,
+        currentComparableVolumeHands: null, previousComparableVolumeHands: null, volumeChangePercent: null,
+        comparisonDate: null, comparisonTime: null, source: null, explanation: '', dataGaps: []
+      }
+    }
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+    const panel = host.querySelector('[aria-label="市场环境"]')!
+    expect(panel?.textContent).toContain('沪深A股样本成交额待补充')
+    expect(panel.textContent).toContain('量额比较不可用')
+    expect(panel.textContent).toContain('涨停 / 跌停（来源待补）待补充 / 待补充')
+    expect(panel.textContent).toContain('炸板率待补充')
+    expect(panel.textContent).not.toContain('0.00%')
+    expect(panel.textContent).not.toContain('0.00 亿')
+    expect(panel.textContent).not.toContain('真实')
+  })
+
+  it('labels legacy limit counts as approximate and does not reconstruct counts from regime ratios', async () => {
+    useShortTermScanStore.setState({ report: emptyReport })
+    await renderPage(root)
+    const panel = host.querySelector('[aria-label="市场环境"]')!
+    expect(panel?.textContent).toContain('近似涨停 / 跌停20 / 5')
+    expect(panel.textContent).toContain('量额比较不可用')
+    expect(panel.textContent).toContain('历史报告未保存可比量额')
+    expect(panel.textContent).not.toContain('真实')
+  })
+
+  it('preserves measured zeros and the mixed limit-count source', async () => {
+    const report = reportWithCandidates(['600795'])
+    report.marketRegime = { ...report.marketRegime!,
+      limitUpCount: 0, limitDownCount: 0, brokenCount: 0, sealBreakRatioPercent: 0,
+      limitCountSource: 'MIXED',
+      liquidity: {
+        tradeDate: '2026-07-23', dataCutoffAt: report.dataCutoffAt,
+        status: 'SAME_TIME', label: '同刻持平', sampleAmountYuan: 0,
+        amountCoveragePercent: 100, currentComparableAmountYuan: 100, previousComparableAmountYuan: 100,
+        amountChangePercent: 0, currentComparableVolumeHands: 10, previousComparableVolumeHands: 10,
+        volumeChangePercent: 0, comparisonDate: '2026-07-22', comparisonTime: '14:49',
+        source: 'INDEX_SAME_TIME', explanation: '', dataGaps: []
+      }
+    }
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+    const panel = host.querySelector('[aria-label="市场环境"]')!
+    expect(panel?.textContent).toContain('沪深A股样本成交额0.00 亿')
+    expect(panel.textContent).toContain('涨停池 / 近似跌停0 / 0')
+    expect(panel.textContent).toContain('炸板率0.00%')
+    expect(panel.textContent).toContain('额 0.00% / 量 0.00%')
+  })
+
+  it('retains the market execution stop when sentiment is hidden and explains it in candidate details without altering research scores', async () => {
+    const report = reportWithCandidates(['600795'])
+    report.marketRegime = { ...report.marketRegime!, state: 'RISK_OFF', label: '系统性退潮', maxAction: 'NO_TRADE', explanation: '弱市放量，暂停执行。' }
+    report.candidates[0].signalProfile = { ...report.candidates[0].signalProfile!, research: researchSetup() }
+    localStorage.setItem(SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY, JSON.stringify({ marketSentimentVisible: false, hotDirectionsVisible: true, fundFlowVisible: false }))
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+    expect(host.querySelector('[aria-label="市场环境"]')).toBeNull()
+    const stop = host.querySelector('[aria-label="市场执行约束"]')!
+    expect(stop?.textContent).toContain('暂停执行')
+    expect(stop.textContent).toContain('弱市放量，暂停执行。')
+    expect(host.textContent).toContain('研究分 81.25')
+    await clickButton('候选600795')
+    const detail = document.querySelector('[role="dialog"]')!
+    expect(detail.querySelector('[aria-label="市场执行约束"]')?.textContent).toContain('暂停执行')
+    expect(detail.textContent).toContain('市场约束只限制执行动作，个股研究分保持原值。')
+    expect(detail.textContent).toContain('81.25')
+  })
+
   it('defaults to the remembered compact result view after a manual scan result loads', async () => {
     await renderWithManualReport(root, reportWithCandidates(['600795']))
 

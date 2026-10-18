@@ -99,7 +99,7 @@ class ShortTermScanJobServiceTest {
             assertThat(finished.status()).isEqualTo("SUCCEEDED");
             assertThat(finished.resultStatus()).isEqualTo(
                     com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.DATA_BLOCKED);
-            assertThat(finished.strategyVersion()).isEqualTo("short-term-research-v6");
+            assertThat(finished.strategyVersion()).isEqualTo("short-term-research-v7-market-context");
             assertThat(finished.report()).isSameAs(report);
             assertThat(finished.message()).contains("不可执行");
             verify(shortTermService).report(eq(request));

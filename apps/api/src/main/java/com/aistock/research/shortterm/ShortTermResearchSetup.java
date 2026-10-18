@@ -23,7 +23,8 @@ public record ShortTermResearchSetup(
         List<String> evidence,
         List<String> risks,
         List<String> dataGaps,
-        boolean executionEvidenceReady
+        boolean executionEvidenceReady,
+        boolean historicalStructureCurrent
 ) {
     public ShortTermResearchSetup {
         evidence = evidence == null ? List.of() : List.copyOf(evidence);

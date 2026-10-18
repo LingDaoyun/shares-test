@@ -39,6 +39,28 @@ public record ShortTermTradePlan(
         blockedReasons = blockedReasons == null ? List.of() : List.copyOf(blockedReasons);
     }
 
+    ShortTermTradePlan withMarketConstraint(ShortTermMarketRegime regime, Instant completedAt, boolean entryWindow) {
+        java.util.ArrayList<String> blocked = new java.util.ArrayList<>(blockedReasons);
+        java.util.ArrayList<String> basis = new java.util.ArrayList<>(analysisBasis == null ? List.of() : analysisBasis);
+        BigDecimal position = maxPositionRatio;
+        if (regime == null || regime.blocksExecution()) {
+            blocked.add("大盘环境暂停执行或证据不足，个股信号不能覆盖市场闸门");
+            position = BigDecimal.ZERO;
+        } else {
+            basis.add("大盘约束：" + regime.explanation());
+            if (regime.lightTrialOnly()) position = position == null ? new BigDecimal("0.20") : position.min(new BigDecimal("0.20"));
+        }
+        if ("ACTIONABLE".equals(status) && (!entryWindow || completedAt == null || validUntil == null || !completedAt.isBefore(validUntil))) {
+            blocked.add("结果输出时已不在有效入场窗口，原计划已失效，请重新扫描");
+        }
+        return new ShortTermTradePlan(strategyLabel, blocked.isEmpty() ? status : "BLOCKED", blocked.stream().distinct().toList(),
+                entryWindow(), validUntil, referenceEntryPrice, entryLow, entryHigh, position, maxT2PositionRatio,
+                firstTargetPercent, firstTargetPrice, firstReductionRatio, secondTargetPercent, secondTargetPrice,
+                hardStopPercent, hardStopPrice, trailingDrawdownPercent, trailingStopRule,
+                normalExitDate, normalExitTime, absoluteExitDate, absoluteExitTime,
+                t2ExtensionConditions, openScenarios, List.copyOf(basis), riskWarnings);
+    }
+
     ShortTermTradePlan withResearchInvalidation(BigDecimal invalidation) {
         if (invalidation == null || invalidation.signum() <= 0 || referenceEntryPrice == null
                 || invalidation.compareTo(referenceEntryPrice) >= 0) {

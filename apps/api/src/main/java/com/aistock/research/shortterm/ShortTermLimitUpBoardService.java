@@ -249,11 +249,12 @@ public class ShortTermLimitUpBoardService {
         List<EastMoneyIndexVolumeBar> shenzhenBars = eastMoneyClient.fetchIndexDailyVolumeBars("sz399106", 2);
         BigDecimal todayAmountYuan = null;
         try {
-            todayAmountYuan = eastMoneyClient.fetchShSzIndexTodayAmount();
+            if (tradeDate.equals(LocalDate.now(CHINA_MARKET_ZONE))) todayAmountYuan = eastMoneyClient.fetchShSzIndexTodayAmount();
         } catch (Exception exception) {
             logger.warn("指数今日成交额获取失败，仅展示量能对比：{}", rootMessage(exception));
         }
-        return marketTurnover(tradeDate, shanghaiBars, shenzhenBars, todayAmountYuan);
+        return marketTurnover(tradeDate, shanghaiBars, shenzhenBars, todayAmountYuan,
+                java.time.LocalDateTime.now(CHINA_MARKET_ZONE));
     }
 
     /**
@@ -266,11 +267,23 @@ public class ShortTermLimitUpBoardService {
             List<EastMoneyIndexVolumeBar> shenzhenBars,
             BigDecimal todayAmountYuan
     ) {
-        LocalDate effectiveDate = latestAlignedDate(shanghaiBars, shenzhenBars);
+        return marketTurnover(tradeDate, shanghaiBars, shenzhenBars, todayAmountYuan, tradeDate.atTime(15, 1));
+    }
+
+    static ShortTermMarketTurnover marketTurnover(LocalDate tradeDate, List<EastMoneyIndexVolumeBar> shanghaiBars,
+            List<EastMoneyIndexVolumeBar> shenzhenBars, BigDecimal todayAmountYuan, java.time.LocalDateTime asOf) {
+        if (tradeDate.isAfter(asOf.toLocalDate())) throw new IllegalStateException("不能读取未来日期的指数量能");
+        if (tradeDate.equals(asOf.toLocalDate()) && asOf.toLocalTime().isBefore(LocalTime.of(15, 1))) {
+            return new ShortTermMarketTurnover(tradeDate, null, null, null, todayAmountYuan, "盘中暂不可比",
+                    "当前日线成交量尚未完成，不能与昨日全天比较；短线候选页提供两市同刻量额比较。");
+        }
+        LocalDate effectiveDate = latestAlignedDate(shanghaiBars, shenzhenBars, tradeDate);
+        LocalDate previousDate = new com.aistock.research.trading.TradingClockService().previousTradingDay(effectiveDate);
         BigDecimal shanghaiToday = volumeOn(shanghaiBars, effectiveDate);
         BigDecimal shenzhenToday = volumeOn(shenzhenBars, effectiveDate);
-        BigDecimal shanghaiPrevious = volumeBefore(shanghaiBars, effectiveDate);
-        BigDecimal shenzhenPrevious = volumeBefore(shenzhenBars, effectiveDate);
+        BigDecimal shanghaiPrevious = volumeOn(shanghaiBars, previousDate);
+        BigDecimal shenzhenPrevious = volumeOn(shenzhenBars, previousDate);
+        if (!effectiveDate.equals(tradeDate)) todayAmountYuan = null;
         if (shanghaiToday == null || shenzhenToday == null || shanghaiPrevious == null || shenzhenPrevious == null) {
             throw new IllegalStateException("指数量能数据不完整，无法对比：" + effectiveDate);
         }
@@ -329,14 +342,16 @@ public class ShortTermLimitUpBoardService {
 
     private static LocalDate latestAlignedDate(
             List<EastMoneyIndexVolumeBar> shanghaiBars,
-            List<EastMoneyIndexVolumeBar> shenzhenBars
+            List<EastMoneyIndexVolumeBar> shenzhenBars,
+            LocalDate targetDate
     ) {
         if (shanghaiBars == null || shanghaiBars.isEmpty() || shenzhenBars == null || shenzhenBars.isEmpty()) {
             throw new IllegalStateException("指数日K量能数据为空");
         }
-        LocalDate shanghaiLatest = shanghaiBars.get(shanghaiBars.size() - 1).tradeDate();
-        LocalDate shenzhenLatest = shenzhenBars.get(shenzhenBars.size() - 1).tradeDate();
-        return shanghaiLatest.isBefore(shenzhenLatest) ? shanghaiLatest : shenzhenLatest;
+        Set<LocalDate> shenzhenDates = shenzhenBars.stream().map(EastMoneyIndexVolumeBar::tradeDate).collect(Collectors.toSet());
+        return shanghaiBars.stream().map(EastMoneyIndexVolumeBar::tradeDate)
+                .filter(date -> !date.isAfter(targetDate) && shenzhenDates.contains(date))
+                .max(Comparator.naturalOrder()).orElseThrow(() -> new IllegalStateException("指数量能数据不完整，无共同日期"));
     }
 
     /** 返回 null 表示该日没有量能行，调用方视为数据缺口。 */

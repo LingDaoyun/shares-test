@@ -540,6 +540,21 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void missingLimitDownPoolStructureIsNotAConfirmedZeroDecliners() throws Exception {
+        assertThatThrownBy(() -> client.readLimitDownPoolEntries(null))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("跌停池");
+        assertThatThrownBy(() -> client.readLimitDownPoolEntries(objectMapper.readTree("{}")))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("跌停池");
+        assertThatThrownBy(() -> client.readLimitDownPoolEntries(objectMapper.readTree("{\"data\":null}").path("data").path("pool")))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("跌停池");
+    }
+
+    @Test
+    void emptyLimitDownPoolArrayConfirmsZeroDecliners() throws Exception {
+        assertThat(client.readLimitDownPoolEntries(objectMapper.readTree("[]"))).isEmpty();
+    }
+
+    @Test
     void shouldParseBoardStockFundFlowRanksFromBoardConstituentResponse() throws Exception {
         JsonNode diff = objectMapper.readTree("""
                 [

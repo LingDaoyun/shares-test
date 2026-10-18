@@ -96,6 +96,16 @@ const breadth: ShortTermMarketBreadth = {
 }
 
 describe('Market breadth timing', () => {
+  it('shows an unavailable intraday volume comparison without inventing contraction', () => {
+    const html = renderToStaticMarkup(<LimitUpBoardDetail snapshot={{ ...snapshot,
+      marketTurnover: { ...snapshot.marketTurnover!, label: '盘中暂不可比', todayVolumeHands: null,
+        previousVolumeHands: null, volumeChangePercent: null }
+    }} breadth={breadth} loading={false} error={null} onRefresh={() => undefined} />)
+    expect(html).toContain('盘中暂不可比')
+    expect(html).not.toContain('显著缩量')
+    expect(html).not.toContain('NaN')
+  })
+
   function renderBreadth(value: ShortTermMarketBreadth) {
     const props = { snapshot, breadth: value, loading: false, error: null, onRefresh: () => undefined }
     return renderToStaticMarkup(<LimitUpBoardDetail {...props} />)

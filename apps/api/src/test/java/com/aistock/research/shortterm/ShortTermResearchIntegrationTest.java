@@ -45,6 +45,7 @@ class ShortTermResearchIntegrationTest {
         when(research.relativeStrengthScore()).thenReturn(new BigDecimal("90"));
         when(research.triggerPrice()).thenReturn(new BigDecimal("10.10"));
         when(research.invalidationPrice()).thenReturn(new BigDecimal("10.00"));
+        when(research.historicalStructureCurrent()).thenReturn(true);
         java.util.function.Supplier<String> action = () -> {
             Object decision = ReflectionTestUtils.invokeMethod(service, "decide", quote, technical, financial,
                     freshness, market, null, new BigDecimal("80"), new BigDecimal("80"),
@@ -54,6 +55,10 @@ class ShortTermResearchIntegrationTest {
         assertThat(action.get()).isEqualTo("WATCH_RIGHT_SIDE");
         when(research.executionEvidenceReady()).thenReturn(true);
         assertThat(action.get()).isEqualTo("RESEARCH_LIGHT_TRIAL");
+        when(research.setupType()).thenReturn("GOLDEN_CROSS_MOMENTUM");
+        when(research.historicalStructureCurrent()).thenReturn(false);
+        assertThat(action.get()).isEqualTo("DATA_REVIEW");
+        when(research.historicalStructureCurrent()).thenReturn(true);
         when(freshness.blocksRealtimeDecision()).thenReturn(true);
         assertThat(action.get()).isEqualTo("DATA_REVIEW");
     }

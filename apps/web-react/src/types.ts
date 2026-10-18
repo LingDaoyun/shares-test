@@ -1056,6 +1056,32 @@ export interface ShortTermMarketRegime {
   maxAction: string
   explanation: string
   dataGaps: string[]
+  liquidity?: ShortTermMarketLiquidity | null
+  limitUpCount?: number | null
+  limitDownCount?: number | null
+  brokenCount?: number | null
+  sealBreakRatioPercent?: number | null
+  limitCountSource?: string | null
+}
+
+export interface ShortTermMarketLiquidity {
+  tradeDate: string | null
+  dataCutoffAt: string | null
+  status: 'SAME_TIME' | 'CLOSE' | 'UNAVAILABLE'
+  label: string
+  sampleAmountYuan: number | null
+  amountCoveragePercent: number | null
+  currentComparableAmountYuan: number | null
+  previousComparableAmountYuan: number | null
+  amountChangePercent: number | null
+  currentComparableVolumeHands: number | null
+  previousComparableVolumeHands: number | null
+  volumeChangePercent: number | null
+  comparisonDate: string | null
+  comparisonTime: string | null
+  source: string | null
+  explanation: string
+  dataGaps: string[]
 }
 
 export type ChipVerificationStatus =
@@ -1526,9 +1552,9 @@ export interface ShortTermLimitUpSentiment {
 
 export interface ShortTermMarketTurnover {
   tradeDate: string
-  todayVolumeHands: number
-  previousVolumeHands: number
-  volumeChangePercent: number
+  todayVolumeHands: number | null
+  previousVolumeHands: number | null
+  volumeChangePercent: number | null
   todayAmountYuan: number | null
   label: string
   explanation: string

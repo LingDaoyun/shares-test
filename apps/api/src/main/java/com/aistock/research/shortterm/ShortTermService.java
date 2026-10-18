@@ -155,6 +155,12 @@ public class ShortTermService {
     private final ShortTermVolatilityQualityEvaluator volatilityQualityEvaluator = new ShortTermVolatilityQualityEvaluator();
     private final ShortTermSignalProfileResolver signalProfileResolver = new ShortTermSignalProfileResolver();
     private final ShortTermMarketRegimeClassifier marketRegimeClassifier = new ShortTermMarketRegimeClassifier();
+    private ShortTermMarketLiquidityService marketLiquidityService;
+
+    @Autowired(required = false)
+    public void setMarketLiquidityService(ShortTermMarketLiquidityService service) {
+        this.marketLiquidityService = service;
+    }
 
     public ShortTermService(EastMoneyClient eastMoneyClient) {
         this(eastMoneyClient, new EvidenceCompletenessService(), new TradingClockService(), new ShortTermGoldenCrossAnalyzer());
@@ -350,6 +356,7 @@ public class ShortTermService {
         );
 
         boolean allCandidates = Integer.valueOf(0).equals(request.limit());
+        ShortTermLimitUpBoardSnapshot limitUpBoard = currentLimitUpBoard();
         AshareQuoteSnapshot quoteSnapshot = fetchMarketQuoteSnapshot(
                 ruleSet.scanLimit() == 0 ? Integer.MAX_VALUE : ruleSet.scanLimit());
         LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
@@ -383,13 +390,16 @@ public class ShortTermService {
         List<EastMoneyQuote> preFilteredQuotes = quoteUniverse.stream()
                 .filter(quote -> passesQuotePreFilter(quote, ruleSet, unstableIndustrySymbols))
                 .toList();
-        ShortTermLimitUpSentiment limitUpPulse = currentLimitUpPulse();
+        ShortTermLimitUpSentiment limitUpPulse = trustedLimitUpPulse(limitUpBoard, decisionAt);
         ShortTermMarketSentiment marketSentiment = marketSentiment(marketContextUniverse, coverage, limitUpPulse);
+        ShortTermMarketLiquidity liquidity = marketLiquidityService == null ? null
+                : marketLiquidityService.snapshot(marketContextUniverse, coverage, decisionAt);
         ShortTermMarketRegime marketRegime = marketRegimeClassifier.classify(
                 marketContextUniverse,
                 coverage,
                 marketSentiment,
-                limitUpPulse
+                limitUpPulse,
+                liquidity
         );
         ShortTermMarketFundDirection marketFundDirection = marketFundDirection(marketQuotes);
         List<ShortTermHotDirection> hotDirections = resolveHotDirections(marketContextUniverse);
@@ -520,10 +530,10 @@ public class ShortTermService {
 
         int safeLimit = allCandidates ? scored.size() : Math.min(resolveLimit(request.limit()), scored.size());
         // Apply execution gates before truncating: a blocked high score must not crowd out an executable candidate.
-        IntStream candidateIndexes = IntStream.range(0, scored.size());
-        // Reuse the bounded common pool used by K-line/financial review. Ordered collection keeps ranks stable.
-        if (allCandidates) candidateIndexes = candidateIndexes.parallel();
-        List<ShortTermCandidate> rankedCandidates = candidateIndexes
+        java.util.concurrent.ForkJoinPool tailWorkers = new java.util.concurrent.ForkJoinPool(4);
+        List<ShortTermCandidate> evaluatedCandidates;
+        try {
+            evaluatedCandidates = tailWorkers.submit(() -> IntStream.range(0, scored.size()).parallel()
                 .mapToObj(index -> {
                     ShortTermCandidate enriched = enrichTailSignal(
                             rerank(scored.get(index).candidate(), index + 1)
@@ -533,6 +543,15 @@ public class ShortTermService {
                             automationSettings.overnightRules()
                     );
                 })
+                .toList()).join();
+        } finally {
+            tailWorkers.shutdown();
+        }
+        // Recheck after every tail request has completed: an early candidate may have expired while others loaded.
+        Instant completedAt = tradingClockService.currentMarketDateTime().atZone(TradingClockService.CHINA_MARKET_ZONE).toInstant();
+        boolean entryWindow = TradingClockService.SHORT_TERM_ENTRY_CHECKPOINT.equals(tradingClockService.shortTermDecisionCheckpoint());
+        List<ShortTermCandidate> rankedCandidates = evaluatedCandidates.stream()
+                .map(candidate -> applyFinalMarketGate(candidate, marketRegime, completedAt, entryWindow))
                 .sorted(researchCandidateComparator())
                 .limit(safeLimit)
                 .toList();
@@ -563,7 +582,8 @@ public class ShortTermService {
                         "新版按收缩突破、强势回踩、承接反转独立筛选，同时保留金叉动量兼容分支；突破与回踩不再以 MA5/MA10 金叉为必要条件。",
                         "研究分由趋势 25%、相对强弱 20%、形态 35%、量价 20% 组成；缺失项不虚构中性值，贡献记零并列出缺口。分数只表达规则匹配程度，不是上涨概率。",
                         "旧版技术底分按金叉 60%、放量上涨 24%、换手适配 10%、收盘强度 6% 保留对照；旧版阶段、资金、行业和筹码修正不混入新版研究分。",
-                        "市场状态由点时全市场上涨广度、收益中位数、绝对波动、涨跌停近似比例和上涨侧成交额共同划分；退潮不推荐，修复或拥挤高波动只允许轻仓。",
+                        "市场状态综合点时上涨广度、收益中位数、绝对波动、上涨侧成交额和涨跌停结构；实测池与近似计数分别标注。两市指数只按已核实前一交易日的同一完整分钟比较成交量与成交额，缺失不解释为缩量。",
+                        "大盘环境只约束执行，不改个股研究分：退潮或放量下跌暂停新仓；修复、拥挤、明显缩量、高炸板率或量额暂不可比时最多轻仓，单只上限不超过短线资金的20%。输出前再次检查计划有效期；初始阈值仍需后续样本验证。",
                         "历史结构只使用当时已完成的日线；未完成当日 K 线只能作观察代理，不能假称收盘确认，也不能用日线代替真实分时 VWAP。",
                         "近端筹码压力统计现价上方 0～5% 与 5～10% 的估算筹码，保留为旧版对照与风险上下文，数据不足时标记未评估。",
                         "原有综合筹码评分保留后台诊断；近端压力的观察模式只展示估算，不扣分，关闭时不参与排序。",
@@ -1441,6 +1461,9 @@ public class ShortTermService {
         if (marketRiskOff) {
             return new ActionDecision("MARKET_RISK_WAIT", "情绪风险等待");
         }
+        if (research != null && !research.historicalStructureCurrent()) {
+            return new ActionDecision("DATA_REVIEW", "日线更新复核");
+        }
         if (!hasFinancial) {
             return new ActionDecision("DATA_REVIEW", "财报质量复核");
         }
@@ -1540,11 +1563,18 @@ public class ShortTermService {
                 || revenueAndProfitDeteriorating;
     }
 
-    private ShortTermLimitUpSentiment currentLimitUpPulse() {
-        if (limitUpBoardService == null) {
-            return null;
-        }
-        return limitUpBoardService.currentPulse().orElse(null);
+    private ShortTermLimitUpBoardSnapshot currentLimitUpBoard() {
+        if (limitUpBoardService == null) return null;
+        try { return limitUpBoardService.snapshot(tradingClockService.currentMarketDateTime().toLocalDate()); }
+        catch (RuntimeException ignored) { return null; }
+    }
+
+    static ShortTermLimitUpSentiment trustedLimitUpPulse(ShortTermLimitUpBoardSnapshot board, LocalDateTime decisionAt) {
+        Instant cutoff = decisionAt.atZone(TradingClockService.CHINA_MARKET_ZONE).toInstant();
+        if (board == null || !board.available() || !decisionAt.toLocalDate().equals(board.tradeDate())
+                || board.fetchedAt() == null || board.fetchedAt().isAfter(cutoff)
+                || board.fetchedAt().isBefore(cutoff.minusSeconds(180))) return null;
+        return board.sentiment();
     }
 
     private ShortTermMarketSentiment marketSentiment(
@@ -2060,7 +2090,22 @@ public class ShortTermService {
     }
 
     private ShortTermCandidate copyWithTradePlan(ShortTermCandidate candidate, ShortTermTradePlan plan) {
+        return copyWithTradePlan(candidate, plan, null);
+    }
+
+    ShortTermCandidate applyFinalMarketGate(ShortTermCandidate candidate, ShortTermMarketRegime regime,
+            Instant completedAt, boolean entryWindow) {
+        return copyWithTradePlan(candidate, candidate.tradePlan().withMarketConstraint(regime, completedAt, entryWindow), regime);
+    }
+
+    private ShortTermCandidate copyWithTradePlan(ShortTermCandidate candidate, ShortTermTradePlan plan, ShortTermMarketRegime regime) {
         TradingAdvice advice = candidate.todayAdvice();
+        if ("ACTIONABLE".equals(plan.status()) && advice != null && "ADD".equals(advice.action())
+                && regime != null && regime.lightTrialOnly()) {
+            advice = new TradingAdvice("LIGHT_TRIAL", "轻仓试错", advice.confidence(),
+                    "计划受大盘环境约束，最多使用短线资金的20%，按更严仓位上限执行。",
+                    advice.reasons(), merge(List.of("不得因尾盘信号转强突破大盘仓位上限。"), advice.riskControls()));
+        }
         if (!"ACTIONABLE".equals(plan.status()) && advice != null
                 && Set.of("ADD", "LIGHT_TRIAL").contains(advice.action())) {
             advice = new TradingAdvice("WAIT", "计划未通过", Math.min(40, advice.confidence()),

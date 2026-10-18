@@ -854,7 +854,7 @@ class ShortTermServiceTest {
 
         assertThat(report.candidates()).hasSize(5);
         assertThat(report.candidates()).allSatisfy(candidate -> {
-            assertThat(candidate.signalProfile().research().ruleVersion()).isEqualTo("short-term-research-v6");
+            assertThat(candidate.signalProfile().research().ruleVersion()).isEqualTo("short-term-research-v7-market-context");
             assertThat(candidate.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
             assertThat(candidate.tradePlan().status()).isEqualTo("BLOCKED");
         });
@@ -923,6 +923,28 @@ class ShortTermServiceTest {
         assertThat(planned.tradePlan().referenceEntryPrice()).isEqualByComparingTo(executable.latestPrice());
         assertThat(planned.tradePlan().firstTargetPrice()).isNotNull();
         assertThat(planned.tradePlan().normalExitDate()).isAfter(executable.technical().tradeDate());
+
+        ShortTermCandidate add = copyWithExecutionState(planned,
+                new TradingAdvice("ADD", "加仓", 72, "测试", List.of(), List.of()),
+                planned.quoteFreshness(), planned.evidenceCompleteness());
+        ShortTermMarketRegime light = new ShortTermMarketRegime("REPAIR", "修复", null, null, null,
+                null, null, null, 100, "LIGHT_TRIAL", "量能分歧", List.of());
+        ShortTermCandidate capped = service.applyFinalMarketGate(add, light, planned.tradePlan().validUntil().minusSeconds(60), true);
+        assertThat(capped.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
+        assertThat(capped.tradePlan().maxPositionRatio()).isEqualByComparingTo("0.20");
+        ShortTermCandidate expired = service.applyFinalMarketGate(add, light, planned.tradePlan().validUntil(), true);
+        assertThat(expired.tradePlan().status()).isEqualTo("BLOCKED");
+        assertThat(expired.todayAdvice().action()).isEqualTo("WAIT");
+        ShortTermCandidate noMarket = service.applyFinalMarketGate(add, ShortTermMarketRegime.unavailable("缺失"),
+                planned.tradePlan().validUntil().minusSeconds(60), true);
+        assertThat(noMarket.todayAdvice().action()).isEqualTo("WAIT");
+        assertThat(noMarket.tradePlan().status()).isEqualTo("BLOCKED");
+        ShortTermMarketRegime normal = new ShortTermMarketRegime("TREND_EXPANSION", "趋势", null, null, null,
+                null, null, null, 100, "NORMAL", "环境稳定", List.of());
+        ShortTermCandidate normalWithSmallPosition = service.applyFinalMarketGate(
+                copyWithExecutionState(capped, add.todayAdvice(), add.quoteFreshness(), add.evidenceCompleteness()),
+                normal, planned.tradePlan().validUntil().minusSeconds(60), true);
+        assertThat(normalWithSmallPosition.todayAdvice().action()).isEqualTo("ADD");
 
         ShortTermCandidate stale = copyWithExecutionState(
                 executable,
@@ -1700,6 +1722,16 @@ class ShortTermServiceTest {
         eastMoneyClient.financials.put("600003", goodFinancial("600003"));
         eastMoneyClient.financials.put("300059", goodFinancial("300059"));
         eastMoneyClient.intraday.put("600001", confirmedTail("600001"));
+        // This case isolates the post-entry-window gate in a normal market.
+        // Missing market comparison has its own light-trial tests.
+        ShortTermMarketLiquidityService liquidity = mock(ShortTermMarketLiquidityService.class);
+        when(liquidity.snapshot(anyList(), any(), any())).thenReturn(new ShortTermMarketLiquidity(
+                LocalDate.parse("2026-07-07"), Instant.parse("2026-07-07T06:58:00Z"),
+                "SAME_TIME", "同刻成交额平稳", new BigDecimal("1000000000"), new BigDecimal("100"),
+                new BigDecimal("1000000000"), new BigDecimal("1000000000"), BigDecimal.ZERO,
+                new BigDecimal("1000000"), new BigDecimal("1000000"), BigDecimal.ZERO,
+                LocalDate.parse("2026-07-06"), "14:58", "测试同刻量额", "两市同刻完整比较", List.of()));
+        service.setMarketLiquidityService(liquidity);
 
         ShortTermReport report = service.report(5, 100, 5, null,null, null, null, null, null, true);
 
@@ -2509,7 +2541,7 @@ class ShortTermServiceTest {
             rows.add(kline(symbol, start.plusDays(index), close, "105000"));
         }
         rows.add(kline(symbol, start.plusDays(119), new BigDecimal(finalClose), finalVolume));
-        return rows;
+        return endingOn(rows, LocalDate.parse("2026-07-06"));
     }
 
     private List<EastMoneyKLine> recentGoldenCrossKLines(String symbol, int barsAfterCross) {
@@ -2537,13 +2569,19 @@ class ShortTermServiceTest {
     }
 
     private List<EastMoneyKLine> endingOn(List<EastMoneyKLine> rows, LocalDate endDate) {
-        LocalDate startDate = endDate.minusDays(rows.size() - 1L);
+        List<LocalDate> dates = new ArrayList<>();
+        LocalDate cursor = endDate;
+        for (int index = 0; index < rows.size(); index++) {
+            dates.add(cursor);
+            cursor = tradingClockService.previousTradingDay(cursor);
+        }
+        Collections.reverse(dates);
         return IntStream.range(0, rows.size())
                 .mapToObj(index -> {
                     EastMoneyKLine row = rows.get(index);
                     return new EastMoneyKLine(
                             row.symbol(),
-                            startDate.plusDays(index),
+                            dates.get(index),
                             row.open(),
                             row.close(),
                             row.high(),
@@ -2578,10 +2616,7 @@ class ShortTermServiceTest {
 
     private List<EastMoneyKLine> unfinishedFormingGoldenCrossKLines(String symbol) {
         List<EastMoneyKLine> historical = recentGoldenCrossKLines(symbol, 0);
-        LocalDate start = LocalDate.parse("2026-06-17");
-        return IntStream.range(0, historical.size())
-                .mapToObj(index -> kline(symbol, start.plusDays(index), historical.get(index).close(), "180000"))
-                .toList();
+        return endingOn(historical, LocalDate.parse("2026-07-07"));
     }
 
     private List<EastMoneyKLine> unfinishedFormingGoldenCrossKLinesWithLowVolume(String symbol) {
@@ -2593,9 +2628,10 @@ class ShortTermServiceTest {
 
     private List<EastMoneyKLine> klineRows(String symbol, List<BigDecimal> closes) {
         LocalDate start = LocalDate.parse("2026-06-01");
-        return IntStream.range(0, closes.size())
+        List<EastMoneyKLine> rows = IntStream.range(0, closes.size())
                 .mapToObj(index -> kline(symbol, start.plusDays(index), closes.get(index), "180000"))
                 .toList();
+        return endingOn(rows, LocalDate.parse("2026-07-06"));
     }
 
     private List<EastMoneyKLine> longSidewaysKLines(String symbol) {
@@ -2605,7 +2641,7 @@ class ShortTermServiceTest {
             BigDecimal close = new BigDecimal("10.00").add(new BigDecimal(index % 2 == 0 ? "0.08" : "-0.06"));
             rows.add(kline(symbol, start.plusDays(index), close, "110000"));
         }
-        return rows;
+        return endingOn(rows, LocalDate.parse("2026-07-06"));
     }
 
     private List<EastMoneyKLine> belowMa20KLines(String symbol) {
@@ -2616,7 +2652,7 @@ class ShortTermServiceTest {
             rows.add(kline(symbol, start.plusDays(index), close, "260000"));
         }
         rows.add(kline(symbol, start.plusDays(80), new BigDecimal("9.60"), "360000"));
-        return rows;
+        return endingOn(rows, LocalDate.parse("2026-07-06"));
     }
 
     private List<EastMoneyKLine> longUpperShadowKLines(String symbol) {

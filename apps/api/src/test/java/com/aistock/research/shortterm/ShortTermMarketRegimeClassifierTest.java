@@ -17,6 +17,71 @@ class ShortTermMarketRegimeClassifierTest {
     private final ShortTermMarketRegimeClassifier classifier = new ShortTermMarketRegimeClassifier();
 
     @Test
+    void sparseAmountsCannotRepresentMarketWideAdvancingTurnover() {
+        List<EastMoneyQuote> quotes = market(70, "1.5", 30, "-0.2").stream().map(q ->
+                new EastMoneyQuote(q.symbol(), q.name(), q.market(), q.industry(), q.latestPrice(), q.changePercent(),
+                        q.turnoverRate(), q.volume(), q.symbol().equals("600000") ? q.amount() : null,
+                        q.peRatio(), q.pbRatio(), q.peTtm(), q.sourceName(), q.quoteUrl(), q.fetchedAt(),
+                        q.tradeDate(), q.marketTimestamp())).toList();
+        ShortTermMarketRegime regime = classifier.classify(quotes, reliableCoverage(), sentiment("发酵", 70), null, liquidity("5", "4"));
+        assertThat(regime.advancingTurnoverSharePercent()).isNull();
+        assertThat(regime.maxAction()).isEqualTo("LIGHT_TRIAL");
+        assertThat(regime.dataGaps()).anyMatch(gap -> gap.contains("成交额"));
+    }
+
+    @Test
+    void comparableHealthyVolumeRetainsNormalActionAndProxyCountsAreExplicit() {
+        ShortTermMarketRegime regime = classifier.classify(market(70, "1.5", 30, "-0.2"), reliableCoverage(),
+                sentiment("发酵", 70), null, liquidity("5", "4"));
+        assertThat(regime.maxAction()).isEqualTo("NORMAL");
+        assertThat(regime.limitCountSource()).isEqualTo("PRICE_CHANGE_PROXY");
+        assertThat(regime.limitUpCount()).isZero();
+    }
+
+    @Test
+    void missingComparisonCapsPositionWithoutInventingContraction() {
+        ShortTermMarketRegime regime = classifier.classify(market(70, "1.5", 30, "-0.2"), reliableCoverage(),
+                sentiment("发酵", 70), null, null);
+        assertThat(regime.maxAction()).isEqualTo("LIGHT_TRIAL");
+        assertThat(regime.state()).isEqualTo("TREND_EXPANSION");
+        assertThat(regime.dataGaps()).anyMatch(gap -> gap.contains("暂不可比"));
+    }
+
+    @Test
+    void materialContractionCapsOtherwiseStrongBreadth() {
+        ShortTermMarketRegime regime = classifier.classify(market(70, "1.5", 30, "-0.2"), reliableCoverage(),
+                sentiment("发酵", 70), null, liquidity("-15", "-5"));
+        assertThat(regime.state()).isEqualTo("LIQUIDITY_CONTRACTION");
+        assertThat(regime.maxAction()).isEqualTo("LIGHT_TRIAL");
+    }
+
+    @Test
+    void expandingTurnoverWithWeakBreadthPausesExecution() {
+        ShortTermMarketRegime regime = classifier.classify(market(30, "1.5", 70, "-0.9"), reliableCoverage(),
+                sentiment("修复", 30), null, liquidity("10", "8"));
+        assertThat(regime.label()).isEqualTo("放量下跌");
+        assertThat(regime.maxAction()).isEqualTo("NO_TRADE");
+    }
+
+    @Test
+    void measuredHighBreakRateCapsActionWithoutInferringMissingCounts() {
+        ShortTermLimitUpSentiment pulse = new ShortTermLimitUpSentiment(6, 5, null, new BigDecimal("45.45"),
+                2, 2, 0, 4, 2, 0, 0, new BigDecimal("66.67"), "分歧", "测试");
+        ShortTermMarketRegime regime = classifier.classify(market(70, "1.5", 30, "-0.2"), reliableCoverage(),
+                sentiment("发酵", 70), pulse, liquidity("5", "4"));
+        assertThat(regime.maxAction()).isEqualTo("LIGHT_TRIAL");
+        assertThat(regime.limitCountSource()).isEqualTo("MIXED");
+        assertThat(regime.brokenCount()).isEqualTo(5);
+    }
+
+    private ShortTermMarketLiquidity liquidity(String amount, String volume) {
+        return new ShortTermMarketLiquidity(TRADE_DATE, Instant.parse("2026-08-12T06:49:00Z"), "SAME_TIME", "同刻比较",
+                new BigDecimal("60000000000"), new BigDecimal("100"), new BigDecimal("10000000000"),
+                new BigDecimal("9000000000"), new BigDecimal(amount), new BigDecimal("100000"),
+                new BigDecimal("90000"), new BigDecimal(volume), TRADE_DATE.minusDays(1), "14:48", "测试", "测试", List.of());
+    }
+
+    @Test
     void classifiesSystemicSelloffAsRiskOffAndNonExecutable() {
         List<EastMoneyQuote> quotes = market(10, "1.00", 90, "-5.00");
 

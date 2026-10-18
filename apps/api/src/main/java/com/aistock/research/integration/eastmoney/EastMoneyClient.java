@@ -108,6 +108,7 @@ public class EastMoneyClient {
     private volatile CachedIndustryBoards cachedIndustryBoards = new CachedIndustryBoards(List.of(), Instant.EPOCH);
     private volatile long lastEastMoneyRequestMillis;
     private volatile long lastTencentHistoryRequestMillis;
+    private final Map<String, CachedIndexMinutes> indexMinuteCache = new HashMap<>();
 
     public EastMoneyClient(RestClient restClient, ObjectMapper objectMapper, LiveDataProperties properties) {
         this(restClient, objectMapper, properties, null);
@@ -634,6 +635,38 @@ public class EastMoneyClient {
         }
     }
 
+    /** Two dated index sessions; explicit codes prevent confusing Shanghai index 000001 with a stock. */
+    public synchronized List<EastMoneyIntradayPoint> fetchIndexIntradayTrends(String indexCode) {
+        String secId = switch (indexCode) {
+            case "sh000001" -> "1.000001";
+            case "sz399106" -> "0.399106";
+            default -> throw new IllegalArgumentException("不支持的量额指数：" + indexCode);
+        };
+        Instant now = Instant.now();
+        CachedIndexMinutes cached = indexMinuteCache.get(indexCode);
+        if (cached != null && now.isBefore(cached.expiresAt())) return cached.points();
+        String url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=" + secId
+                + "&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13"
+                + "&fields2=f51,f52,f53,f54,f55,f56,f57,f58&iscr=0&iscca=0&ndays=2";
+        List<EastMoneyIntradayPoint> points = new ArrayList<>();
+        try {
+            JsonNode rows = objectMapper.readTree(fetchIndexIntradayBody(url)).path("data").path("trends");
+            if (rows.isArray()) for (JsonNode row : rows) readIntradayPoint(indexCode, row.asText()).ifPresent(points::add);
+        } catch (Exception exception) {
+            logger.warn("指数两日分时暂不可用：{}", indexCode);
+        }
+        List<EastMoneyIntradayPoint> result = List.copyOf(points);
+        indexMinuteCache.put(indexCode, new CachedIndexMinutes(result, Instant.now().plusSeconds(result.isEmpty() ? 10 : 60)));
+        return result;
+    }
+
+    String fetchIndexIntradayBody(String url) {
+        // A single bounded request per index. Do not multiply latency through the generic remote retry loop.
+        return new String(fetchBytesOnceWithCurl(url, null, "https://quote.eastmoney.com/", 2, 4, 5, 0), StandardCharsets.UTF_8);
+    }
+
+    private record CachedIndexMinutes(List<EastMoneyIntradayPoint> points, Instant expiresAt) {}
+
     private List<EastMoneyIntradayPoint> fetchTencentIntradayTrends(String symbol) {
         String code = tencentCode(symbol);
         if (code == null) {
@@ -938,6 +971,9 @@ public class EastMoneyClient {
     }
 
     List<EastMoneyLimitDownPoolEntry> readLimitDownPoolEntries(JsonNode pool) {
+        if (pool == null || !pool.isArray()) {
+            throw new IllegalStateException("跌停池响应结构缺失，无法确认跌停家数");
+        }
         List<EastMoneyLimitDownPoolEntry> entries = new ArrayList<>();
         for (JsonNode item : poolItems(pool)) {
             String symbol = text(item, "c");

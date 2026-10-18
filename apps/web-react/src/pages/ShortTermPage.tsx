@@ -10,6 +10,7 @@ import { Card } from '../components/ui/Card'
 import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOverlay'
 import { Loader } from '../components/ui/Loader'
 import { DailyShortTermPanel } from '../components/shortterm/DailyShortTermPanel'
+import { ShortTermMarketConstraint, ShortTermMarketEnvironmentPanel } from '../components/shortterm/ShortTermMarketEnvironmentPanel'
 import { UpperShadowCandidateDetail, UpperShadowCandidateRow } from '../components/shortterm/UpperShadowCandidateView'
 import { IndustryLeaderOverlay, type IndustryLeaderSelection } from '../components/shortterm/IndustryLeaderOverlay'
 import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
@@ -284,7 +285,7 @@ export function ShortTermPage() {
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3" data-testid="short-term-horizontal-summary">
             {viewPreferences.marketSentimentVisible ? (
-              <MarketSentimentSummaryCard report={report} />
+              <ShortTermMarketEnvironmentPanel report={report} />
             ) : null}
             {viewPreferences.hotDirectionsVisible ? (
               <HotDirectionsCard directions={report.hotDirections} />
@@ -307,6 +308,9 @@ export function ShortTermPage() {
         <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />短线候选</span>}
           extra={<span className="text-xs text-ink-500">{visibleCandidates.length === candidates.length ? candidates.length : `${visibleCandidates.length} / ${candidates.length}`} 只</span>} flush>
           <DailyShortTermPanel />
+          {!viewPreferences.marketSentimentVisible && report?.marketRegime?.maxAction === 'NO_TRADE' ? (
+            <div className="px-5 py-3"><ShortTermMarketConstraint regime={report.marketRegime} /></div>
+          ) : null}
           {hasResearch ? (
             <div className="border-b border-line-soft px-5 py-3">
               <div aria-label="研究买点筛选" className="flex flex-wrap gap-1.5">
@@ -435,38 +439,6 @@ function ResultViewControls({
             </label>
           ))}
         </div>
-      </div>
-    </Card>
-  )
-}
-
-function MarketSentimentSummaryCard({ report }: { report: ShortTermReport }) {
-  const sentiment = report.marketSentiment
-  return (
-    <Card className="min-h-full border-red-100 bg-gradient-to-br from-white to-red-50/40">
-      <div className="flex h-full flex-col justify-between gap-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="eyebrow mb-1 text-red-600">MARKET MOOD</div>
-            <h3 className="text-base font-semibold text-ink-900">扫描时市场情绪</h3>
-            <p className="mt-1 text-xs text-ink-500">行情采集 {report.coverage?.fetchedAt ? formatDateTime(report.coverage.fetchedAt) : '时间未知'}</p>
-          </div>
-          <Tag tone={sentiment.score >= 70 ? 'success' : sentiment.score >= 50 ? 'brand' : 'warning'}>
-            {sentiment.phase}
-          </Tag>
-        </div>
-        <div className="flex flex-col gap-3">
-          <div>
-            <p className="text-xs text-ink-400">情绪分</p>
-            <p className="tabular text-3xl font-semibold text-ink-900">{formatNumber(sentiment.score)}</p>
-          </div>
-          <div className="flex flex-wrap gap-2 text-xs">
-            <InlineMetric label="上涨 / 下跌" value={`${sentiment.advancing} / ${sentiment.declining}`} />
-            <InlineMetric label="涨停 / 跌停" value={`${sentiment.limitUpLike} / ${sentiment.limitDownLike}`} />
-            <InlineMetric label="市场宽度" value={formatPercent(sentiment.breadthPercent)} />
-          </div>
-        </div>
-        <p className="line-clamp-2 text-xs leading-relaxed text-ink-500">{sentiment.explanation}</p>
       </div>
     </Card>
   )
@@ -766,6 +738,8 @@ function CandidateDetail({
             />
           </div>
         </div>
+
+        <ShortTermMarketConstraint regime={marketRegime} />
 
         {research ? <ShortTermResearchPanel research={research} /> : null}
 
@@ -1221,15 +1195,6 @@ function Metric({ label, value, compact = false }: { label: string; value: React
     <div className={`rounded-lg border border-line-soft bg-line-soft/40 ${compact ? 'px-2.5 py-2' : 'px-3 py-2'}`}>
       <div className="text-xs text-ink-400">{label}</div>
       <div className="mt-1 break-words tabular text-sm font-semibold text-ink-900">{value}</div>
-    </div>
-  )
-}
-
-function InlineMetric({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="min-w-[120px] rounded-xl border border-line-soft bg-white px-3 py-2">
-      <div className="text-[11px] text-ink-400">{label}</div>
-      <div className="mt-0.5 break-words tabular text-sm font-semibold text-ink-900">{value}</div>
     </div>
   )
 }

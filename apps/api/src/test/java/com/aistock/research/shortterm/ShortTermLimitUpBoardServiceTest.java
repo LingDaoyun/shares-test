@@ -21,6 +21,26 @@ import static org.mockito.Mockito.when;
 class ShortTermLimitUpBoardServiceTest {
 
     private static final LocalDate TRADE_DATE = LocalDate.parse("2026-08-21");
+
+    @Test
+    void intradayCumulativeVolumeNeverComparesWithPreviousFullDay() {
+        ShortTermMarketTurnover turnover = ShortTermLimitUpBoardService.marketTurnover(TRADE_DATE, List.of(), List.of(),
+                new BigDecimal("100"), TRADE_DATE.atTime(10, 30));
+        assertThat(turnover.volumeChangePercent()).isNull();
+        assertThat(turnover.label()).isEqualTo("盘中暂不可比");
+        assertThat(turnover.todayAmountYuan()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void requestedHistoricalDateDoesNotBorrowFutureIndexBars() {
+        List<EastMoneyIndexVolumeBar> bars = List.of(
+                new EastMoneyIndexVolumeBar(TRADE_DATE.minusDays(2), new BigDecimal("100")),
+                new EastMoneyIndexVolumeBar(TRADE_DATE.minusDays(1), new BigDecimal("110")),
+                new EastMoneyIndexVolumeBar(TRADE_DATE, new BigDecimal("200")));
+        ShortTermMarketTurnover turnover = ShortTermLimitUpBoardService.marketTurnover(TRADE_DATE.minusDays(1), bars, bars, null);
+        assertThat(turnover.tradeDate()).isEqualTo(TRADE_DATE.minusDays(1));
+        assertThat(turnover.volumeChangePercent()).isEqualByComparingTo("10");
+    }
     private final ShortTermLimitUpBoardService service =
             new ShortTermLimitUpBoardService(mock(EastMoneyClient.class));
 

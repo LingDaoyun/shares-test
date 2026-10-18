@@ -2,6 +2,8 @@ package com.aistock.research.shortterm;
 
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
+import com.aistock.research.trading.TradingClockService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -38,10 +40,20 @@ import java.util.TreeMap;
  */
 @Component
 public class ShortTermResearchSetupEvaluator {
-    public static final String RULE_VERSION = "short-term-research-v6";
+    public static final String RULE_VERSION = "short-term-research-v7-market-context";
     private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal HUNDRED = new BigDecimal("100");
+    private final TradingClockService tradingCalendar;
+
+    public ShortTermResearchSetupEvaluator() {
+        this(new TradingClockService());
+    }
+
+    @Autowired
+    public ShortTermResearchSetupEvaluator(TradingClockService tradingCalendar) {
+        this.tradingCalendar = java.util.Objects.requireNonNull(tradingCalendar, "tradingCalendar");
+    }
 
     public ShortTermResearchSetup evaluate(List<EastMoneyKLine> source, EastMoneyQuote quote,
             ShortTermTechnicalSnapshot technical, ShortTermVolatilityQuality volatility,
@@ -51,16 +63,27 @@ public class ShortTermResearchSetupEvaluator {
         List<String> gaps = new ArrayList<>();
         if (quote == null || quote.tradeDate() == null || !positive(quote.latestPrice())) {
             gaps.add("报价交易日或有效价格缺失，拒绝无界历史计算");
-            return result(Family.none(), null, null, null, "UNAVAILABLE", false, evidence, risks, gaps);
+            return result(Family.none(), null, null, null, "UNAVAILABLE", false, false, evidence, risks, gaps);
         }
         boolean sessionClosed = sessionClosed(quote);
         History history = history(source, quote, sessionClosed, gaps);
         List<EastMoneyKLine> rows = history.rows();
+        EastMoneyKLine last = rows.isEmpty() ? null : rows.get(rows.size() - 1);
+        LocalDate previousTradingDate = tradingCalendar.previousTradingDay(quote.tradeDate());
+        boolean verifiedCalendar = tradingCalendar.verifiedTradingDayAfter(previousTradingDate, 1)
+                .filter(quote.tradeDate()::equals).isPresent();
+        LocalDate expectedCompletedDate = sessionClosed ? quote.tradeDate() : previousTradingDate;
+        boolean currentHistory = verifiedCalendar && last != null && expectedCompletedDate.equals(last.tradeDate());
+        if (!verifiedCalendar) {
+            gaps.add("交易日历未核实，不能确认最近已完成交易日，禁止确认和执行");
+        } else if (!currentHistory) {
+            gaps.add("日线未更新至应有的最近已完成交易日 " + expectedCompletedDate
+                    + "（最新为 " + (last == null ? "缺失" : last.tradeDate()) + "），旧结构仅作观察，禁止确认和执行");
+        }
         if (rows.size() < 40) {
             gaps.add("有效已完成OHLCV日线不足40根，研究形态不参与排序");
-            return result(Family.none(), null, null, null, "UNAVAILABLE", false, evidence, risks, gaps);
+            return result(Family.none(), null, null, null, "UNAVAILABLE", false, currentHistory, evidence, risks, gaps);
         }
-        EastMoneyKLine last = rows.get(rows.size() - 1);
         boolean completed = sessionClosed && quote.tradeDate().equals(last.tradeDate());
         List<EastMoneyKLine> prior = completed ? rows.subList(0, rows.size() - 1) : rows;
         BigDecimal price = completed ? last.close() : quote.latestPrice();
@@ -103,10 +126,10 @@ public class ShortTermResearchSetupEvaluator {
         if (volatility != null && "OVEREXTENDED".equals(volatility.state()))
             risks.add("原波动率评估提示过度拉开，请结合本评分的点时ATR边界复核");
         BigDecimal volumePriceScore = volumePrice(volumeRatio, completed, last, price, prior);
-        boolean confirmed = family.confirmable() && completed && history.trusted()
+        boolean confirmed = family.confirmable() && completed && history.trusted() && currentHistory
                 && relativeScore != null && relativeScore.compareTo(bd("60")) >= 0;
         // Readiness authorizes only subsequent tail review; execution remains the service's decision.
-        boolean executionReady = family.matched() && trend.qualified() && history.trusted()
+        boolean executionReady = family.matched() && trend.qualified() && history.trusted() && currentHistory
                 && quote.marketTimestamp() != null
                 && quote.marketTimestamp().atZone(SHANGHAI).toLocalDate().equals(quote.tradeDate())
                 && relativeScore != null && relativeScore.compareTo(bd("60")) >= 0
@@ -115,7 +138,7 @@ public class ShortTermResearchSetupEvaluator {
                 && executionVolumeReady(family, volumeRatio, technical);
         String state = family.matched() ? confirmed ? "CONFIRMED" : "WATCH" : "UNAVAILABLE";
         risks.add("初始研究参数尚未验证收益，仍需执行时窗、行情新鲜度与真实尾盘量价门槛");
-        return result(family, trend.score(), relativeScore, volumePriceScore, state, executionReady, evidence, risks, gaps);
+        return result(family, trend.score(), relativeScore, volumePriceScore, state, executionReady, currentHistory, evidence, risks, gaps);
     }
 
     /** Structural admission only; deliberately independent from RS and execution authorization. */
@@ -328,13 +351,14 @@ public class ShortTermResearchSetupEvaluator {
     }
 
     private ShortTermResearchSetup result(Family family, BigDecimal trend, BigDecimal rs, BigDecimal volumePrice,
-            String state, boolean executionReady, List<String> evidence, List<String> risks, List<String> gaps) {
+            String state, boolean executionReady, boolean currentHistory, List<String> evidence, List<String> risks, List<String> gaps) {
         BigDecimal tc = contribution(trend, "0.25"), rc = contribution(rs, "0.20"),
                 sc = contribution(family.score(), "0.35"), vc = contribution(volumePrice, "0.20");
         return new ShortTermResearchSetup(RULE_VERSION, family.type(), family.label(), state,
                 tc.add(rc).add(sc).add(vc), scale(trend), scale(rs), scale(family.score()), scale(volumePrice),
                 tc, rc, sc, vc, scale(family.trigger()), scale(family.invalidation()),
-                evidence.stream().distinct().toList(), risks.stream().distinct().toList(), gaps.stream().distinct().toList(), executionReady);
+                evidence.stream().distinct().toList(), risks.stream().distinct().toList(), gaps.stream().distinct().toList(), executionReady,
+                currentHistory);
     }
 
     private BigDecimal contribution(BigDecimal score, String weight) { return scale(score == null ? ZERO : clamp(score).multiply(bd(weight))); }

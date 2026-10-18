@@ -15,8 +15,23 @@ public record ShortTermMarketRegime(
         int sampleCount,
         String maxAction,
         String explanation,
-        List<String> dataGaps
+        List<String> dataGaps,
+        ShortTermMarketLiquidity liquidity,
+        Integer limitUpCount,
+        Integer limitDownCount,
+        Integer brokenCount,
+        BigDecimal sealBreakRatioPercent,
+        String limitCountSource
 ) {
+    public ShortTermMarketRegime(String state, String label, BigDecimal breadthPercent,
+            BigDecimal medianChangePercent, BigDecimal averageAbsoluteChangePercent,
+            BigDecimal advancingTurnoverSharePercent, BigDecimal limitUpRatioPercent,
+            BigDecimal limitDownRatioPercent, int sampleCount, String maxAction,
+            String explanation, List<String> dataGaps) {
+        this(state, label, breadthPercent, medianChangePercent, averageAbsoluteChangePercent,
+                advancingTurnoverSharePercent, limitUpRatioPercent, limitDownRatioPercent,
+                sampleCount, maxAction, explanation, dataGaps, null, null, null, null, null, "UNAVAILABLE");
+    }
     public ShortTermMarketRegime {
         dataGaps = dataGaps == null ? List.of() : List.copyOf(dataGaps);
     }
@@ -35,5 +50,9 @@ public record ShortTermMarketRegime(
 
     public boolean lightTrialOnly() {
         return "LIGHT_TRIAL".equals(maxAction);
+    }
+
+    public boolean blocksExecution() {
+        return "NO_TRADE".equals(maxAction) || "UNAVAILABLE".equals(state) || riskOff();
     }
 }
