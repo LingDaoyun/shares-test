@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class PolicyAiReviewService {
     private static final long CACHE_SECONDS = 1800;
-    private static final String PROMPT_VERSION = "policy-trend-v4-provenance";
+    private static final String PROMPT_VERSION = "policy-trend-v5-history";
     private static final String STORAGE_FAILURE_GAP = "本次研判未保存到历史，数据库暂时不可用。";
     private static final List<String> TREND_TEXT = List.of("thesis", "policy_increment", "market_confirmation");
     private static final List<String> TREND_LISTS = List.of("benefit_chain", "short_term_catalysts",
@@ -153,6 +153,8 @@ public class PolicyAiReviewService {
                 + "输入包含标题摘要及可选的excerpt正文片段；没有excerpt的信号只有标题，不能声称读过原文。"
                 + "正文片段并非全文，需注意上下文、适用范围和实施条件；规则标签不是独立Agent事实验证。"
                 + "planning_baseline为长期规划背景；按来源发布日期解读，旧规划不能当作今日新催化，远期目标不能当作近期兑现。"
+                + "材料同时包含近两年的历史新闻报告与近期消息；超过90天的普通新闻应作为历史线索，核验政策是否仍有效、已完成或被后续文件替代。"
+                + "重新采集、存档或本次首次看到不等于刚发布；对照历史线索与近期进展，没有近期证据时明确新增催化待核实，不能把旧项目投产计划当成未来事件。"
                 + "published_at是来源网页的发布日期，转载日期不等于文件印发日；正文片段可能来自删减转载，不可称为已核验完整原文。"
                 + "source_info标明发布网站及按域名识别的来源级别；attributedSource仅为网页自称来源，不证明原始发文机关。"
                 + "优先参考中央政府及部门官网，但来源级别不等于具体条款已落地。背景提及、历史回顾和应用场景不能推断为该产业新增扶持措施。"

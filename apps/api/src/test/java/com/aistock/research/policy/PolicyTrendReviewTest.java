@@ -57,6 +57,7 @@ class PolicyTrendReviewTest {
         var schema = ArgumentCaptor.forClass(Map.class);
         verify(llm).completeJson(system.capture(), prompt.capture(), eq("policy_theme_review"), schema.capture());
         assertThat(system.getValue()).contains("2-12周", "1-2周", "标题摘要", "并非全文", "不可信", "超预期", "量价", "规则标签");
+        assertThat(system.getValue()).contains("近两年", "超过90天", "是否仍有效", "不等于刚发布", "旧项目投产计划");
         var sentSchema = mapper.valueToTree(schema.getValue());
         assertThat(sentSchema.path("additionalProperties").asBoolean(true)).isFalse();
         var plan = sentSchema.path("properties").path("trend_plan");

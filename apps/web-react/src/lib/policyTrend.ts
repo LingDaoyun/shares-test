@@ -28,20 +28,26 @@ function publication(value: string | null): { day: string | null; instant: numbe
   return Number.isFinite(instant) ? { day: beijingDay(instant), instant } : { day: null, instant: null }
 }
 
+function publicationAge(signal: PolicySignal, now: Date) {
+  const day = publication(signal.publishedAt).day
+  if (!day) return null
+  return Math.floor((Date.parse(`${beijingDay(now.getTime())}T00:00:00Z`) - Date.parse(`${day}T00:00:00Z`)) / DAY_MS)
+}
+
+export function isHistoricalPolicySignal(signal: PolicySignal, now = new Date()) {
+  const age = publicationAge(signal, now)
+  return !signal.planningBaseline && age !== null && age > 90 && age <= 730
+}
+
 /** Counts describe the collected sample, never total policy issuance or market heat. */
 export function policyEvidence(theme: PolicyTheme, now = new Date()) {
-  const today = beijingDay(now.getTime())
   const unique = new Map<string, PolicySignal>()
   for (const signal of theme.signals) {
     const key = signal.summary.replace(/\s/g, '').trim()
     if (key && !unique.has(key)) unique.set(key, signal)
   }
   const signals = [...unique.values()]
-  const dayAge = (signal: PolicySignal) => {
-    const day = publication(signal.publishedAt).day
-    if (!day) return null
-    return Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${day}T00:00:00Z`)) / DAY_MS)
-  }
+  const dayAge = (signal: PolicySignal) => publicationAge(signal, now)
   const eligible = signals.filter(signal => {
     const time = publication(signal.publishedAt)
     if (time.instant !== null && time.instant > now.getTime()) return false
@@ -53,10 +59,19 @@ export function policyEvidence(theme: PolicyTheme, now = new Date()) {
     return (b.sourceInfo?.authorityRank ?? 0) - (a.sourceInfo?.authorityRank ?? 0)
       || (second.day ?? '').localeCompare(first.day ?? '') || (second.instant ?? 0) - (first.instant ?? 0)
   })
-  const recent = (days: number) => eligible.filter(signal => { const age = dayAge(signal); return age !== null && age <= days }).length
+  const recent = (days: number) => eligible.filter(signal => { const age = dayAge(signal); return age !== null && age <= days })
+  const historicalSignals = eligible.filter(signal => isHistoricalPolicySignal(signal, now))
+  const planningSignals = eligible.filter(signal => signal.planningBaseline)
+  const recent90Signals = recent(90)
+  const background = eligible.find(signal => signal.planningBaseline || isHistoricalPolicySignal(signal, now))
+  const previewSignals = eligible.slice(0, 2)
+  if (background && !previewSignals.some(signal => signal.planningBaseline || isHistoricalPolicySignal(signal, now))) {
+    previewSignals.splice(1, 1, background)
+  }
   return {
     signals: eligible,
-    recent7: recent(7), recent30: recent(30), recent90: recent(90),
+    recent7: recent(7).length, recent30: recent(30).length, recent90: recent90Signals.length, recent730: recent(730).length,
+    historicalSignals, planningSignals, recent90Signals, previewSignals,
     unknown: eligible.filter(signal => dayAge(signal) === null).length,
     sources: new Set(eligible.map(signal => signal.source)).size,
     latest: eligible.find(signal => dayAge(signal) !== null)?.publishedAt ?? null,

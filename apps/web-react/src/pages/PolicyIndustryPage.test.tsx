@@ -133,6 +133,55 @@ describe('daily policy research board', () => {
     expect(document.querySelector('[role="dialog"] details')?.textContent).toContain('长期规划')
   })
 
+  it('surfaces historical news in card previews and filters industries without hiding history-only themes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-17T04:00:00Z'))
+    const historical = { ...theme.signals[0], summary: '去年发布的固态电池产业报告', url: 'https://www.gov.cn/historical', publishedAt: '2025-10-17' }
+    const historicalTheme = { ...theme, themeCode: 'BATTERY', name: '固态电池', signals: [historical] }
+    vi.mocked(fetchPolicyDaily).mockResolvedValue({ ...daily, themes: [
+      { ...theme, signals: [theme.signals[0], { ...theme.signals[0], summary: '另一条近期政策', publishedAt: '2026-10-16' }, historical] },
+      historicalTheme,
+      { ...theme, themeCode: 'RECENT_ONLY', name: '近期线索产业' },
+    ] })
+    await render()
+    const card = [...host.querySelectorAll('article')].find(item => item.querySelector('h3')?.textContent === theme.name)!
+    expect(card.textContent).toContain('近30天 2 条 · 近两年 3 条')
+    expect(card.textContent).toContain('历史线索 1 条')
+    expect(card.textContent).toContain('去年发布的固态电池产业报告')
+    expect(host.textContent).toContain('属于已采样范围')
+    expect(host.textContent).toContain('2–12 周趋势观察')
+    await click('有历史线索')
+    expect([...host.querySelectorAll('article h3')].map(item => item.textContent)).toEqual([theme.name, '固态电池'])
+    const oldCard = [...host.querySelectorAll('article')].find(item => item.querySelector('h3')?.textContent === '固态电池')!
+    expect(oldCard.textContent).toContain('近30天 0 条 · 近两年 1 条')
+    expect(reviewPolicyTheme).not.toHaveBeenCalled()
+  })
+
+  it('filters detail sources by publication age while keeping planning and unknown dates distinct', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-17T04:00:00Z'))
+    const signal = (id: string, publishedAt: string | null, planningBaseline = false) => ({ ...theme.signals[0], summary: id, url: `https://www.gov.cn/${id}`, publishedAt, planningBaseline })
+    vi.mocked(fetchPolicyDaily).mockResolvedValue({ ...daily, themes: [{ ...theme, signals: [
+      signal('recent', '2026-10-17'), signal('historical', '2025-10-17'), signal('planning', '2021-03-12', true),
+      signal('unknown', null), signal('future', '2026-10-18'),
+    ] }] })
+    await render(); await detail(); await click('政策与新闻')
+    const links = () => [...document.querySelectorAll<HTMLAnchorElement>('[role="dialog"] article a')].map(link => new URL(link.href).pathname)
+    expect(links()).toEqual(['/recent', '/historical', '/planning', '/unknown'])
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('近两年 2')
+    expect(dialog.textContent).toContain('日期未知 1')
+    expect(dialog.textContent).toContain('最多展示 24 条代表线索')
+    expect(dialog.textContent).toContain('新采集不等于新发布')
+    await click('历史线索')
+    expect(links()).toEqual(['/historical'])
+    expect(dialog.querySelector('article')?.textContent).toContain('来源发布日期：2025-10-17')
+    expect(dialog.querySelector('article')?.textContent).toContain('核验文件是否仍有效')
+    await click('近90天'); expect(links()).toEqual(['/recent'])
+    await click('长期规划'); expect(links()).toEqual(['/planning'])
+    await click('全部'); expect(links()).toEqual(['/recent', '/historical', '/planning', '/unknown'])
+  })
+
   it('keeps the last successful analysis when a manual update fails', async () => {
     vi.mocked(reviewPolicyTheme).mockRejectedValue(new Error('模型接口超时'))
     await render(); await detail(); await click('更新 AI 研判')

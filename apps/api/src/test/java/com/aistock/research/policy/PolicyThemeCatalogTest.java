@@ -198,7 +198,7 @@ class PolicyThemeCatalogTest {
     }
 
     private void stub(String title, String body, List<CompanyProfile> companies) {
-        when(policyClient.fetchLatestPoliciesWithStatus(anyInt())).thenReturn(new GovPolicyFetchResult(List.of(
+        when(policyClient.fetchResearchPoliciesWithStatus(anyInt())).thenReturn(new GovPolicyFetchResult(List.of(
                 new GovPolicyItem("官方规划来源", "plan", title, "https://policy.example/plan", "2026-03-14", 95, body, true)), List.of()));
         when(companyService.listCompanies()).thenReturn(companies);
     }

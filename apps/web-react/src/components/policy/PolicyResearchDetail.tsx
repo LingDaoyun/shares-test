@@ -3,15 +3,19 @@ import { Bot, ExternalLink } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Tag } from '../ui/Badge'
 import { formatDateTime, formatScore } from '../../lib/format'
-import { policyEvidence, policySourceUrl } from '../../lib/policyTrend'
+import { isHistoricalPolicySignal, policyEvidence, policySourceUrl } from '../../lib/policyTrend'
 import type { PolicyAiReview, PolicySignal, PolicyTheme } from '../../types'
 
 export function PolicyResearchDetail({ theme, history, aiEnabled, reviewing, error, onReview }: {
   theme: PolicyTheme; history: PolicyAiReview[]; aiEnabled: boolean; reviewing: boolean; error?: string; onReview: () => void
 }) {
   const [tab, setTab] = useState('趋势研判')
+  const [sourceFilter, setSourceFilter] = useState('全部')
   const latest = history[0]
   const evidence = policyEvidence(theme)
+  const sourceSignals = sourceFilter === '近90天' ? evidence.recent90Signals
+    : sourceFilter === '历史线索' ? evidence.historicalSignals
+      : sourceFilter === '长期规划' ? evidence.planningSignals : evidence.signals
   return <div className="flex flex-col gap-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="text-xs text-ink-500">2–12 周主题趋势 · 兼看 1–2 周催化</p>
@@ -33,9 +37,11 @@ export function PolicyResearchDetail({ theme, history, aiEnabled, reviewing, err
       <ResearchList title="产业观察风险" items={theme.risks} />
     </> : null}
     {tab === '政策与新闻' ? <>
-      <p className="text-xs leading-relaxed text-ink-500">已取得正文的来源展示对应片段，部分来源仅有标题；请点击原文核对完整条款、适用对象及落实时间。近 7 / 30 / 90 天数字按来源发布日期统计本次采集样本，不代表政策发布总量。</p>
-      <div className="flex flex-wrap gap-2"><Tag>近7天 {evidence.recent7}</Tag><Tag>近30天 {evidence.recent30}</Tag><Tag>近90天 {evidence.recent90}</Tag><Tag>日期未知 {evidence.unknown}</Tag></div>
-      <PolicySources signals={evidence.signals} />
+      <p className="text-xs leading-relaxed text-ink-500">普通新闻回溯近两年，长期规划持续保留。每个产业最多展示 24 条代表线索，属于已采样范围，不是近两年的全量新闻。所有时间统计均按来源发布日期，日期未知另列；新采集不等于新发布，历史文件仍需核验现行效力。已取得正文的来源展示对应片段，部分来源仅有标题，请点击原文核对完整条款、适用对象及落实时间。</p>
+      <div className="flex flex-wrap gap-2"><Tag>近7天 {evidence.recent7}</Tag><Tag>近30天 {evidence.recent30}</Tag><Tag>近90天 {evidence.recent90}</Tag><Tag>近两年 {evidence.recent730}</Tag><Tag>历史线索 {evidence.historicalSignals.length}</Tag><Tag>长期规划 {evidence.planningSignals.length}</Tag><Tag>日期未知 {evidence.unknown}</Tag></div>
+      <div className="flex flex-wrap gap-2" role="group" aria-label="政策新闻时间范围">{['全部', '近90天', '历史线索', '长期规划'].map(value => <button key={value} type="button" aria-pressed={sourceFilter === value} onClick={() => setSourceFilter(value)} className={`rounded-lg border px-3 py-2 text-xs ${sourceFilter === value ? 'border-brand-200 bg-brand-50 text-brand-700' : 'border-line text-ink-500'}`}>{value}</button>)}</div>
+      {sourceFilter === '历史线索' ? <p className="text-xs text-ink-500">历史线索指发布于 91–730 天前的普通政策或产业新闻，长期规划单独列示。</p> : null}
+      {sourceSignals.length ? <PolicySources signals={sourceSignals} /> : <Empty text="已采集的线索中，暂无符合这个时间范围的文章。" />}
     </> : null}
     {tab === '上市公司' ? <>
       <p className="text-xs leading-relaxed text-ink-500">从已接入的 A 股公司样本中筛选产业相关候选；行业关键词关联仍需主营收入、公告和订单验证。此处未提供实时买卖信号。</p>
@@ -87,13 +93,15 @@ export function PolicySources({ signals }: { signals: PolicySignal[] }) {
   return <div className="flex flex-col gap-3">{signals.map((signal, index) => {
     const url = policySourceUrl(signal.url)
     const excerpt = signal.excerpt?.trim()
+    const historical = isHistoricalPolicySignal(signal)
     return <article key={`${signal.url}-${index}`} className="rounded-xl border border-line-soft p-4">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-500"><div className="flex flex-wrap items-center gap-2"><Tag tone={(signal.sourceInfo?.authorityRank ?? 0) >= 80 ? 'brand' : 'neutral'}>{signal.sourceInfo?.authorityLabel ?? '来源级别待核验'}</Tag><strong className="font-semibold text-ink-800">{signal.sourceInfo?.publisher ?? signal.source}</strong></div><span>{signal.planningBaseline ? '来源发布日期：' : ''}{signal.publishedAt || '发布日期未知'}</span></div>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-500"><div className="flex flex-wrap items-center gap-2"><Tag tone={(signal.sourceInfo?.authorityRank ?? 0) >= 80 ? 'brand' : 'neutral'}>{signal.sourceInfo?.authorityLabel ?? '来源级别待核验'}</Tag><strong className="font-semibold text-ink-800">{signal.sourceInfo?.publisher ?? signal.source}</strong></div><span>来源发布日期：{signal.publishedAt || '未知'}</span></div>
       {signal.sourceInfo ? <p className="mb-2 text-[11px] text-ink-400">采集来源：{signal.source} · {signal.sourceInfo.siteHost}{signal.sourceInfo.attributedSource ? ` · 网页标注来源：${signal.sourceInfo.attributedSource}` : ''}</p> : null}
-      <div className="mb-2 flex flex-wrap gap-2"><Tag tone={excerpt ? 'brand' : 'neutral'}>{excerpt ? '已取得正文片段' : '仅标题线索'}</Tag>{signal.planningBaseline ? <Tag>长期规划</Tag> : null}</div>
+      <div className="mb-2 flex flex-wrap gap-2"><Tag tone={excerpt ? 'brand' : 'neutral'}>{excerpt ? '已取得正文片段' : '仅标题线索'}</Tag>{signal.planningBaseline ? <Tag>长期规划</Tag> : historical ? <Tag>历史线索</Tag> : null}</div>
       {url ? <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium leading-relaxed text-brand-700 hover:underline">{signal.summary}<ExternalLink aria-hidden="true" className="ml-1 inline h-3.5 w-3.5" /><span className="sr-only">（查看原文）</span></a> : <p className="text-sm text-ink-700">{signal.summary}</p>}
       {excerpt ? <blockquote className="mt-3 whitespace-pre-wrap break-words rounded-lg border-l-2 border-brand-200 bg-brand-50/40 p-3 text-xs leading-relaxed text-ink-700">{excerpt}</blockquote> : <p className="mt-2 text-xs text-ink-400">尚未取得正文片段，请点击原文核验。</p>}
       {signal.planningBaseline ? <p className="mt-2 text-xs leading-relaxed text-ink-500">长期规划作为产业背景，按来源发布日期展示；转载日期不等于文件印发日，转载也可能有删减。每日重新采集不代表新增催化。</p> : null}
+      {historical ? <p className="mt-2 text-xs leading-relaxed text-ink-500">这是历史线索，新采集不等于新发布；请核验文件是否仍有效，以及后续落实、修订或替代情况。</p> : null}
       <p className="mt-2 text-[11px] text-ink-400">{signal.signalType}</p>
     </article>
   })}</div>

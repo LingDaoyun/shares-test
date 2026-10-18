@@ -103,8 +103,10 @@ public class PolicyThemeService {
         List<String> risks = new ArrayList<>(definition.risks());
         risks.add(signals.stream().anyMatch(signal -> signal.excerpt() != null && !signal.excerpt().isBlank())
                 ? "依据已采集的标题及正文片段匹配，需结合完整文件核验适用范围与实施条件；样本不代表完整政策覆盖"
-                : "仅依据本次采集的政策标题线索，尚未核验全文条款；样本不代表完整90天政策覆盖");
+                : "仅依据已采集的政策标题线索，尚未核验全文条款；近两年回溯样本不代表完整政策覆盖");
         if (signals.stream().anyMatch(PolicySignal::planningBaseline)) risks.add("长期规划是趋势背景，来源发布日期不变，不代表近期新增催化或已兑现订单");
+        if (signals.stream().anyMatch(signal -> !signal.planningBaseline() && signal.signalType().contains("90天前发布")))
+            risks.add("历史线索按原发布日期保留，政策有效性及后续进展待核验，重新采集不代表近期新增催化");
         if (policies.isEmpty()) risks.add("政策源未取得有效数据");
         if (signals.isEmpty()) risks.add("当前采集样本未匹配到本主题政策线索");
         List<PolicyCompanyCandidate> pool = signals.isEmpty() ? List.of()
@@ -120,8 +122,17 @@ public class PolicyThemeService {
 
     private List<GovPolicyItem> fetchPoliciesSafely(List<String> dataGaps) {
         try {
-            GovPolicyFetchResult result = govPolicyClient.fetchLatestPoliciesWithStatus(120);
+            GovPolicyFetchResult result = govPolicyClient.fetchResearchPoliciesWithStatus(600);
             for (String failure : result.failedSources()) {
+                if (Set.of(GovPolicyClient.HISTORY_COVERAGE_GAP, GovPolicyClient.HISTORY_PAGE_LIMIT_GAP,
+                        GovPolicyClient.HISTORY_PAGE_FAILURE_GAP, GovPolicyClient.HISTORY_PAGE_LOOP_GAP,
+                        GovPolicyClient.HISTORY_PAGINATION_UNSUPPORTED_GAP,
+                        GovPolicyClient.HISTORY_ITEM_LIMIT_GAP, GovPolicyClient.HISTORY_ARCHIVE_READ_GAP,
+                        GovPolicyClient.HISTORY_ARCHIVE_WRITE_GAP, GovPolicyClient.RESEARCH_BODY_LIMIT_GAP,
+                        GovPolicyClient.RESEARCH_BODY_FAILURE_GAP).contains(failure == null ? "" : failure)) {
+                    dataGaps.add(failure);
+                    continue;
+                }
                 // GovPolicyClient joins the configured source name and root exception with this separator.
                 // Keep only that name; never publish raw upstream response bodies, URLs or credentials.
                 int separator = failure == null ? -1 : failure.indexOf('：');
@@ -405,12 +416,21 @@ public class PolicyThemeService {
                                 Comparator.nullsLast(Comparator.reverseOrder()))
                         .thenComparing(Comparator.comparingInt((GovPolicyItem policy) -> signalConfidence(policy, keywords)).reversed());
         List<GovPolicyItem> matched = policies.stream().filter(policy -> matchesPolicy(policy, keywords)).sorted(order).toList();
-        // Keep long-term context without letting old plans displace recent catalysts.
-        List<GovPolicyItem> selected = new ArrayList<>(matched.stream().filter(GovPolicyItem::planningBaseline).limit(2).toList());
-        selected.addAll(matched.stream().filter(policy -> !policy.planningBaseline())
+        // Reserve room for historical reports even when current headlines fill the sample.
+        List<GovPolicyItem> selected = new ArrayList<>(matched.stream().filter(GovPolicyItem::planningBaseline).limit(4).toList());
+        LocalDate recentCutoff = LocalDate.now(clock).minusDays(90);
+        List<GovPolicyItem> news = matched.stream().filter(policy -> !policy.planningBaseline()).toList();
+        List<GovPolicyItem> recent = news.stream().filter(policy -> publication(policy).date() == null
+                        || !publication(policy).date().isBefore(recentCutoff))
                 .sorted(Comparator.comparing((GovPolicyItem policy) -> publication(policy).date(),
-                        Comparator.nullsLast(Comparator.reverseOrder())).thenComparing(order))
-                .limit(6 - selected.size()).toList());
+                        Comparator.nullsLast(Comparator.reverseOrder())).thenComparing(order)).toList();
+        List<GovPolicyItem> historical = news.stream().filter(policy -> publication(policy).date() != null
+                        && publication(policy).date().isBefore(recentCutoff)).toList();
+        selected.addAll(recent.stream().limit(12).toList());
+        selected.addAll(historical.stream().limit(8).toList());
+        // Unused planning/history slots remain available for the other news group.
+        java.util.stream.Stream.concat(recent.stream(), historical.stream())
+                .filter(policy -> !selected.contains(policy)).limit(24 - selected.size()).forEach(selected::add);
         return selected.stream().sorted(order)
                 .map(policy -> new PolicySignal(
                         policy.source(),
@@ -540,6 +560,8 @@ public class PolicyThemeService {
             Publication publication = publication(policy);
             if (publication.date() != null && publication.date().isAfter(LocalDate.now(clock))) continue;
             if (publication.instant() != null && publication.instant().isAfter(clock.instant())) continue;
+            if (!policy.planningBaseline() && publication.date() != null
+                    && publication.date().isBefore(LocalDate.now(clock).minusDays(GovPolicyClient.RESEARCH_LOOKBACK_DAYS))) continue;
             String key = Normalizer.normalize(policy.title(), Normalizer.Form.NFKC)
                     .replaceAll("[\\p{P}\\p{Z}\\s]+", "").toLowerCase(Locale.ROOT);
             if (!key.isBlank()) unique.merge(key, policy, this::representativePolicy);

@@ -45,13 +45,29 @@ class PolicyDailyServiceTest {
     }
 
     @Test
+    void reviewsHistoricalReportsAcrossTwoYearsWithoutChangingTheirPublicationDate() {
+        LocalDate today = LocalDate.now(clock);
+        PolicyTheme historical = theme("SOLID_STATE_BATTERY", today.minusDays(400).toString(), 80);
+        when(themes.listThemesWithStatus()).thenReturn(collection(historical,
+                theme("BOUNDARY", today.minusDays(730).toString(), 80),
+                theme("EXPIRED", today.minusDays(731).toString(), 80)));
+
+        service.refresh();
+        executor.runNext();
+
+        assertThat(service.current().reviewedThemeCodes()).containsExactlyInAnyOrder("SOLID_STATE_BATTERY", "BOUNDARY");
+        assertThat(service.current().themes().get(0).signals().get(0).publishedAt()).isEqualTo(today.minusDays(400).toString());
+        verify(reviews, times(2)).review(any(PolicyTheme.class));
+    }
+
+    @Test
     void reviewsAnExplicitLongTermPlanningPassageWithoutCallingItARecentCatalyst() {
         PolicyTheme original = theme("SOLID_STATE_BATTERY", "2025-01-01", 80);
         PolicyTheme planning = new PolicyTheme(original.themeCode(), original.name(), original.policyLevel(),
                 original.timeHorizon(), original.strengthScore(), original.chainSegments(), List.of(new PolicySignal(
                 "工业部门", "长期规划", "新型电池规划", 80, "https://policy.example/plan", "2025-01-01",
                 "加快全固态电池技术研发。", true)), original.risks(), original.companyPool());
-        when(themes.listThemesWithStatus()).thenReturn(collection(planning, theme("OLD_NEWS", "2025-01-01", 80)));
+        when(themes.listThemesWithStatus()).thenReturn(collection(planning, theme("OLD_NEWS", "2023-01-01", 80)));
 
         service.refresh();
         executor.runNext();
@@ -224,7 +240,7 @@ class PolicyDailyServiceTest {
 
     @Test
     void skipsThemesWithoutRealEvidenceAndOldEvidenceButAllowsUnknownDates() {
-        when(themes.listThemesWithStatus()).thenReturn(collection(withoutSignals("EMPTY"), theme("OLD", "2026-01-01", 99),
+        when(themes.listThemesWithStatus()).thenReturn(collection(withoutSignals("EMPTY"), theme("OLD", "2023-01-01", 99),
                 theme("UNKNOWN", null, 60), theme("FUTURE", "2027-01-01", 99)));
         service.refresh();
         executor.runNext();
@@ -244,13 +260,13 @@ class PolicyDailyServiceTest {
     }
 
     @Test
-    void evaluatesOffsetDatesInShanghaiWithInclusiveNinetyDayBoundary() {
+    void evaluatesOffsetDatesInShanghaiWithInclusiveTwoYearBoundary() {
         when(themes.listThemesWithStatus()).thenReturn(collection(
-                theme("BOUNDARY", "2026-07-18T16:00:00Z", 80), // July 19 in Shanghai: exactly 90 days
-                theme("TOO_OLD", "2026-07-19T00:00:00+14:00", 80), // July 18 in Shanghai
+                theme("BOUNDARY", "2024-10-16T16:00:00Z", 80), // October 17 in Shanghai: exactly 730 days
+                theme("TOO_OLD", "2024-10-17T00:00:00+14:00", 80), // October 16 in Shanghai
                 theme("FUTURE", "2026-10-17T16:00:00Z", 80), // October 18 in Shanghai
                 theme("OFFSET", "2026-10-16T23:00:00-07:00", 80), // October 17 in Shanghai
-                theme("LOCAL", "2026-07-19 08:00:00", 80)));
+                theme("LOCAL", "2024-10-17 08:00:00", 80)));
         service.refresh();
         executor.runNext();
         assertThat(service.current().reviewedThemeCodes()).containsExactlyInAnyOrder("BOUNDARY", "OFFSET", "LOCAL");

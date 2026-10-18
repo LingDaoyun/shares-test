@@ -126,6 +126,43 @@ class PolicyThemeServiceTest {
     }
 
     @Test
+    void keepsTwoYearBoundaryAndOlderPlanningButExcludesExpiredNewsAndFutureSources() {
+        stubPolicies(List.of(
+                policy("固态电池两年边界报告", TODAY.minusDays(730).toString()),
+                policy("固态电池过期普通新闻", TODAY.minusDays(731).toString()),
+                new GovPolicyItem("政府网", "plan", "固态电池长期规划", "https://www.gov.cn/older-plan",
+                        TODAY.minusDays(1000).toString(), 100, "固态电池研发规划背景。", true),
+                new GovPolicyItem("政府网", "plan", "固态电池未来规划", "https://www.gov.cn/future-plan",
+                        TODAY.plusDays(1).toString(), 100, "尚未发布的内容。", true)));
+        when(companyService.listCompanies()).thenReturn(List.of());
+
+        assertThat(theme(service, "SOLID_STATE_BATTERY").signals()).extracting(PolicySignal::summary)
+                .containsExactlyInAnyOrder("固态电池两年边界报告", "固态电池长期规划");
+    }
+
+    @Test
+    void retainsHistoricalBatteryReportsWhenRecentNewsFillsTheTheme() {
+        List<GovPolicyItem> policies = new java.util.ArrayList<>();
+        for (int i = 0; i < 30; i++) policies.add(policy("固态电池近期投产项目" + i, TODAY.minusDays(i).toString()));
+        for (int i = 0; i < 10; i++) policies.add(new GovPolicyItem("工信部", "document", "固态电池产业研究报告" + i,
+                "https://www.miit.gov.cn/report-" + i, TODAY.minusDays(180 + i).toString(), 95,
+                "推进固态电池中试验证，实际投产和政策有效性仍需跟踪。", false));
+        stubPolicies(policies);
+        when(companyService.listCompanies()).thenReturn(List.of());
+
+        List<PolicySignal> signals = theme(service, "SOLID_STATE_BATTERY").signals();
+
+        assertThat(signals).hasSize(24);
+        assertThat(signals).filteredOn(signal -> signal.summary().contains("研究报告")).hasSize(8)
+                .allSatisfy(signal -> {
+                    assertThat(signal.signalType()).contains("90天前发布");
+                    assertThat(signal.planningBaseline()).isFalse();
+                    assertThat(signal.publishedAt()).startsWith("2026-04");
+                });
+        assertThat(signals).anyMatch(signal -> signal.summary().equals("固态电池近期投产项目0"));
+    }
+
+    @Test
     void keepsLongTermPlanningEvidenceAlongsideRecentCatalystsWithoutRefreshingItsDate() {
         List<GovPolicyItem> policies = new java.util.ArrayList<>();
         for (int i = 0; i < 8; i++) policies.add(policy("固态电池投产项目" + i, TODAY.minusDays(i).toString()));
@@ -136,7 +173,7 @@ class PolicyThemeServiceTest {
 
         List<PolicySignal> signals = theme(service, "SOLID_STATE_BATTERY").signals();
 
-        assertThat(signals).hasSize(6);
+        assertThat(signals).hasSize(9);
         assertThat(signals).filteredOn(PolicySignal::planningBaseline).singleElement().satisfies(signal -> {
             assertThat(signal.publishedAt()).isEqualTo("2025-01-01");
             assertThat(signal.signalType()).contains("90天前发布");
@@ -156,7 +193,7 @@ class PolicyThemeServiceTest {
 
         List<PolicySignal> signals = theme(service, "SOLID_STATE_BATTERY").signals();
 
-        assertThat(signals).filteredOn(PolicySignal::planningBaseline).hasSize(2);
+        assertThat(signals).filteredOn(PolicySignal::planningBaseline).hasSize(4);
         assertThat(signals).anyMatch(signal -> signal.url().endsWith("/new-catalyst"));
     }
 
@@ -179,9 +216,10 @@ class PolicyThemeServiceTest {
 
     @Test
     void preservesSuccessfulPoliciesAndExposesOnlySafeSourceFailureNames() {
-        when(govPolicyClient.fetchLatestPoliciesWithStatus(120)).thenReturn(new GovPolicyFetchResult(
+        when(govPolicyClient.fetchResearchPoliciesWithStatus(600)).thenReturn(new GovPolicyFetchResult(
                 List.of(policy("算力基础设施建设规划", TODAY.toString())),
-                List.of("工业部门：HTTP 502 body with credential-like detail", "raw exception without source delimiter")));
+                List.of("工业部门：HTTP 502 body with credential-like detail", "raw exception without source delimiter",
+                        GovPolicyClient.HISTORY_COVERAGE_GAP, GovPolicyClient.HISTORY_ARCHIVE_WRITE_GAP)));
         when(companyService.listCompanies()).thenReturn(List.of(
                 profile("600004", "设备样本", "计算机设备", "DIGITAL_INFRA", "80", "2000000000", "0.18", "1", "0.1")));
 
@@ -190,12 +228,13 @@ class PolicyThemeServiceTest {
         assertThat(result.themes().stream().filter(row -> row.themeCode().equals("DIGITAL_INFRA")).findFirst().orElseThrow().signals())
                 .hasSize(1);
         assertThat(result.dataGaps()).contains("工业部门：政策源采集失败，本次覆盖不完整。", "部分政策源采集失败，本次覆盖不完整。");
+        assertThat(result.dataGaps()).contains(GovPolicyClient.HISTORY_COVERAGE_GAP, GovPolicyClient.HISTORY_ARCHIVE_WRITE_GAP);
         assertThat(result.dataGaps().toString()).doesNotContain("HTTP", "credential", "raw exception");
     }
 
     @Test
     void exposesUnavailableCompanyCollectionWithoutLeakingExceptionDetails() {
-        when(govPolicyClient.fetchLatestPoliciesWithStatus(120)).thenReturn(new GovPolicyFetchResult(
+        when(govPolicyClient.fetchResearchPoliciesWithStatus(600)).thenReturn(new GovPolicyFetchResult(
                 List.of(policy("算力基础设施建设规划", TODAY.toString())), List.of()));
         when(companyService.listCompanies()).thenThrow(new IllegalStateException("sensitive upstream body"));
 
@@ -295,7 +334,7 @@ class PolicyThemeServiceTest {
 
     @Test
     void keepsPolicyFetchFailureAsAnExplicitEmptyState() {
-        when(govPolicyClient.fetchLatestPoliciesWithStatus(120)).thenThrow(new IllegalStateException("政策源超时"));
+        when(govPolicyClient.fetchResearchPoliciesWithStatus(600)).thenThrow(new IllegalStateException("政策源超时"));
         when(companyService.listCompanies()).thenReturn(List.of());
 
         assertThat(service.listThemes()).hasSize(3).allSatisfy(theme -> {
@@ -399,7 +438,7 @@ class PolicyThemeServiceTest {
     }
 
     private void stubPolicies(List<GovPolicyItem> policies) {
-        when(govPolicyClient.fetchLatestPoliciesWithStatus(120)).thenReturn(new GovPolicyFetchResult(policies, List.of()));
+        when(govPolicyClient.fetchResearchPoliciesWithStatus(600)).thenReturn(new GovPolicyFetchResult(policies, List.of()));
     }
 
     private PolicyTheme theme(PolicyThemeService target, String code) {
