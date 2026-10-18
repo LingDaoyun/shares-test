@@ -57,8 +57,10 @@ describe('daily policy research board', () => {
   it('retains unclassified policy links without pretending they are completed industry reviews', async () => {
     vi.mocked(fetchPolicyDaily).mockResolvedValue({ ...daily, unclassifiedSignals: [{ ...theme.signals[0], summary: '尚未归类的政策', url: 'https://www.gov.cn/unclassified' }] })
     await render()
-    expect(host.textContent).toContain('待归类政策 · 1 条')
-    expect(host.querySelector('a[href="https://www.gov.cn/unclassified"]')?.textContent).toContain('尚未归类的政策')
+    expect(host.textContent).not.toContain('待归类政策')
+    await click('采集与研判')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('待归类政策 · 1 条')
+    expect(document.querySelector('a[href="https://www.gov.cn/unclassified"]')?.textContent).toContain('尚未归类的政策')
     expect(reviewPolicyTheme).not.toHaveBeenCalled()
   })
   async function click(text: string) {
@@ -72,15 +74,24 @@ describe('daily policy research board', () => {
     await act(async () => { title!.click() })
   }
 
-  it('reads saved intelligence and reviews without launching paid analysis', async () => {
+  it('shows industry cards first and opens collection controls on demand without launching paid analysis', async () => {
     await render()
-    expect(host.textContent).toContain('每日产业情报')
-    expect(host.textContent).toContain('每天08:30')
+    expect(host.textContent).not.toContain('每日产业情报')
+    expect(host.textContent).not.toContain('每天08:30')
     expect(host.textContent).toContain('观察设备订单能否逐步兑现')
-    expect(host.textContent).toContain('部分来源仅有标题')
+    expect(host.textContent).not.toContain('部分来源仅有标题')
     expect(reviewPolicyTheme).not.toHaveBeenCalled()
     expect(refreshPolicyDaily).not.toHaveBeenCalled()
     expect(document.querySelector('[role="dialog"]')).toBeNull()
+    await click('采集与研判')
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('每天08:30')
+    expect(dialog.textContent).toContain('部分来源仅有标题')
+    expect(dialog.textContent).toContain('读取结果')
+    expect(refreshPolicyDaily).not.toHaveBeenCalled()
+    await act(async () => { dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement?.textContent).toBe('采集与研判')
   })
 
   it('opens source articles and validated company assessments in separate detail tabs', async () => {
@@ -148,8 +159,6 @@ describe('daily policy research board', () => {
     expect(card.textContent).toContain('近30天 2 条 · 近两年 3 条')
     expect(card.textContent).toContain('历史线索 1 条')
     expect(card.textContent).toContain('去年发布的固态电池产业报告')
-    expect(host.textContent).toContain('属于已采样范围')
-    expect(host.textContent).toContain('2–12 周趋势观察')
     await click('有历史线索')
     expect([...host.querySelectorAll('article h3')].map(item => item.textContent)).toEqual([theme.name, '固态电池'])
     const oldCard = [...host.querySelectorAll('article')].find(item => item.querySelector('h3')?.textContent === '固态电池')!
@@ -200,7 +209,7 @@ describe('daily policy research board', () => {
     await render()
     let resolveHistory!: (value: PolicyAiReview[]) => void
     vi.mocked(fetchPolicyReviewHistory).mockReturnValueOnce(new Promise(resolve => { resolveHistory = resolve }))
-    await click('读取结果')
+    await click('采集与研判'); await click('读取结果'); await click('关闭详情')
     const latest = { ...review, reviewedAt: '2026-10-17T01:00:00Z', trendPlan: { ...review.trendPlan!, thesis: '刚完成的新研判' } }
     vi.mocked(reviewPolicyTheme).mockResolvedValue(latest)
     await detail(); await click('更新 AI 研判')
@@ -212,7 +221,7 @@ describe('daily policy research board', () => {
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('研判记录 · 2')
     await click('关闭详情')
     vi.mocked(fetchPolicyReviewHistory).mockResolvedValue([review, latest, review])
-    await click('读取结果'); await detail()
+    await click('采集与研判'); await click('读取结果'); await click('关闭详情'); await detail()
     expect(host.textContent).toContain('刚完成的新研判')
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('研判记录 · 2')
   })
@@ -236,11 +245,13 @@ describe('daily policy research board', () => {
     vi.useFakeTimers()
     vi.mocked(fetchPolicyDaily).mockResolvedValueOnce({ ...daily, status: 'IDLE', themes: [], reviewedThemeCodes: [] }).mockResolvedValue(daily)
     vi.mocked(refreshPolicyDaily).mockResolvedValue({ ...daily, status: 'RUNNING', themes: [], reviewedThemeCodes: [] })
-    await render(); await click('立即采集与研判')
-    expect(host.textContent).toContain('正在采集与研判')
+    await render(); await click('采集与研判'); await click('立即采集与研判')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('正在采集与研判')
+    await click('关闭详情')
     await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-    expect(host.textContent).toContain('本轮完成')
     expect(host.textContent).toContain(theme.name)
+    await click('采集与研判')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('本轮完成')
     expect(refreshPolicyDaily).toHaveBeenCalledTimes(1)
   })
 

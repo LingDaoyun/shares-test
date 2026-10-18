@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, ChevronRight, RefreshCw, Star } from 'lucide-react'
+import { Bot, ChevronRight, RefreshCw, SlidersHorizontal, Star } from 'lucide-react'
 import { fetchPolicyDaily, fetchPolicyReviewHistory, refreshPolicyDaily, reviewPolicyTheme } from '../api/client'
 import { useAppStore } from '../store/appStore'
 import { Button } from '../components/ui/Button'
@@ -35,6 +35,7 @@ export function PolicyIndustryPage() {
   const [reviewErrors, setReviewErrors] = useState<Record<string, string>>({})
   const [reviewing, setReviewing] = useState<Record<string, boolean>>({})
   const [selected, setSelected] = useState<string | null>(null)
+  const [collectionOpen, setCollectionOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('全部产业')
   const [tracked, setTracked] = useState<string[]>(() => {
@@ -125,25 +126,11 @@ export function PolicyIndustryPage() {
   const uniqueSources = new Set(themes.flatMap(theme => policyEvidence(theme).signals.map(signal => signal.summary.replace(/\s/g, ''))))
 
   return <div className="flex flex-col gap-4">
-    <Card>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h2 className="text-lg font-semibold text-ink-900">每日产业情报</h2><p className="mt-1 text-xs text-ink-500">{snapshot?.scheduledTime ?? '每天08:30（北京时间）'} · 2–12 周趋势观察</p></div>
-        <div className="flex flex-wrap gap-2"><Button variant="ghost" disabled={loading} onClick={() => void load()}>读取结果</Button><Button icon={<RefreshCw className="h-4 w-4" />} loading={loading || snapshot?.status === 'RUNNING'} onClick={() => void refresh()}>立即采集与研判</Button></div>
-      </div>
-      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><Tag tone={snapshot?.status === 'FAILED' ? 'warning' : 'brand'}>{snapshot ? statusLabel[snapshot.status] : '暂无结果'}</Tag><span className="text-ink-400">{snapshot?.completedAt ? `最近完成 ${formatDateTime(snapshot.completedAt)}` : '完成后将自动保存结果'}</span><span className="ml-auto inline-flex items-center gap-1 text-ink-500"><Bot className="h-3.5 w-3.5" />{llmConfig?.apiKeyConfigured ? `${llmConfig.provider} / ${llmConfig.model}` : '模型待配置'}</span></div>
-      <div className="mt-4 grid grid-cols-3 gap-2"><Stat label="产业方向" value={themes.length} /><Stat label="去重后的政策线索" value={uniqueSources.size} /><Stat label="本轮已研判" value={snapshot?.reviewedThemeCodes.length ?? 0} /></div>
-      <p className="mt-3 text-[11px] leading-relaxed text-ink-500">官方来源优先。普通新闻回溯近两年，长期规划持续保留；每个产业最多展示 24 条代表线索，属于已采样范围，不代表全部新闻。已取得正文的来源展示对应片段，部分来源仅有标题，原文可点击核验。按来源发布日期统计，新采集不等于新发布，历史文件需核验现行效力。Agent 负责提出产业逻辑与验证条件，实际资金与订单兑现需另外验证。</p>
-      {snapshot?.dataGaps.length ? <details className="mt-3 text-xs text-amber-700"><summary className="cursor-pointer">本轮采集说明 · {snapshot.dataGaps.length} 项</summary><ul className="mt-2 space-y-1">{snapshot.dataGaps.map((gap, index) => <li key={index}>{gap}</li>)}</ul></details> : null}
-      {error ? <p role="alert" className="mt-3 text-xs text-amber-700">{error}</p> : null}
-    </Card>
-    {snapshot?.unclassifiedSignals?.length ? <Card><details>
-      <summary className="cursor-pointer text-sm font-semibold text-ink-800">待归类政策 · {snapshot.unclassifiedSignals.length} 条</summary>
-      <p className="my-3 text-xs leading-relaxed text-ink-500">这些文章尚未对应到产业方向，保留来源和原文供核对，不计入已完成产业研判。</p>
-      <PolicySources signals={snapshot.unclassifiedSignals} />
-    </details></Card> : null}
-    <div className="flex flex-wrap items-center gap-2"><input aria-label="搜索产业或政策" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索产业、政策或产业链环节" className="min-w-0 flex-1 rounded-lg border border-line bg-white px-3 py-2 text-sm outline-none focus:border-brand-400" />
+    <div className="flex flex-wrap items-center gap-2"><input aria-label="搜索产业或政策" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索产业、政策或产业链环节" className="min-w-[200px] flex-1 rounded-lg border border-line bg-white px-3 py-2 text-sm outline-none focus:border-brand-400" />
       {['全部产业', '我的关注', '近30天有线索', '有历史线索'].map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={`rounded-lg border px-3 py-2 text-xs ${filter === value ? 'border-brand-200 bg-brand-50 text-brand-700' : 'border-line bg-white text-ink-500'}`}>{value}</button>)}
+      <Button type="button" className="ml-auto" icon={snapshot?.status === 'RUNNING' ? <RefreshCw aria-hidden="true" className="h-4 w-4 animate-spin" /> : <SlidersHorizontal aria-hidden="true" className="h-4 w-4" />} aria-haspopup="dialog" aria-expanded={collectionOpen} onClick={() => setCollectionOpen(true)}>采集与研判</Button>
     </div>
+    {error ? <p role="alert" className="text-xs text-amber-700">{error}</p> : null}
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{cards.map(({ theme, evidence }) => {
       const latest = history[theme.themeCode]?.[0]
       const planningCount = evidence.planningSignals.length
@@ -160,7 +147,27 @@ export function PolicyIndustryPage() {
         <div className="mt-auto flex flex-wrap items-center justify-between gap-2"><span className="text-[11px] text-ink-400">关联公司 {theme.companyPool.length} 家{latest?.reviewedAt ? ` · 研判 ${formatDateTime(latest.reviewedAt)}` : ''}</span><Button variant="ghost" data-policy-detail onClick={() => setSelected(theme.themeCode)} aria-label={`查看${theme.name}趋势详情`}>查看详情<ChevronRight className="h-4 w-4" /></Button></div>
       </article>
     })}</div>
-    {!cards.length ? <Card><p className="py-5 text-center text-sm text-ink-500">{themes.length ? '没有符合筛选条件的产业。' : '尚无每日快照，点击“立即采集与研判”开始。'}</p></Card> : null}
+    {!cards.length ? <Card><p className="py-5 text-center text-sm text-ink-500">{themes.length ? '没有符合筛选条件的产业。' : '尚无每日快照，可在右上角“采集与研判”中开始采集。'}</p></Card> : null}
+    {collectionOpen ? <DetailOverlay open title="采集与研判" onClose={() => setCollectionOpen(false)}>
+      <div className="flex flex-col gap-4">
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div><h3 className="text-lg font-semibold text-ink-900">每日产业情报</h3><p className="mt-1 text-xs text-ink-500">{snapshot?.scheduledTime ?? '每天08:30（北京时间）'} · 2–12 周趋势观察</p></div>
+            <div className="flex flex-wrap gap-2"><Button variant="ghost" disabled={loading} onClick={() => void load()}>读取结果</Button><Button icon={<RefreshCw className="h-4 w-4" />} loading={loading || snapshot?.status === 'RUNNING'} onClick={() => void refresh()}>立即采集与研判</Button></div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><Tag tone={snapshot?.status === 'FAILED' ? 'warning' : 'brand'}>{snapshot ? statusLabel[snapshot.status] : '暂无结果'}</Tag><span className="text-ink-400">{snapshot?.completedAt ? `最近完成 ${formatDateTime(snapshot.completedAt)}` : '完成后将自动保存结果'}</span><span className="ml-auto inline-flex items-center gap-1 text-ink-500"><Bot className="h-3.5 w-3.5" />{llmConfig?.apiKeyConfigured ? `${llmConfig.provider} / ${llmConfig.model}` : '模型待配置'}</span></div>
+          <div className="mt-4 grid grid-cols-3 gap-2"><Stat label="产业方向" value={themes.length} /><Stat label="去重后的政策线索" value={uniqueSources.size} /><Stat label="本轮已研判" value={snapshot?.reviewedThemeCodes.length ?? 0} /></div>
+          <p className="mt-3 text-[11px] leading-relaxed text-ink-500">官方来源优先。普通新闻回溯近两年，长期规划持续保留；每个产业最多展示 24 条代表线索，属于已采样范围，不代表全部新闻。已取得正文的来源展示对应片段，部分来源仅有标题，原文可点击核验。按来源发布日期统计，新采集不等于新发布，历史文件需核验现行效力。Agent 负责提出产业逻辑与验证条件，实际资金与订单兑现需另外验证。</p>
+          {snapshot?.dataGaps.length ? <details className="mt-3 text-xs text-amber-700"><summary tabIndex={0} className="cursor-pointer">本轮采集说明 · {snapshot.dataGaps.length} 项</summary><ul className="mt-2 space-y-1">{snapshot.dataGaps.map((gap, index) => <li key={index}>{gap}</li>)}</ul></details> : null}
+          {error ? <p role="alert" className="mt-3 text-xs text-amber-700">{error}</p> : null}
+        </Card>
+        {snapshot?.unclassifiedSignals?.length ? <Card><details>
+          <summary tabIndex={0} className="cursor-pointer text-sm font-semibold text-ink-800">待归类政策 · {snapshot.unclassifiedSignals.length} 条</summary>
+          <p className="my-3 text-xs leading-relaxed text-ink-500">这些文章尚未对应到产业方向，保留来源和原文供核对，不计入已完成产业研判。</p>
+          <PolicySources signals={snapshot.unclassifiedSignals} />
+        </details></Card> : null}
+      </div>
+    </DetailOverlay> : null}
     {active ? <DetailOverlay open title={active.name} subtitle="政策事实 · Agent 推演 · 上市公司观察" onClose={() => setSelected(null)}>
       <PolicyResearchDetail key={active.themeCode} theme={active} history={history[active.themeCode] ?? []} aiEnabled={llmConfig?.apiKeyConfigured === true} reviewing={reviewing[active.themeCode] === true} error={reviewErrors[active.themeCode]} onReview={() => void review(active.themeCode)} />
     </DetailOverlay> : null}

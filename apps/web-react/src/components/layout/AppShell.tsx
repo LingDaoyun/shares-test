@@ -11,7 +11,8 @@ export function AppShell() {
   useBootstrap()
   const location = useLocation()
   const key = location.pathname.replace(/^\/+|\/+$/g, '').trim()
-  const showHeader = (pathToPage[key] ?? 'limitUp') !== 'limitUp'
+  const page = pathToPage[key] ?? 'limitUp'
+  const showHeader = page !== 'limitUp' && page !== 'policy'
   const headerRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
