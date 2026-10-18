@@ -149,6 +149,7 @@ public class ShortTermService {
     private final ShortTermMomentumQualityEvaluator momentumQualityEvaluator = new ShortTermMomentumQualityEvaluator();
     private final ShortTermSupportReversalEvaluator supportReversalEvaluator = new ShortTermSupportReversalEvaluator();
     private final ShortTermCoreSignalScorer coreSignalScorer = new ShortTermCoreSignalScorer();
+    private final ShortTermResearchSetupEvaluator researchSetupEvaluator = new ShortTermResearchSetupEvaluator();
     private final ShortTermSupplyDemandScorer supplyDemandScorer = new ShortTermSupplyDemandScorer();
     private final ShortTermCrossSectionAnalyzer crossSectionAnalyzer = new ShortTermCrossSectionAnalyzer();
     private final ShortTermVolatilityQualityEvaluator volatilityQualityEvaluator = new ShortTermVolatilityQualityEvaluator();
@@ -442,7 +443,8 @@ public class ShortTermService {
         );
 
         List<TechnicalCandidate> reviewedTechnicalCandidates = tradableQuotes.stream()
-                .map(quote -> technicalCandidate(quote, klineMap.getOrDefault(quote.symbol(), List.of()), ruleSet))
+                .map(quote -> technicalCandidate(quote, klineMap.getOrDefault(quote.symbol(), List.of()),
+                        ruleSet, crossSection.relativeStrengthBySymbol().get(quote.symbol())))
                 .toList();
 
         List<ShortTermRiskExclusion> technicalExclusions = reviewedTechnicalCandidates.stream()
@@ -452,11 +454,8 @@ public class ShortTermService {
         List<TechnicalCandidate> technicalCandidates = reviewedTechnicalCandidates.stream()
                 .filter(candidate -> technicalHardExclusion(candidate) == null)
                 .filter(candidate -> !isLongSidewaysWithoutBreakout(candidate, ruleSet))
-                .sorted(Comparator.comparingInt(this::goldenCrossTechnicalPriority).reversed()
-                        .thenComparing(Comparator.comparing(
-                                (TechnicalCandidate item) -> item.coreSignalScore().finalScore()
-                        ).reversed()))
-                .limit(allCandidates ? Long.MAX_VALUE : Math.max(resolveLimit(request.limit()) * 4L, 28L))
+                .sorted(Comparator.comparing((TechnicalCandidate item) -> item.research().score(),
+                        Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
 
         Map<String, ShortTermFinancialSnapshot> financialMap = technicalCandidates.parallelStream()
@@ -520,10 +519,11 @@ public class ShortTermService {
                 .toList();
 
         int safeLimit = allCandidates ? scored.size() : Math.min(resolveLimit(request.limit()), scored.size());
-        IntStream candidateIndexes = IntStream.range(0, safeLimit);
+        // Apply execution gates before truncating: a blocked high score must not crowd out an executable candidate.
+        IntStream candidateIndexes = IntStream.range(0, scored.size());
         // Reuse the bounded common pool used by K-line/financial review. Ordered collection keeps ranks stable.
         if (allCandidates) candidateIndexes = candidateIndexes.parallel();
-        List<ShortTermCandidate> candidates = candidateIndexes
+        List<ShortTermCandidate> rankedCandidates = candidateIndexes
                 .mapToObj(index -> {
                     ShortTermCandidate enriched = enrichTailSignal(
                             rerank(scored.get(index).candidate(), index + 1)
@@ -533,7 +533,11 @@ public class ShortTermService {
                             automationSettings.overnightRules()
                     );
                 })
+                .sorted(researchCandidateComparator())
+                .limit(safeLimit)
                 .toList();
+        List<ShortTermCandidate> candidates = IntStream.range(0, rankedCandidates.size())
+                .mapToObj(index -> rerank(rankedCandidates.get(index), index + 1)).toList();
 
         long validKlineCount = reviewedTechnicalCandidates.stream()
                 .filter(this::hasSufficientTechnicalReview)
@@ -546,7 +550,7 @@ public class ShortTermService {
         Instant reportDataCutoffAt = dataCutoffAt(pointInTimeCoverageQuotes, candidates);
 
         return new ShortTermReport(
-                "A 股短线右侧启动池",
+                "A 股短线研究候选",
                 quoteUniverse.size(),
                 tradableQuotes.size(),
                 (int) validKlineCount,
@@ -556,20 +560,19 @@ public class ShortTermService {
                 tradingClockService.currentSession(),
                 List.of(
                         "第一层使用点时全市场行情计算市场情绪与热门方向，再做流动性、非 ST 和追涨风险过滤；行业成交额地位只软排序，不再硬卡前三。",
-                        "第二层拉取候选近一年 K 线，优先确认 MA5/MA10 金叉及其形成阶段，并计算实时换手率和收盘强度。",
-                        "第三层技术底分固定为金叉 45%、放量上涨 30%、换手适配 15%、K 线收盘强度 10%。",
-                        "波动质量使用 ATR 归一化衡量距 20 日线位置、近期真实波幅收缩与突破扩张，独立贡献限制在 -3 至 +3 分并完整展示。",
+                        "新版按收缩突破、强势回踩、承接反转独立筛选，同时保留金叉动量兼容分支；突破与回踩不再以 MA5/MA10 金叉为必要条件。",
+                        "研究分由趋势 25%、相对强弱 20%、形态 35%、量价 20% 组成；缺失项不虚构中性值，贡献记零并列出缺口。分数只表达规则匹配程度，不是上涨概率。",
+                        "旧版技术底分按金叉 60%、放量上涨 24%、换手适配 10%、收盘强度 6% 保留对照；旧版阶段、资金、行业和筹码修正不混入新版研究分。",
                         "市场状态由点时全市场上涨广度、收益中位数、绝对波动、涨跌停近似比例和上涨侧成交额共同划分；退潮不推荐，修复或拥挤高波动只允许轻仓。",
-                        "金叉动量、下影承接反转和波动收缩突破保持为独立信号族，页面与历史快照保留主信号族和全部激活证据。",
-                        "近端筹码压力统计现价上方 0～5% 与 5～10% 的估算筹码，按距离加权；启用后在原有入选层级内扣减排序分，数据不足时标记未评估，参数效果待验证。",
+                        "历史结构只使用当时已完成的日线；未完成当日 K 线只能作观察代理，不能假称收盘确认，也不能用日线代替真实分时 VWAP。",
+                        "近端筹码压力统计现价上方 0～5% 与 5～10% 的估算筹码，保留为旧版对照与风险上下文，数据不足时标记未评估。",
                         "原有综合筹码评分保留后台诊断；近端压力的观察模式只展示估算，不扣分，关闭时不参与排序。",
                         allCandidates
-                                ? "输出全部合格候选：保留可执行层与观察层的原有排序，不按候选数量截断，也不会为了凑数制造加仓建议。"
-                                : "默认输出八个短线候选：可执行层在前、观察层补足展示，但不会为了凑数制造加仓建议。",
-                        "普通财务质量只作上下文与风险说明；热门方向、5/10/20 日相对强度与行业成交额地位仅作有界排序修正。",
-                        "热门方向可帮助全市场预选，但不能覆盖金叉、放量、换手、上影线和硬风险门禁。",
-                        "涨幅过大、距离 20 日线过远、120 日位置过高、量能过度放大会被视为追涨风险，宁可等待回踩确认。",
-                        "最终建议只做短线纪律提示：右侧早期也以分批试错为主，跌破关键均线要退出。",
+                                ? "输出全部合格候选：最终可执行计划优先，其次等回踩、观察和数据复核，同层按研究分排序；前端保留服务端顺序。"
+                                : "候选先完成执行门禁再截断：可执行计划优先，同层按研究分排序，不为补足数量制造买点。",
+                        "新形态须研究分至少 75、相对强弱至少 60、触发位与失效位明确，且换手和上影风险通过后，才进入尾盘确认流程；这些都是未经样本外验证的初始参数。",
+                        "盈亏空间按区间上沿买入、分批目标及往返费用滑点 0.20% 假设计算，净目标空间/风险至少 1.20；它是情景约束，不是预期收益。",
+                        "公开方法来自 Minervini、O’Neil/IBD、Qullamaggie 与 SMB 的原始资料；1–2 交易日持有及具体阈值为本项目改编，尚无收益改善结论。",
                         "14:45-14:49 使用当时已经产生的分时、均价线、尾盘成交占比和高点回落完成普通股票尾盘决策；14:50 后数据只用于历史复盘，不能反推当日买点。"
                 ),
                 ruleSet,
@@ -895,7 +898,8 @@ public class ShortTermService {
         );
     }
 
-    private TechnicalCandidate technicalCandidate(EastMoneyQuote quote, List<EastMoneyKLine> klines, ShortTermRuleSet ruleSet) {
+    private TechnicalCandidate technicalCandidate(EastMoneyQuote quote, List<EastMoneyKLine> klines,
+            ShortTermRuleSet ruleSet, ShortTermRelativeStrength relativeStrength) {
         TechnicalContext context = technicalContext(quote, klines, ruleSet);
         BigDecimal technicalScore = technicalScore(context, ruleSet);
         ShortTermCoreSignalScore coreSignalScore = coreSignalScorer.score(
@@ -911,7 +915,9 @@ public class ShortTermService {
                 quote.tradeDate(),
                 context.snapshot()
         );
-        return new TechnicalCandidate(quote, context, technicalScore, coreSignalScore, volatilityQuality);
+        ShortTermResearchSetup research = researchSetupEvaluator.evaluate(
+                klines, quote, context.snapshot(), volatilityQuality, relativeStrength, ruleSet);
+        return new TechnicalCandidate(quote, context, technicalScore, coreSignalScore, volatilityQuality, research);
     }
 
     private ScoredShortTerm score(
@@ -983,9 +989,17 @@ public class ShortTermService {
                 item.technicalScore(),
                 coreSignalScore.volumeScore(),
                 stageScore.rankingScore(),
-                ruleSet
+                ruleSet,
+                item.research()
         );
         ShortTermSignalProfile signalProfile = signalProfileResolver.resolve(technical, volatilityQuality);
+        if (independentResearchSetup(item.research())) {
+            signalProfile = new ShortTermSignalProfile(item.research().setupType(), item.research().setupLabel(),
+                    merge(List.of(item.research().setupType()), signalProfile.activeFamilies()),
+                    merge(item.research().evidence(), signalProfile.evidence()),
+                    merge(item.research().dataGaps(), signalProfile.dataGaps()));
+        }
+        signalProfile = signalProfile.withResearch(item.research());
         BigDecimal price = latestPrice(quote, item.technical());
         ShortTermCandidate candidate = new ShortTermCandidate(
                 0,
@@ -999,11 +1013,13 @@ public class ShortTermService {
                 quote.pbRatio(),
                 quote.amount(),
                 quoteFreshness,
-                phase(technical, decision),
-                phaseLabel(technical, decision),
+                independentResearchSetup(item.research()) ? "RESEARCH_SETUP" : phase(technical, decision),
+                independentResearchSetup(item.research()) ? item.research().setupLabel() : phaseLabel(technical, decision),
                 decision.action(),
                 decision.actionLabel(),
-                reason(quote, technical, financial, decision),
+                independentResearchSetup(item.research())
+                        ? item.research().setupLabel() + "；" + String.join("；", item.research().evidence())
+                        : reason(quote, technical, financial, decision),
                 todayAdvice(decision, quote, technical, finalScore, ruleSet),
                 pendingTailSignal(),
                 new ShortTermScoreBreakdown(
@@ -1042,18 +1058,25 @@ public class ShortTermService {
                 ),
                 technical,
                 financial,
-                buyZoneLow(price, technical),
-                buyZoneHigh(price, technical, ruleSet),
-                stopPrice(price, technical),
+                hasResearchPattern(item.research()) ? price : buyZoneLow(price, technical),
+                hasResearchPattern(item.research()) ? scale(price.multiply(new BigDecimal("1.002")))
+                        : buyZoneHigh(price, technical, ruleSet),
+                hasResearchPattern(item.research()) ? item.research().invalidationPrice() : stopPrice(price, technical),
                 supplyDemandStrengths(
                         strengths(quote, technical, financial),
                         supplyDemand
                 ),
                 supplyDemandRisks(
-                        risks(quote, technical, financial, ruleSet, quoteFreshness),
+                        risks(quote, technical, financial, ruleSet, quoteFreshness,
+                                !independentResearchSetup(item.research())),
                         supplyDemand
                 ),
-                entryRules(decision, ruleSet),
+                independentResearchSetup(item.research()) ? List.of(
+                        "按该形态的触发位与失效位复核，不要求同时形成金叉。",
+                        "研究分至少75、相对强弱至少60且数据可信后，仍须14:45–14:49真实尾盘确认。",
+                        "计划入场区间为报价参考价至上方0.20%，超出区间重新评估，不扩大区间追价。",
+                        "分批目标计入费用后的净风险收益比须至少1.20；未通过只作观察。")
+                        : entryRules(decision, ruleSet),
                 exitRules(ruleSet),
                 pendingEvidenceCompleteness(quote, technical, financial, quoteFreshness),
                 supplyDemandEvidence(
@@ -1389,7 +1412,8 @@ public class ShortTermService {
             BigDecimal technicalScore,
             BigDecimal volumeScore,
             BigDecimal finalScore,
-            ShortTermRuleSet ruleSet
+            ShortTermRuleSet ruleSet,
+            ShortTermResearchSetup research
     ) {
         if (quoteFreshness.blocksRealtimeDecision()) {
             return new ActionDecision("DATA_REVIEW", quoteFreshness.statusLabel());
@@ -1422,6 +1446,28 @@ public class ShortTermService {
         }
         if (financialHardRisk) {
             return new ActionDecision("DATA_REVIEW", "基本面红旗复核");
+        }
+        if (independentResearchSetup(research)) {
+            boolean extended = quote.changePercent() != null
+                    && quote.changePercent().compareTo(ruleSet.maxEntryRisePercent()) > 0
+                    || technical.distanceToMa20Percent() != null
+                    && technical.distanceToMa20Percent().compareTo(ruleSet.maxDistanceToMa20Percent()) > 0;
+            if (extended) return new ActionDecision("WAIT_PULLBACK", "结构匹配-等回踩");
+            boolean triggerReached = research.triggerPrice() != null && quote.latestPrice() != null
+                    && quote.latestPrice().compareTo(research.triggerPrice()) >= 0;
+            boolean definedRisk = research.invalidationPrice() != null && quote.latestPrice() != null
+                    && research.invalidationPrice().signum() > 0
+                    && research.invalidationPrice().compareTo(quote.latestPrice()) < 0;
+            // WATCH may describe an unfinished current candle. Only prior completed structure plus
+            // a current trigger is eligible here; separate same-day tail confirmation is still mandatory.
+            if (research.executionEvidenceReady()
+                    && !momentum.extremeUpperShadow() && turnoverPreferred && triggerReached && definedRisk
+                    && research.score() != null && research.score().compareTo(new BigDecimal("75")) >= 0
+                    && research.relativeStrengthScore() != null
+                    && research.relativeStrengthScore().compareTo(new BigDecimal("60")) >= 0) {
+                return new ActionDecision("RESEARCH_LIGHT_TRIAL", research.setupLabel() + "-待尾盘确认");
+            }
+            return new ActionDecision("WATCH_RIGHT_SIDE", research.setupLabel() + "-观察");
         }
         ShortTermSupportReversalSignal supportReversal = technical.supportReversal();
         if (supportReversal != null && supportReversal.confirmed()) {
@@ -1751,6 +1797,13 @@ public class ShortTermService {
             BigDecimal finalScore,
             ShortTermRuleSet ruleSet
     ) {
+        if ("RESEARCH_LIGHT_TRIAL".equals(decision.action())) {
+            return new TradingAdvice("LIGHT_TRIAL", "待尾盘确认", 60,
+                    "研究形态与相对强弱符合初始规则，须同时通过尾盘确认和盈亏空间检查后才可轻仓试错。",
+                    List.of("趋势、相对强弱、形态和量价分别计分；研究分不代表上涨概率。"),
+                    List.of("14:45–14:49 同日分时必须确认；仅日线匹配不构成买点。",
+                            "遵守计划失效位；A 股 T+1 与跳空可能导致实际损失超过计划。"));
+        }
         if ("RIGHT_EARLY_ADD".equals(decision.action())) {
             return new TradingAdvice(
                     "ADD",
@@ -1855,12 +1908,14 @@ public class ShortTermService {
         ShortTermTailSignal tailSignal = tailSignal(candidate.symbol(), expectedTailTradeDate(candidate));
         EvidenceCompleteness completeness = evidenceCompleteness(candidate, tailSignal);
         TradingAdvice tailAdjusted = isGoldenCrossWatchLayer(candidate.technical())
+                && !independentResearchSetup(researchOf(candidate))
                 ? candidate.todayAdvice()
                 : tailAdjustedAdvice(
                         candidate.todayAdvice(),
                         candidate.action(),
                         tailSignal,
                         hasRecentConfirmedGoldenCross(candidate.technical())
+                                || independentResearchSetup(researchOf(candidate))
                 );
         TradingAdvice adjustedAdvice = evidenceCompletenessService.gateAdvice(
                 tailAdjusted,
@@ -1949,6 +2004,12 @@ public class ShortTermService {
                     blockedReasons
             );
         }
+        if (researchOf(candidate) != null) {
+            if (hasResearchPattern(researchOf(candidate))) {
+                plan = plan.withResearchInvalidation(researchOf(candidate).invalidationPrice());
+            }
+            plan = plan.withResearchRiskAssessment(ShortTermResearchRiskGate.assess(plan));
+        }
         return copyWithTradePlan(candidate, plan);
     }
 
@@ -1999,6 +2060,13 @@ public class ShortTermService {
     }
 
     private ShortTermCandidate copyWithTradePlan(ShortTermCandidate candidate, ShortTermTradePlan plan) {
+        TradingAdvice advice = candidate.todayAdvice();
+        if (!"ACTIONABLE".equals(plan.status()) && advice != null
+                && Set.of("ADD", "LIGHT_TRIAL").contains(advice.action())) {
+            advice = new TradingAdvice("WAIT", "计划未通过", Math.min(40, advice.confidence()),
+                    "交易计划未通过，当前仅保留观察。", merge(plan.blockedReasons(), advice.reasons()),
+                    advice.riskControls());
+        }
         return new ShortTermCandidate(
                 candidate.rank(),
                 candidate.symbol(),
@@ -2016,14 +2084,14 @@ public class ShortTermService {
                 candidate.action(),
                 candidate.actionLabel(),
                 candidate.reason(),
-                candidate.todayAdvice(),
+                advice,
                 candidate.tailSignal(),
                 candidate.score(),
                 candidate.technical(),
                 candidate.financial(),
                 candidate.buyZoneLow(),
                 candidate.buyZoneHigh(),
-                candidate.stopPrice(),
+                plan.hardStopPrice() == null ? candidate.stopPrice() : plan.hardStopPrice(),
                 candidate.strengths(),
                 candidate.risks(),
                 candidate.entryRules(),
@@ -2434,6 +2502,9 @@ public class ShortTermService {
             ShortTermTailSignal tailSignal,
             boolean recentConfirmedGoldenCross
     ) {
+        if ("RESEARCH_LIGHT_TRIAL".equals(candidateAction)) {
+            return "LIGHT_TRIAL".equals(base.action()) && "CONFIRMED".equals(tailSignal.status());
+        }
         boolean supportReversal = "SUPPORT_REVERSAL_LIGHT_TRIAL".equals(candidateAction);
         return (supportReversal || recentConfirmedGoldenCross)
                 && (supportReversal || isRightSideExecutableCandidate(candidateAction) || "LIGHT_TRIAL".equals(base.action()))
@@ -2494,7 +2565,7 @@ public class ShortTermService {
 
     private List<String> withTailEntryRule(List<String> rules) {
         List<String> merged = new ArrayList<>(rules);
-        merged.add("最近三根已完成交易日内确认金叉后，14:45-14:49 仍必须复核当时已产生的尾盘分时；尾盘只能确认买点，不能为旧金叉或未确认金叉创造买点。");
+        merged.add("形态独立通过后，14:45-14:49 仍必须复核当时已产生的同日尾盘分时；尾盘不能替代形态、数据与风险门禁。兼容金叉分支仍要求近期已完成金叉。");
         merged.add("14:57 后数据只用于历史复盘，15:05-15:30 盘后固定价格不能替代普通尾盘确认。");
         return merged.stream().distinct().toList();
     }
@@ -2706,20 +2777,21 @@ public class ShortTermService {
             ShortTermTechnicalSnapshot technical,
             ShortTermFinancialSnapshot financial,
             ShortTermRuleSet ruleSet,
-            QuoteFreshnessSnapshot quoteFreshness
+            QuoteFreshnessSnapshot quoteFreshness,
+            boolean requiresGoldenCross
     ) {
         List<String> risks = new ArrayList<>();
         if (quoteFreshness != null && quoteFreshness.blocksRealtimeDecision()) {
             risks.add(quoteFreshness.reason());
         }
         ShortTermGoldenCrossSnapshot goldenCross = technical.goldenCross();
-        if (goldenCross == null || "UNAVAILABLE".equals(goldenCross.state())) {
+        if (requiresGoldenCross && (goldenCross == null || "UNAVAILABLE".equals(goldenCross.state()))) {
             risks.add("均线金叉数据不足，不能把未复核的均线关系当作执行依据。");
-        } else if ("FORMING".equals(goldenCross.state())) {
+        } else if (requiresGoldenCross && "FORMING".equals(goldenCross.state())) {
             risks.add("金叉仍在形成中，最新日线未完成前只能观察。");
-        } else if ("APPROACHING".equals(goldenCross.state())) {
+        } else if (requiresGoldenCross && "APPROACHING".equals(goldenCross.state())) {
             risks.add("均线仍处于临界交汇，尚未形成确认金叉，不能执行买入。");
-        } else if ("CONFIRMED".equals(goldenCross.state()) && isChaseRisk(quote, technical, ruleSet)) {
+        } else if (requiresGoldenCross && "CONFIRMED".equals(goldenCross.state()) && isChaseRisk(quote, technical, ruleSet)) {
             risks.add("确认金叉后价格已明显拉开，短线只等回踩，不追高。");
         }
         if (quote.changePercent() != null && quote.changePercent().compareTo(ruleSet.maxEntryRisePercent()) > 0) {
@@ -2781,10 +2853,10 @@ public class ShortTermService {
         if (supplyDemand.mainNetInflowRatio() != null
                 && supplyDemand.mainNetInflowRatio().compareTo(BigDecimal.ZERO) < 0) {
             risks.add("主力净流入占比 " + valueText(supplyDemand.mainNetInflowRatio())
-                    + "% 为负，主动买盘不足，推荐顺位下调。");
+                    + "% 为负，主动买盘不足，旧版对照评分下调。");
         }
         if (supplyDemand.overheadPressureReliefScore().compareTo(new BigDecimal("55")) < 0) {
-            risks.add("上影、收盘位置或前 20 日压力位显示上方抛压偏强，推荐顺位下调。");
+            risks.add("上影、收盘位置或前 20 日压力位显示上方抛压偏强，旧版对照评分下调。");
         }
         risks.addAll(supplyDemand.dataGaps());
         return risks.stream()
@@ -3102,8 +3174,11 @@ public class ShortTermService {
     }
 
     private ShortTermRiskExclusion technicalHardExclusion(TechnicalCandidate candidate) {
-        EastMoneyQuote quote = candidate.quote();
-        ShortTermTechnicalSnapshot technical = candidate.technical().snapshot();
+        return technicalHardExclusion(candidate.quote(), candidate.technical().snapshot(), candidate.research());
+    }
+
+    private ShortTermRiskExclusion technicalHardExclusion(EastMoneyQuote quote,
+            ShortTermTechnicalSnapshot technical, ShortTermResearchSetup research) {
         if (technical.tradeDate() == null) {
             return riskExclusion(
                     quote,
@@ -3123,7 +3198,8 @@ public class ShortTermService {
         boolean nonPositiveChange = quote.changePercent() != null
                 && quote.changePercent().compareTo(BigDecimal.ZERO) <= 0;
         ShortTermSupportReversalSignal supportReversal = technical.supportReversal();
-        if (nonPositiveChange && (supportReversal == null || !supportReversal.confirmed())) {
+        if (nonPositiveChange && (supportReversal == null || !supportReversal.confirmed())
+                && !(research != null && "SUPPORT_REVERSAL".equals(research.setupType()))) {
             return riskExclusion(
                     quote,
                     "SUPPORT_REVERSAL_NOT_CONFIRMED",
@@ -3134,6 +3210,9 @@ public class ShortTermService {
         if (nonPositiveChange) {
             return null;
         }
+        if (independentResearchSetup(research)) {
+            return null;
+        }
         ShortTermGoldenCrossSnapshot goldenCross = technical.goldenCross();
         if (goldenCross == null
                 || goldenCross.state() == null
@@ -3141,8 +3220,8 @@ public class ShortTermService {
             return riskExclusion(
                     quote,
                     "GOLDEN_CROSS_UNAVAILABLE",
-                    "无有效金叉信号",
-                    "MA5/MA10 未形成确认、形成中、临界或多头延续状态，不进入金叉优先短线候选。"
+                    "无匹配研究形态",
+                    "未匹配收缩突破、强势回踩、承接反转或兼容金叉条件，不进入短线研究候选。"
             );
         }
         return null;
@@ -3537,7 +3616,42 @@ public class ShortTermService {
     }
 
     private Comparator<ScoredShortTerm> shortTermRankingComparator() {
-        return shortTermV2RankingComparator();
+        return Comparator.comparing(ScoredShortTerm::candidate, researchCandidateComparator());
+    }
+
+    static Comparator<ShortTermCandidate> researchCandidateComparator() {
+        return Comparator.comparingInt(ShortTermService::researchExecutionPriority).reversed()
+                .thenComparing(ShortTermService::researchRankingScore, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(ShortTermCandidate::symbol, Comparator.nullsLast(String::compareTo));
+    }
+
+    private static int researchExecutionPriority(ShortTermCandidate candidate) {
+        if (candidate.tradePlan() != null && "ACTIONABLE".equals(candidate.tradePlan().status())
+                && candidate.todayAdvice() != null
+                && Set.of("ADD", "LIGHT_TRIAL").contains(candidate.todayAdvice().action())) return 3;
+        if (candidate.todayAdvice() != null && "WAIT_PULLBACK".equals(candidate.todayAdvice().action())) return 2;
+        return Set.of("DATA_REVIEW", "MARKET_RISK_WAIT", "VALUATION_REVIEW")
+                .contains(candidate.action() == null ? "" : candidate.action()) ? 0 : 1;
+    }
+
+    private static BigDecimal researchRankingScore(ShortTermCandidate candidate) {
+        ShortTermResearchSetup research = researchOf(candidate);
+        if (research != null && research.score() != null) return research.score();
+        return candidate.score() == null ? null : candidate.score().rankingScore();
+    }
+
+    private static ShortTermResearchSetup researchOf(ShortTermCandidate candidate) {
+        return candidate.signalProfile() == null ? null : candidate.signalProfile().research();
+    }
+
+    private static boolean independentResearchSetup(ShortTermResearchSetup research) {
+        return research != null && Set.of("CONTRACTION_BREAKOUT", "TREND_PULLBACK", "SUPPORT_REVERSAL")
+                .contains(research.setupType() == null ? "" : research.setupType());
+    }
+
+    private static boolean hasResearchPattern(ShortTermResearchSetup research) {
+        return independentResearchSetup(research)
+                || research != null && "GOLDEN_CROSS_MOMENTUM".equals(research.setupType());
     }
 
     private Comparator<ScoredShortTerm> shortTermV3RankingComparator() {
@@ -4135,7 +4249,8 @@ public class ShortTermService {
             TechnicalContext technical,
             BigDecimal technicalScore,
             ShortTermCoreSignalScore coreSignalScore,
-            ShortTermVolatilityQuality volatilityQuality
+            ShortTermVolatilityQuality volatilityQuality,
+            ShortTermResearchSetup research
     ) {
     }
 

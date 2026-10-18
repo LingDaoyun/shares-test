@@ -47,7 +47,9 @@ export function ShortTermSignalEvidencePanel({
         <div>
           <h3 className="text-sm font-semibold text-ink-900">信号解释与历史验证</h3>
           <p className="mt-1 text-xs leading-relaxed text-ink-500">
-            推荐排序只使用当前时点可见证据；历史分组仅用于校准，不代表未来收益。
+            {signalProfile?.research
+              ? '历史分组沿用信号族口径，仅用于校准，不等于当前研究参数已验证，也不代表未来收益。'
+              : '推荐排序只使用当前时点可见证据；历史分组仅用于校准，不代表未来收益。'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -65,7 +67,9 @@ export function ShortTermSignalEvidencePanel({
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line-soft bg-line-soft sm:grid-cols-5">
+      <details open={!signalProfile?.research} className="mt-3">
+        <summary className="cursor-pointer text-xs font-semibold text-ink-600">旧版评分分解</summary>
+      <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line-soft bg-line-soft sm:grid-cols-5">
         <SignalMetric label="四因子底分" value={formatNumber(baseScore)} />
         <SignalMetric label="阶段结构分" value={setupScore === null ? '待补充' : formatNumber(setupScore)} />
         <SignalMetric label="排序分" value={rankingScore === null ? '待补充' : formatNumber(rankingScore)} />
@@ -86,7 +90,7 @@ export function ShortTermSignalEvidencePanel({
 
       {contributions.length ? (
         <div className="mt-4">
-          <p className="text-xs font-semibold text-ink-700">当前排序贡献</p>
+          <p className="text-xs font-semibold text-ink-700">{signalProfile?.research ? '旧版排序贡献' : '当前排序贡献'}</p>
           <div className="mt-2 flex flex-wrap gap-2">
             {contributions.map((item) => (
               <span
@@ -108,6 +112,7 @@ export function ShortTermSignalEvidencePanel({
           {signalProfile.evidence.slice(0, 3).map((item) => <p key={item}>{item}</p>)}
         </div>
       ) : null}
+      </details>
 
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
         {(['T1', 'T2'] as const).map((horizon) => (

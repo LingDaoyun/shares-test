@@ -38,4 +38,36 @@ public record ShortTermTradePlan(
     public ShortTermTradePlan {
         blockedReasons = blockedReasons == null ? List.of() : List.copyOf(blockedReasons);
     }
+
+    ShortTermTradePlan withResearchInvalidation(BigDecimal invalidation) {
+        if (invalidation == null || invalidation.signum() <= 0 || referenceEntryPrice == null
+                || invalidation.compareTo(referenceEntryPrice) >= 0) {
+            return withResearchRiskAssessment(new ShortTermResearchRiskGate.Assessment(false, null,
+                    List.of("形态失效价缺失或不低于参考入场价，研究计划不可执行")));
+        }
+        BigDecimal stopPercent = referenceEntryPrice.subtract(invalidation).multiply(new BigDecimal("100"))
+                .divide(referenceEntryPrice, 2, java.math.RoundingMode.HALF_UP);
+        java.util.ArrayList<String> basis = new java.util.ArrayList<>(analysisBasis == null ? List.of() : analysisBasis);
+        basis.add("研究计划以形态失效位 " + invalidation + " 元作为止损参考；入场允许上浮0.20%，重新计算分批目标风险收益比。实际成交与跳空损失可能偏离计划。");
+        return new ShortTermTradePlan(strategyLabel, status, blockedReasons, entryWindow, validUntil,
+                referenceEntryPrice, entryLow, entryHigh, maxPositionRatio, maxT2PositionRatio,
+                firstTargetPercent, firstTargetPrice, firstReductionRatio, secondTargetPercent, secondTargetPrice,
+                stopPercent, invalidation, trailingDrawdownPercent, trailingStopRule,
+                normalExitDate, normalExitTime, absoluteExitDate, absoluteExitTime,
+                t2ExtensionConditions, openScenarios, List.copyOf(basis), riskWarnings);
+    }
+
+    ShortTermTradePlan withResearchRiskAssessment(ShortTermResearchRiskGate.Assessment assessment) {
+        java.util.ArrayList<String> blocked = new java.util.ArrayList<>(blockedReasons);
+        if (!assessment.allowsExecution()) blocked.addAll(assessment.reasons());
+        java.util.ArrayList<String> basis = new java.util.ArrayList<>(analysisBasis == null ? List.of() : analysisBasis);
+        basis.addAll(assessment.reasons());
+        return new ShortTermTradePlan(strategyLabel,
+                assessment.allowsExecution() ? status : "BLOCKED", List.copyOf(blocked),
+                entryWindow, validUntil, referenceEntryPrice, entryLow, entryHigh, maxPositionRatio, maxT2PositionRatio,
+                firstTargetPercent, firstTargetPrice, firstReductionRatio, secondTargetPercent, secondTargetPrice,
+                hardStopPercent, hardStopPrice, trailingDrawdownPercent, trailingStopRule,
+                normalExitDate, normalExitTime, absoluteExitDate, absoluteExitTime,
+                t2ExtensionConditions, openScenarios, List.copyOf(basis), riskWarnings);
+    }
 }

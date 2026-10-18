@@ -79,6 +79,14 @@ export function OvernightTradePlanPanel({ plan }: { plan: ShortTermTradePlan | n
         {plan.t2ExtensionConditions.length ? <p className="mt-1">延长条件：{plan.t2ExtensionConditions.join('；')}</p> : null}
         {plan.riskWarnings.length ? <p className="mt-1 text-amber-800">{plan.riskWarnings.join('；')}</p> : null}
       </div>
+      {plan.analysisBasis?.length ? (
+        <details className="mt-3 border-t border-emerald-200 pt-2 text-xs leading-relaxed text-ink-600">
+          <summary className="cursor-pointer font-semibold text-emerald-900">计划测算依据</summary>
+          <ul className="mt-2 list-disc space-y-1 pl-4">
+            {plan.analysisBasis.map((basis, index) => <li key={`${index}-${basis}`}>{basis}</li>)}
+          </ul>
+        </details>
+      ) : null}
     </section>
   )
 }

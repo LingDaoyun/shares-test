@@ -15,6 +15,7 @@ import { toast } from '../components/ui/Toast'
 import { CATCH_UP_STORAGE_KEY } from '../lib/shortTermCatchUpStorage'
 import { SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY } from '../lib/shortTermViewPreferences'
 import { resetShortTermScanStoreForTest, useShortTermScanStore } from '../store/shortTermScanStore'
+import { useTradeFeedbackStore } from '../store/tradeFeedbackStore'
 import type { ShortTermReport } from '../types'
 import { fetchDailyShortTermSnapshot, fetchShortTermResultCache, type ShortTermDailySnapshot, type UpperShadowScan } from '../api/dailyShortTerm'
 import { ShortTermPage } from './ShortTermPage'
@@ -329,6 +330,27 @@ function reportWithCandidates(
   } as unknown as ShortTermReport
 }
 
+const researchSetup = (setupType = 'CONTRACTION_BREAKOUT', setupLabel = '收缩突破') => ({
+  ruleVersion: 'short-term-research-v6',
+  setupType,
+  setupLabel,
+  state: 'CONFIRMED',
+  score: 81.25,
+  trendScore: 80,
+  relativeStrengthScore: 75,
+  setupScore: 75,
+  volumePriceScore: 100,
+  trendContribution: 20,
+  relativeStrengthContribution: 15,
+  setupContribution: 26.25,
+  volumePriceContribution: 20,
+  triggerPrice: 5.32,
+  invalidationPrice: 5.05,
+  evidence: ['波动收缩后放量突破'],
+  risks: ['冲高回落会使形态失效'],
+  dataGaps: [] as string[]
+})
+
 function reportWithFundDirection(): ShortTermReport {
   return {
     ...reportWithCandidates(['600795']),
@@ -421,12 +443,160 @@ describe('ShortTermPage manual scan flow', () => {
   afterEach(() => {
     act(() => root.unmount())
     resetShortTermScanStoreForTest()
+    useTradeFeedbackStore.setState({ casesById: {}, caseIdByRecommendation: {} })
     host.remove()
     vi.useRealTimers()
     vi.clearAllMocks()
     window.localStorage.removeItem(SHORT_TERM_VIEW_PREFERENCES_STORAGE_KEY)
     window.localStorage.removeItem(CATCH_UP_STORAGE_KEY)
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
+  })
+
+  it.each([false, true])('preserves server order and ranks with research present=%s', async (withResearch) => {
+    const report = reportWithCandidates(['600002', '600001'])
+    report.candidates = report.candidates.map((item, index) => ({
+      ...item,
+      rank: index === 0 ? 4 : 8,
+      score: { ...item.score, rankingScore: index === 0 ? 81 : 99, visibleRankingAdjustment: index === 0 ? 1 : 19 },
+      signalProfile: { ...item.signalProfile!, ...(withResearch ? { research: researchSetup() } : {}) }
+    }))
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+
+    const rows = [...document.querySelectorAll('[aria-label="短线候选列表"] > button')]
+    expect(rows.map((row) => row.querySelector('h3')?.textContent)).toEqual(['候选600002', '候选600001'])
+    expect(rows[0].textContent).toContain('#4')
+    expect(rows[1].textContent).toContain('#8')
+  })
+
+  it('filters research setups while keeping legacy and upper-shadow observations accessible', async () => {
+    const report = reportWithCandidates(['600101', '600102', '600103'])
+    report.candidates[0].signalProfile = { ...report.candidates[0].signalProfile!, research: researchSetup() }
+    report.candidates[1].signalProfile = { ...report.candidates[1].signalProfile!, research: researchSetup('TREND_PULLBACK', '趋势回踩') }
+    useShortTermScanStore.setState({ report, upperShadow: shadowScan(['600104']) })
+    await renderPage(root)
+
+    await clickButton('趋势回踩')
+    const list = document.querySelector('[aria-label="短线候选列表"]')!
+    expect(list.textContent).not.toContain('候选600101')
+    expect(list.textContent).toContain('候选600102')
+    expect(list.textContent).toContain('候选600103')
+    expect(list.textContent).toContain('形态600104')
+    expect(document.querySelector('[aria-label="研究买点筛选"] button[aria-pressed="true"]')?.textContent).toContain('趋势回踩')
+
+    await clickButton('全部形态')
+    expect(list.textContent).toContain('候选600101')
+  })
+
+  it('labels execution from the trade plan and advice rather than research confirmation', async () => {
+    const report = reportWithCandidates(['600201', '600202', '600203', '600204', '600205'])
+    report.candidates = report.candidates.map((item, index) => ({
+      ...item,
+      signalProfile: { ...item.signalProfile!, research: researchSetup() },
+      tradePlan: { ...item.tradePlan!, status: index === 0 || index === 3 || index === 4 ? 'ACTIONABLE' : 'BLOCKED' },
+      todayAdvice: { ...item.todayAdvice, action: (['ADD', 'ADD', 'WAIT_PULLBACK', 'LIGHT_TRIAL', 'WAIT'] as const)[index] }
+    }))
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+
+    const rows = [...document.querySelectorAll('[aria-label="短线候选列表"] > button')]
+    expect(rows.map((row) => row.querySelector('[data-testid="candidate-execution-status"]')?.textContent))
+      .toEqual(['可执行', '观察', '等回踩', '可执行', '观察'])
+    expect(rows[0].textContent).toContain('收缩突破')
+    expect(rows[0].textContent).toContain('研究分 81.25')
+  })
+
+  it('separates research components and observation levels from the collapsed legacy score', async () => {
+    const report = reportWithCandidates(['600301'])
+    report.candidates[0].signalProfile = { ...report.candidates[0].signalProfile!, research: researchSetup() }
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+    await clickButton('候选600301')
+
+    const panel = document.querySelector('[aria-label="研究买点详情"]')!
+    expect(panel).not.toBeNull()
+    expect(panel.textContent).toContain('趋势结构')
+    expect(panel.textContent).toContain('相对强度')
+    expect(panel.textContent).toContain('买点形态')
+    expect(panel.textContent).toContain('量价确认')
+    expect(panel.querySelector('[data-component="setup"]')?.textContent).toContain('75.00')
+    expect(panel.querySelector('[data-component="setup"]')?.textContent).toContain('26.25')
+    expect(panel.textContent).toContain('5.32')
+    expect(panel.textContent).toContain('5.05')
+    expect(panel.textContent).toContain('波动收缩后放量突破')
+    expect(panel.textContent).toContain('冲高回落会使形态失效')
+    expect(panel.querySelectorAll('a[href^="https://"]')).toHaveLength(3)
+    const legacy = document.querySelector('details[aria-label="旧版评分对照"]') as HTMLDetailsElement
+    expect(legacy).not.toBeNull()
+    expect(legacy.open).toBe(false)
+    expect(legacy.textContent).toContain('四因子原始分')
+    const validationPanel = document.querySelector('[aria-label="信号解释与历史验证"]')!
+    const oldContributions = validationPanel.querySelector('details') as HTMLDetailsElement
+    expect(oldContributions).not.toBeNull()
+    expect(oldContributions.open).toBe(false)
+    expect(oldContributions.textContent).not.toContain('T1')
+    expect(validationPanel.textContent).toContain('T1')
+    expect(validationPanel.textContent).toContain('T2')
+  })
+
+  it('keeps unavailable research metrics missing instead of borrowing the legacy score', async () => {
+    const report = reportWithCandidates(['600401'])
+    report.candidates[0].signalProfile = {
+      ...report.candidates[0].signalProfile!,
+      research: {
+        ...researchSetup('UNAVAILABLE', '数据待补'), state: 'UNAVAILABLE', score: null,
+        trendScore: null, relativeStrengthScore: null, setupScore: null, volumePriceScore: null,
+        trendContribution: null, relativeStrengthContribution: null, setupContribution: null, volumePriceContribution: null,
+        triggerPrice: null, invalidationPrice: null, evidence: [], risks: [], dataGaps: ['历史 K 线不足']
+      }
+    }
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+    const list = document.querySelector('[aria-label="短线候选列表"]')!
+    expect(list.textContent).toContain('研究分待补')
+    expect(list.textContent).not.toContain('研究分 85')
+    await clickButton('候选600401')
+    const panel = document.querySelector('[aria-label="研究买点详情"]')!
+    expect(panel).not.toBeNull()
+    expect(panel.textContent).toContain('历史 K 线不足')
+    expect(panel.querySelector('[data-component="trend"]')?.textContent).toContain('待补充')
+    expect(panel.querySelector('[data-component="trend"]')?.textContent).not.toContain('0.00')
+    expect(panel.textContent).not.toContain('85.00')
+  })
+
+  it('does not repeat a pre-gate research action when its plan is blocked', async () => {
+    const report = reportWithCandidates(['600402'])
+    report.candidates[0] = {
+      ...report.candidates[0],
+      action: 'RESEARCH_LIGHT_TRIAL',
+      actionLabel: '收缩突破-待尾盘确认',
+      todayAdvice: { ...report.candidates[0].todayAdvice, action: 'WAIT', actionLabel: '计划未通过' },
+      signalProfile: { ...report.candidates[0].signalProfile!, research: researchSetup() }
+    }
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+    await clickButton('候选600402')
+
+    const detail = document.querySelector('[role="dialog"]')!
+    expect(detail.textContent).toContain('计划未通过')
+    expect(detail.textContent).not.toContain('收缩突破-待尾盘确认')
+    expect(detail.querySelector('[data-testid="candidate-execution-status"]')?.textContent).toBe('观察')
+  })
+
+  it.each([
+    ['short-term-research-v6', true],
+    ['short-term-right-side-v4-transparent-ranking', false]
+  ] as const)('recognizes an existing review case under %s', async (version, withResearch) => {
+    const report = reportWithCandidates(['600403'])
+    if (withResearch) report.candidates[0].signalProfile = { ...report.candidates[0].signalProfile!, research: researchSetup() }
+    useTradeFeedbackStore.setState({
+      caseIdByRecommendation: { [`600403|SHORT_TERM|${version}|2026-07-23T14:49:30+08:00`]: 'saved-case' }
+    })
+    useShortTermScanStore.setState({ report })
+    await renderPage(root)
+    await clickButton('候选600403')
+
+    expect(document.querySelector('button[aria-label="已加入复盘 600403"]')?.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('keeps the unified candidate card mounted through pending, running and empty results, then loads every completed candidate', async () => {

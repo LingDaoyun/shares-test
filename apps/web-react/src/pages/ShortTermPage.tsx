@@ -19,6 +19,8 @@ import {
   ShortTermSignalEvidencePanel
 } from '../components/shortterm/ShortTermSignalEvidencePanel'
 import type { ShortTermValidationViewState } from '../components/shortterm/ShortTermSignalEvidencePanel'
+import { CandidateExecutionTag, ResearchScoreTag, researchSetupFilters, ShortTermResearchPanel } from '../components/shortterm/ShortTermResearchPanel'
+import type { ResearchSetupFilter } from '../components/shortterm/ShortTermResearchPanel'
 import { BuyEntryButton } from '../components/tradefeedback/BuyEntryButton'
 import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
@@ -81,6 +83,7 @@ export function ShortTermPage() {
   const activeJobId = useShortTermScanStore((state) => state.activeJobId)
   const runManualScan = useShortTermScanStore((state) => state.runManualScan)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  const [setupFilter, setSetupFilter] = useState<ResearchSetupFilter>('ALL')
   const [leaderSelection, setLeaderSelection] = useState<IndustryLeaderSelection | null>(null)
   const [validationSummaries, setValidationSummaries] = useState<ShortTermValidationSummary[]>([])
   const [validationState, setValidationState] = useState<ShortTermValidationViewState>('IDLE')
@@ -91,7 +94,8 @@ export function ShortTermPage() {
   ).slice(0, 10)) ? savedUpperShadow : null
   const candidates = useMemo(() => {
     const merged = new Map<string, { symbol: string; name: string; industry: string; rightSide: ShortTermCandidate | null; shadow: UpperShadowCandidate | null }>()
-    for (const candidate of orderByRankingScoreDesc(report?.candidates ?? [])) {
+    // The server applies execution gates before ranking. Preserve its order and saved ranks.
+    for (const candidate of report?.candidates ?? []) {
       if (!merged.has(candidate.symbol)) merged.set(candidate.symbol, {
         symbol: candidate.symbol, name: candidate.name, industry: candidate.industry || '', rightSide: candidate, shadow: null
       })
@@ -107,6 +111,17 @@ export function ShortTermPage() {
     }
     return [...merged.values()]
   }, [report, upperShadow])
+
+  const hasResearch = candidates.some((candidate) => candidate.rightSide?.signalProfile?.research)
+  const hasUnclassified = candidates.some((candidate) => !candidate.rightSide?.signalProfile?.research)
+  const visibleCandidates = candidates.filter((candidate) => {
+    const research = candidate.rightSide?.signalProfile?.research
+    return setupFilter === 'ALL' || !research || research.setupType === setupFilter
+  })
+
+  useEffect(() => {
+    setSetupFilter('ALL')
+  }, [report])
 
   useEffect(() => {
     if (selectedSymbol && !candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
@@ -290,10 +305,28 @@ export function ShortTermPage() {
       ) : null}
 
         <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />短线候选</span>}
-          extra={<span className="text-xs text-ink-500">{candidates.length} 只</span>} flush>
+          extra={<span className="text-xs text-ink-500">{visibleCandidates.length === candidates.length ? candidates.length : `${visibleCandidates.length} / ${candidates.length}`} 只</span>} flush>
           <DailyShortTermPanel />
+          {hasResearch ? (
+            <div className="border-b border-line-soft px-5 py-3">
+              <div aria-label="研究买点筛选" className="flex flex-wrap gap-1.5">
+                {researchSetupFilters.map((filter) => (
+                  <button
+                    key={filter.value}
+                    type="button"
+                    aria-pressed={setupFilter === filter.value}
+                    onClick={() => setSetupFilter(filter.value)}
+                    className={`rounded-full border px-3 py-1 text-xs transition ${setupFilter === filter.value ? 'border-brand-200 bg-brand-50 font-semibold text-brand-700' : 'border-line-soft bg-white text-ink-500 hover:bg-line-soft/40'}`}
+                  >
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
+              {setupFilter !== 'ALL' && hasUnclassified ? <p className="mt-2 text-xs text-ink-400">历史候选及未分类长上影观察继续保留展示。</p> : null}
+            </div>
+          ) : null}
           <div aria-label="短线候选列表" className="divide-y divide-line-soft">
-            {candidates.length ? candidates.map((candidate) => candidate.rightSide ? (
+            {visibleCandidates.length ? visibleCandidates.map((candidate) => candidate.rightSide ? (
               <CandidateRow
                 key={candidate.symbol}
                 candidate={candidate.rightSide}
@@ -311,7 +344,7 @@ export function ShortTermPage() {
                 onSelect={() => setSelectedSymbol(candidate.symbol)}
               />
             ) : null) : (
-              <p className="p-5 text-sm text-ink-500">{upperShadow?.status === 'DATA_BLOCKED'
+              <p className="p-5 text-sm text-ink-500">{setupFilter !== 'ALL' ? '当前形态暂无候选' : upperShadow?.status === 'DATA_BLOCKED'
                 ? '暂无可展示候选，形态扫描数据不足。'
                 : upperShadow?.status === 'PARTIAL' ? '已检查范围暂无候选，其余数据缺口尚未判断。'
                   : report || upperShadow ? '暂无候选' : '尚无已加载候选'}</p>
@@ -588,28 +621,6 @@ function FundDirectionList({
   )
 }
 
-// 候选列表按排序分从大到小展示，最大的排第一；缺排序快照的旧候选保持相对顺序垫底，
-// 序号按展示顺序重编，与卡片上的「排序分」口径一致。
-function orderByRankingScoreDesc(candidates: ShortTermCandidate[]): ShortTermCandidate[] {
-  return candidates
-    .map((candidate, index) => ({ candidate, index }))
-    .sort((left, right) => {
-      const leftScore = hasClosedShortTermScoreSnapshot(left.candidate)
-          && left.candidate.score.rankingScore != null
-        ? left.candidate.score.rankingScore
-        : null
-      const rightScore = hasClosedShortTermScoreSnapshot(right.candidate)
-          && right.candidate.score.rankingScore != null
-        ? right.candidate.score.rankingScore
-        : null
-      if (leftScore === null && rightScore === null) return left.index - right.index
-      if (leftScore === null) return 1
-      if (rightScore === null) return -1
-      return rightScore - leftScore || left.index - right.index
-    })
-    .map((entry, position) => ({ ...entry.candidate, rank: position + 1 }))
-}
-
 function CandidateRow({
   candidate,
   industry,
@@ -629,6 +640,7 @@ function CandidateRow({
   const supportReversal = candidate.technical.supportReversal
   const scoreSnapshotClosed = hasClosedShortTermScoreSnapshot(candidate)
   const rankingScore = scoreSnapshotClosed ? candidate.score.rankingScore : null
+  const research = candidate.signalProfile?.research
   return (
     <button
       type="button"
@@ -646,7 +658,7 @@ function CandidateRow({
           {supportReversal?.state === 'CONFIRMED' ? (
             <Tag tone="success">{supportReversal.stateLabel}</Tag>
           ) : null}
-          {candidate.signalProfile && candidate.signalProfile.primaryFamily !== 'UNAVAILABLE' ? (
+          {research ? <Tag tone="brand">{research.setupLabel}</Tag> : candidate.signalProfile && candidate.signalProfile.primaryFamily !== 'UNAVAILABLE' ? (
             <Tag tone="brand">{candidate.signalProfile.primaryLabel}</Tag>
           ) : null}
         </div>
@@ -669,16 +681,16 @@ function CandidateRow({
             行情：{candidate.quoteFreshness.statusLabel}
           </Tag>
           {marketRegimeLabel ? <Tag tone="sky">大盘：{marketRegimeLabel}</Tag> : null}
-          {Number.isFinite(candidate.score.technicalRankingScore) ? (
+          {!research && (Number.isFinite(candidate.score.technicalRankingScore) ? (
             <Tag tone="neutral">结构分 {formatNumber(candidate.score.technicalRankingScore)}</Tag>
           ) : (
             <Tag tone="warning">结构分待补</Tag>
-          )}
-          {rankingScore === null ? (
+          ))}
+          {!research && (rankingScore === null ? (
             <Tag tone="warning">排序分待补</Tag>
           ) : (
             <Tag tone="neutral">排序分 {formatNumber(rankingScore)}</Tag>
-          )}
+          ))}
         </div>
       </div>
 
@@ -693,13 +705,18 @@ function CandidateRow({
       </div>
 
       <div className="flex items-center justify-between gap-3 md:flex-col md:items-end md:justify-center">
-        <CompositeScoreBadge value={rankingScore} />
-        <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
+        {research ? <ResearchScoreTag research={research} /> : <CompositeScoreBadge value={rankingScore} />}
+        <CandidateExecutionTag candidate={candidate} />
+        {!research ? <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag> : null}
         <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
         <Tag tone={tailTone(candidate.tailSignal.status)}>{candidate.tailSignal.statusLabel}</Tag>
       </div>
     </button>
   )
+}
+
+function legacyWeightLabel(label: string, weight: number | null | undefined) {
+  return weight != null && Number.isFinite(weight) ? `${label} ${Number((weight * 100).toFixed(2))}%` : label
 }
 
 function CandidateDetail({
@@ -721,13 +738,15 @@ function CandidateDetail({
 }) {
   const scoreSnapshotClosed = hasClosedShortTermScoreSnapshot(candidate)
   const rankingScore = scoreSnapshotClosed ? candidate.score.rankingScore : null
+  const research = candidate.signalProfile?.research
   return (
     <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft pb-4">
           <div className="flex flex-wrap items-center gap-2">
-            <ScoreBadge value={rankingScore} />
+            {research ? <ResearchScoreTag research={research} /> : <ScoreBadge value={rankingScore} />}
+            <CandidateExecutionTag candidate={candidate} />
             <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
-            <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag>
+            {!research ? <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag> : null}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <BuyEntryButton
@@ -741,12 +760,14 @@ function CandidateDetail({
             <TradeReviewButton
               symbol={candidate.symbol}
               sourceModule="SHORT_TERM"
-              ruleVersion="short-term-right-side-v4-transparent-ranking"
+              ruleVersion={research?.ruleVersion ?? 'short-term-right-side-v4-transparent-ranking'}
               recommendedAt={generatedAt}
               attestationToken={tradeCaptureToken}
             />
           </div>
         </div>
+
+        {research ? <ShortTermResearchPanel research={research} /> : null}
 
         <OvernightTradePlanPanel plan={candidate.tradePlan} />
 
@@ -773,11 +794,14 @@ function CandidateDetail({
           <Metric label="证据完整度" value={`${candidate.evidenceCompleteness.score}`} />
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          <ScoreMetric label="金叉 45%" value={candidate.score.goldenCrossScore} />
-          <ScoreMetric label="量能 30%" value={candidate.score.volumeScore} />
-          <ScoreMetric label="换手 15%" value={candidate.score.turnoverScore} />
-          <ScoreMetric label="收盘强度 10%" value={candidate.score.closeStrengthScore} />
+        <details aria-label="旧版评分对照" open={!research} className="rounded-lg border border-line-soft p-3">
+          <summary className="cursor-pointer text-sm font-semibold text-ink-700">旧版评分对照</summary>
+          <p className="mt-2 text-xs leading-relaxed text-ink-500">保留报告原有评分及权重，独立于研究分展示。</p>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <ScoreMetric label={legacyWeightLabel(weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型技术' : '金叉', weightProfile.finalGoldenCross)} value={candidate.score.goldenCrossScore} />
+          <ScoreMetric label={legacyWeightLabel('量能', weightProfile.finalVolume)} value={candidate.score.volumeScore} />
+          <ScoreMetric label={legacyWeightLabel(weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型热度' : '换手', weightProfile.finalTurnover)} value={candidate.score.turnoverScore} />
+          <ScoreMetric label={legacyWeightLabel(weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型财务与估值' : '收盘强度', weightProfile.finalCloseStrength)} value={candidate.score.closeStrengthScore} />
           {candidate.score.supportReversalScore != null
           && (candidate.technical.supportReversal?.state === 'CONFIRMED'
             || candidate.technical.supportReversal?.state === 'OBSERVATION') ? (
@@ -814,12 +838,7 @@ function CandidateDetail({
           )}
         </div>
 
-        <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line-soft pt-3 text-xs text-ink-500">
-          <span>{weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型技术' : '金叉'} {formatNumber(weightProfile.finalGoldenCross * 100)}%</span>
-          <span>量能 {formatNumber(weightProfile.finalVolume * 100)}%</span>
-          <span>{weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型热度' : '换手'} {formatNumber(weightProfile.finalTurnover * 100)}%</span>
-          <span>{weightProfile.modelVersion === 'legacy-short-term-v1' ? '旧模型财务与估值' : '收盘强度'} {formatNumber(weightProfile.finalCloseStrength * 100)}%</span>
-        </div>
+        </details>
 
         <SupportReversalDetail signal={candidate.technical.supportReversal} />
 

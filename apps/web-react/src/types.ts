@@ -1013,12 +1013,34 @@ export interface ShortTermVolatilityQuality {
   dataGaps: string[]
 }
 
+export interface ShortTermResearchSetup {
+  ruleVersion: string
+  setupType: string
+  setupLabel: string
+  state: string
+  score: number | null
+  trendScore: number | null
+  relativeStrengthScore: number | null
+  setupScore: number | null
+  volumePriceScore: number | null
+  trendContribution: number | null
+  relativeStrengthContribution: number | null
+  setupContribution: number | null
+  volumePriceContribution: number | null
+  triggerPrice: number | null
+  invalidationPrice: number | null
+  evidence: string[]
+  risks: string[]
+  dataGaps: string[]
+}
+
 export interface ShortTermSignalProfile {
   primaryFamily: string
   primaryLabel: string
   activeFamilies: string[]
   evidence: string[]
   dataGaps: string[]
+  research?: ShortTermResearchSetup | null
 }
 
 export interface ShortTermMarketRegime {

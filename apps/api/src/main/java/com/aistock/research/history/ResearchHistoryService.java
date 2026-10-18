@@ -19,7 +19,7 @@ import java.util.UUID;
 public class ResearchHistoryService {
 
     private static final String RULE_VERSION = "investment-decision-v1";
-    private static final String SHORT_TERM_RULE_VERSION = "short-term-right-side-v4-transparent-ranking";
+    private static final String SHORT_TERM_RULE_VERSION = com.aistock.research.tradefeedback.RecommendationSource.SHORT_TERM.ruleVersion();
 
     private final AnalysisHistoryRepository analysisRepository;
     private final DecisionHistoryRepository decisionRepository;

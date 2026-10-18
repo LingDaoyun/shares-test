@@ -110,4 +110,21 @@ describe('OvernightTradePlanPanel', () => {
       expect(html).not.toContain(executionTerm)
     }
   })
+
+  it('makes the actionable plan cost and risk assumptions available in a collapsed explanation', () => {
+    const html = renderToStaticMarkup(
+      <OvernightTradePlanPanel plan={{ ...plan, analysisBasis: [
+        '按入场区间上沿 10.30 元作为保守成交价计算',
+        '往返费用与滑点合计按成交价的 0.20% 作研究假设',
+        '净风险收益比 1.3000，研究门槛 1.20'
+      ] }} />
+    )
+
+    expect(html).toContain('按入场区间上沿 10.30 元作为保守成交价计算')
+    expect(html).toContain('往返费用与滑点合计按成交价的 0.20% 作研究假设')
+    expect(html).toContain('净风险收益比 1.3000，研究门槛 1.20')
+    const explanation = html.match(/<details\b[^>]*>/)?.[0]
+    expect(explanation).toBeDefined()
+    expect(explanation).not.toContain('open=')
+  })
 })

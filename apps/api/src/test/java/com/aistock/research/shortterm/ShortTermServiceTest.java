@@ -853,8 +853,11 @@ class ShortTermServiceTest {
         ShortTermReport report = service.report(null, 100, 10, null,null, null, null, null, null, null);
 
         assertThat(report.candidates()).hasSize(5);
-        assertThat(report.methodology()).anySatisfy(item ->
-                assertThat(item).contains("默认输出八个", "观察层", "不会为了凑数"));
+        assertThat(report.candidates()).allSatisfy(candidate -> {
+            assertThat(candidate.signalProfile().research().ruleVersion()).isEqualTo("short-term-research-v6");
+            assertThat(candidate.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
+            assertThat(candidate.tradePlan().status()).isEqualTo("BLOCKED");
+        });
     }
 
     @Test
@@ -941,7 +944,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldRankReviewedGoldenCrossTiersAndKeepWatchStatesNonExecutable() {
+    void shouldRankByResearchScoreAndKeepGoldenCrossWatchStatesNonExecutable() {
         eastMoneyClient.quotes = List.of(
                 quote("600501", "确认金叉", "10.50", "1.60", "18", "1.6", "600000000"),
                 quote("600502", "临界金叉", "10.30", "1.20", "18", "1.6", "600000000"),
@@ -954,8 +957,12 @@ class ShortTermServiceTest {
 
         ShortTermReport report = service.report(3, 100, 10, null,null, null, null, null, null, null);
 
+        assertThat(find(report, "600501").signalProfile().research().score()).isPositive();
+        // These two fixtures have fewer than 40 bars: neither gets an invented research score.
+        assertThat(find(report, "600502").signalProfile().research().score()).isZero();
+        assertThat(find(report, "600503").signalProfile().research().score()).isZero();
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
-                .containsExactly("600501", "600503", "600502");
+                .containsExactly("600501", "600502", "600503");
         assertThat(find(report, "600501").technical().goldenCross().state()).isEqualTo("CONFIRMED");
         assertThat(find(report, "600502").technical().goldenCross().state()).isEqualTo("APPROACHING");
         assertThat(find(report, "600502").todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
@@ -1181,7 +1188,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void activeChipRankingUsesOneComparatorWhenChipAvailabilityIsMixed() {
+    void shouldKeepChipAndFundFlowDiagnosticsOutOfResearchOrdering() {
         eastMoneyClient.quotes = List.of(
                 quote("600607", "筹码样本", "10.62", "1.20", "18", "1.6", "600000000"),
                 quote("600608", "低分资金流样本", "10.62", "1.20", "18", "1.6", "600000000"),
@@ -1206,8 +1213,15 @@ class ShortTermServiceTest {
         assertThat(highScoreWithoutFlow.action()).isEqualTo(lowScoreWithFlow.action());
         assertThat(highScoreWithoutFlow.score().rankingScore())
                 .isGreaterThan(lowScoreWithFlow.score().rankingScore());
-        assertThat(report.candidates().indexOf(highScoreWithoutFlow))
-                .isLessThan(report.candidates().indexOf(lowScoreWithFlow));
+        assertThat(report.candidates()).allSatisfy(candidate -> {
+            assertThat(candidate.signalProfile().research().score())
+                    .isEqualByComparingTo(lowScoreWithFlow.signalProfile().research().score());
+            assertThat(candidate.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
+            assertThat(candidate.tradePlan().status()).isEqualTo("BLOCKED");
+        });
+        // Equal research evidence uses the stable symbol tie-break, never old fund-flow/chip adjustments.
+        assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
+                .containsExactly("600607", "600608", "600609");
     }
 
     @Test
@@ -1554,7 +1568,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldAllowOnlyLightTrialWhenCrowdedMarketHasConfirmedRightSideAndTailEvidence() {
+    void shouldKeepCrowdedMarketLightTrialCandidateNonExecutableWhenItsPlanFails() {
         List<EastMoneyQuote> quotes = new ArrayList<>();
         quotes.add(withTurnover(
                 quoteAt(
@@ -1592,8 +1606,7 @@ class ShortTermServiceTest {
         assertThat(report.marketSentiment().phase()).isEqualTo("高潮");
         assertThat(report.marketRegime().state()).isEqualTo("CROWDED_VOLATILE");
         assertThat(candidate.action()).isEqualTo("REGIME_LIGHT_TRIAL");
-        assertThat(candidate.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
-        assertThat(candidate.todayAdvice().summary()).contains("拥挤高波动", "轻仓");
+        assertBlockedPlanSynchronizesAdvice(candidate);
     }
 
     @Test
@@ -1691,7 +1704,7 @@ class ShortTermServiceTest {
         ShortTermReport report = service.report(5, 100, 5, null,null, null, null, null, null, true);
 
         ShortTermCandidate candidate = find(report, "600001");
-        assertThat(report.scope()).contains("短线右侧");
+        assertThat(report.scope()).isEqualTo("A 股短线研究候选");
         assertThat(report.ruleSet().scanLimit()).isEqualTo(100);
         assertThat(candidate.phaseLabel()).isEqualTo("右侧早期");
         assertThat(candidate.action()).isEqualTo("RIGHT_EARLY_ADD");
@@ -1777,7 +1790,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldKeepConfirmedLowerShadowSupportAsLightTrialCandidate() {
+    void shouldKeepConfirmedLowerShadowSupportForObservationWhenItsPlanFails() {
         Instant timestamp = Instant.parse("2026-07-07T06:49:00Z");
         eastMoneyClient.snapshotFetchedAt = timestamp;
         eastMoneyClient.quotes = List.of(
@@ -1796,7 +1809,7 @@ class ShortTermServiceTest {
         ShortTermCandidate candidate = find(report, "600041");
 
         assertThat(candidate.action()).isEqualTo("SUPPORT_REVERSAL_LIGHT_TRIAL");
-        assertThat(candidate.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
+        assertBlockedPlanSynchronizesAdvice(candidate);
         assertThat(candidate.technical().supportReversal().confirmed()).isTrue();
         assertThat(candidate.score().supportReversalScore()).isGreaterThanOrEqualTo(new BigDecimal("70"));
         assertThat(candidate.entryRules()).anyMatch(rule -> rule.contains("承接低点") || rule.contains("收复支撑"));
@@ -1903,7 +1916,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void repairMarketDowngradesWouldBeAddToRegimeLightTrial() {
+    void repairMarketLimitsTheActionToLightTrialAndFailedPlanFurtherBlocksExecution() {
         Instant timestamp = Instant.parse("2026-07-07T06:49:00Z");
         List<EastMoneyQuote> quotes = new ArrayList<>();
         quotes.add(withTurnover(quoteAt(
@@ -1929,8 +1942,7 @@ class ShortTermServiceTest {
         ShortTermCandidate candidate = find(report, "600716");
         assertThat(report.marketRegime().state()).isEqualTo("REPAIR");
         assertThat(candidate.action()).isEqualTo("REGIME_LIGHT_TRIAL");
-        assertThat(candidate.todayAdvice().action()).isEqualTo("LIGHT_TRIAL");
-        assertThat(candidate.todayAdvice().summary()).contains("修复", "轻仓");
+        assertBlockedPlanSynchronizesAdvice(candidate);
     }
 
     @Test
@@ -2241,7 +2253,7 @@ class ShortTermServiceTest {
     }
 
     @Test
-    void shouldRankEstablishedRightSideAheadOfApproachingCrossBelowMa20() {
+    void shouldUseStableOrderForInsufficientResearchHistoryWithoutPromotingApproachingCross() {
         eastMoneyClient.quotes = List.of(
                 quote("600017", "弱势临界", "10.30", "1.20", "18", "1.6", "600000000"),
                 quote("600018", "多头延续", "10.70", "1.00", "18", "1.6", "600000000")
@@ -2254,12 +2266,18 @@ class ShortTermServiceTest {
 
         assertThat(find(report, "600017").technical().goldenCross().state()).isEqualTo("APPROACHING");
         assertThat(find(report, "600017").technical().rightSideSignal()).isEqualTo("尚未右侧");
+        assertThat(report.candidates()).allSatisfy(candidate -> {
+            assertThat(candidate.signalProfile().research().state()).isEqualTo("UNAVAILABLE");
+            assertThat(candidate.signalProfile().research().score()).isZero();
+            assertThat(candidate.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
+            assertThat(candidate.tradePlan().status()).isEqualTo("BLOCKED");
+        });
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
-                .containsExactly("600018", "600017");
+                .containsExactly("600017", "600018");
     }
 
     @Test
-    void shouldNotPromoteApproachingCrossThatIsAlreadyFarFromMa20() {
+    void shouldKeepFarApproachingCrossInTheBlockedPullbackGroup() {
         eastMoneyClient.quotes = List.of(
                 quote("600019", "过远临界", "12.00", "1.20", "18", "1.6", "600000000"),
                 quote("600020", "合理延续", "10.70", "1.00", "18", "1.6", "600000000")
@@ -2273,8 +2291,12 @@ class ShortTermServiceTest {
         ShortTermCandidate approaching = find(report, "600019");
         assertThat(approaching.technical().goldenCross().state()).isEqualTo("APPROACHING");
         assertThat(approaching.technical().rightSideSignal()).isIn("右侧雏形", "右侧已拉开");
+        assertThat(approaching.action()).isEqualTo("WAIT_PULLBACK");
+        assertThat(approaching.todayAdvice().action()).isEqualTo("WAIT_PULLBACK");
+        assertThat(approaching.tradePlan().status()).isEqualTo("BLOCKED");
+        assertThat(find(report, "600020").todayAdvice().action()).isEqualTo("WAIT");
         assertThat(report.candidates()).extracting(ShortTermCandidate::symbol)
-                .containsExactly("600020", "600019");
+                .containsExactly("600019", "600020");
     }
 
     @Test
@@ -2386,6 +2408,19 @@ class ShortTermServiceTest {
         assertThat(candidate.financial().qualityScore()).isEqualByComparingTo("100");
         assertThat(candidate.evidence()).extracting(ShortTermEvidence::summary)
                 .anySatisfy(summary -> assertThat(summary).contains("ROE 12.5%"));
+    }
+
+    private void assertBlockedPlanSynchronizesAdvice(ShortTermCandidate candidate) {
+        assertThat(candidate.tailSignal().status()).isEqualTo("CONFIRMED");
+        assertThat(candidate.evidenceCompleteness().allowsBuy()).isTrue();
+        assertThat(candidate.tradePlan().status()).isEqualTo("BLOCKED");
+        // These legacy fixtures retain the broad MA20 observation range, whose upper edge
+        // exceeds the first target. Passing market/tail evidence must not override that failure.
+        assertThat(candidate.tradePlan().blockedReasons()).anySatisfy(reason ->
+                assertThat(reason).contains("目标价", "保守成交价"));
+        assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
+        assertThat(candidate.todayAdvice().actionLabel()).isEqualTo("计划未通过");
+        assertThat(candidate.todayAdvice().reasons()).containsAll(candidate.tradePlan().blockedReasons());
     }
 
     private ShortTermCandidate find(ShortTermReport report, String symbol) {
