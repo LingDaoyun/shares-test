@@ -156,6 +156,7 @@ public class ShortTermService {
     private final ShortTermSignalProfileResolver signalProfileResolver = new ShortTermSignalProfileResolver();
     private final ShortTermMarketRegimeClassifier marketRegimeClassifier = new ShortTermMarketRegimeClassifier();
     private ShortTermMarketLiquidityService marketLiquidityService;
+    private CachedMarketFundDirection cachedMarketFundDirection;
 
     @Autowired(required = false)
     public void setMarketLiquidityService(ShortTermMarketLiquidityService service) {
@@ -648,7 +649,27 @@ public class ShortTermService {
                 + coverage.source() + "。" + acquisitionText + goldenCrossNote;
     }
 
+    public synchronized ShortTermMarketFundDirection marketFundDirection() {
+        LocalDateTime now = tradingClockService.currentMarketDateTime();
+        if (cachedMarketFundDirection != null
+                && now.isBefore(cachedMarketFundDirection.expiresAt())
+                && now.toLocalDate().equals(cachedMarketFundDirection.marketDate())) {
+            return cachedMarketFundDirection.snapshot();
+        }
+        // Industry rows carry their own source timestamp; this entry point needs no stock scan.
+        ShortTermMarketFundDirection snapshot = marketFundDirection(null, now.toLocalDate());
+        cachedMarketFundDirection = new CachedMarketFundDirection(snapshot, now.toLocalDate(), now.plusSeconds(60));
+        return snapshot;
+    }
+
     private ShortTermMarketFundDirection marketFundDirection(List<EastMoneyQuote> quoteUniverse) {
+        return marketFundDirection(quoteUniverse, null);
+    }
+
+    private ShortTermMarketFundDirection marketFundDirection(
+            List<EastMoneyQuote> quoteUniverse,
+            LocalDate standaloneMarketDate
+    ) {
         try {
             List<EastMoneyIndustryFundFlowSnapshot> snapshots = eastMoneyClient.fetchIndustryFundFlows();
             if (snapshots == null || snapshots.isEmpty()) {
@@ -661,17 +682,19 @@ public class ShortTermService {
                     .map(EastMoneyQuote::tradeDate)
                     .filter(java.util.Objects::nonNull)
                     .collect(Collectors.toSet());
-            LocalDate quoteDate = null;
-            if (quoteDates.size() != 1 || quotes.stream().anyMatch(quote -> quote.tradeDate() == null
-                    || quote.marketTimestamp() == null
-                    || !quote.tradeDate().equals(quote.marketTimestamp().atZone(SHANGHAI).toLocalDate()))) {
-                dataGaps.add("行情日缺失、混合或时间戳不一致，无法核实今日行业资金排名。");
-            } else {
-                LocalDate onlyDate = quoteDates.iterator().next();
-                if (onlyDate.equals(tradingClockService.currentMarketDateTime().toLocalDate())) {
-                    quoteDate = onlyDate;
+            LocalDate quoteDate = standaloneMarketDate;
+            if (standaloneMarketDate == null) {
+                if (quoteDates.size() != 1 || quotes.stream().anyMatch(quote -> quote.tradeDate() == null
+                        || quote.marketTimestamp() == null
+                        || !quote.tradeDate().equals(quote.marketTimestamp().atZone(SHANGHAI).toLocalDate()))) {
+                    dataGaps.add("行情日缺失、混合或时间戳不一致，无法核实今日行业资金排名。");
                 } else {
-                    dataGaps.add("历史行情日 " + onlyDate + " 不能作为今日行业资金排名。");
+                    LocalDate onlyDate = quoteDates.iterator().next();
+                    if (onlyDate.equals(tradingClockService.currentMarketDateTime().toLocalDate())) {
+                        quoteDate = onlyDate;
+                    } else {
+                        dataGaps.add("历史行情日 " + onlyDate + " 不能作为今日行业资金排名。");
+                    }
                 }
             }
             long missingDates = snapshots.stream().filter(snapshot -> snapshot.tradeDate() == null).count();
@@ -682,7 +705,8 @@ public class ShortTermService {
             long mismatchedDates = snapshots.stream().filter(snapshot -> snapshot.tradeDate() != null)
                     .filter(snapshot -> verifiedQuoteDate != null && !verifiedQuoteDate.equals(snapshot.tradeDate())).count();
             if (mismatchedDates > 0) {
-                dataGaps.add("返回行业中 " + mismatchedDates + " 行与行情日 " + quoteDate + " 不一致，未进入今日资金排名。");
+                String dateLabel = standaloneMarketDate == null ? "行情日 " : "当前市场日期 ";
+                dataGaps.add("返回行业中 " + mismatchedDates + " 行与" + dateLabel + quoteDate + " 不一致，未进入今日资金排名。");
             }
             List<EastMoneyIndustryFundFlowSnapshot> rankedSnapshots = snapshots.stream()
                     .filter(snapshot -> verifiedQuoteDate != null && verifiedQuoteDate.equals(snapshot.tradeDate()))
@@ -731,13 +755,13 @@ public class ShortTermService {
                     coveredCount,
                     expectedCount,
                     coverageRatio,
-                    verifiedQuoteDate,
+                    standaloneMarketDate != null && coveredCount == 0 ? null : verifiedQuoteDate,
                     fetchedAt,
                     sourceName,
                     dataGaps
             );
         } catch (RuntimeException exception) {
-            logger.warn("短线右侧行业资金流获取失败，保留扫描结果", exception);
+            logger.warn("行业资金流获取失败", exception);
             return ShortTermMarketFundDirection.unavailable(
                     "行业资金流获取失败：" + rootMessage(exception)
             );
@@ -4296,6 +4320,13 @@ public class ShortTermService {
             ShortTermCoreSignalScore coreSignalScore,
             ShortTermVolatilityQuality volatilityQuality,
             ShortTermResearchSetup research
+    ) {
+    }
+
+    private record CachedMarketFundDirection(
+            ShortTermMarketFundDirection snapshot,
+            LocalDate marketDate,
+            LocalDateTime expiresAt
     ) {
     }
 

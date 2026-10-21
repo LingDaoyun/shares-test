@@ -6,6 +6,7 @@ import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { Tag } from '../ui/Badge'
 import { LimitUpIndustryOverlay, type LimitUpIndustrySelection } from './LimitUpIndustryOverlay'
+import { MarketFundFlowPanel } from './MarketFundFlowPanel'
 import { formatAmount, formatDateTime, formatPercent, formatSignedPercent } from '../../lib/format'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment, ShortTermMarketBreadth, ShortTermMarketTurnover } from '../../types'
 
@@ -33,6 +34,7 @@ export function LimitUpBoardPanel() {
   const [breadthLoading, setBreadthLoading] = useState(false)
   const [breadthError, setBreadthError] = useState<string | null>(null)
   const [marketOpen, setMarketOpen] = useState(false)
+  const [fundRefreshKey, setFundRefreshKey] = useState(0)
   const [industrySelection, setIndustrySelection] = useState<LimitUpIndustrySelection | null>(null)
   const mounted = useRef(false)
   const refreshing = useRef(false)
@@ -41,6 +43,7 @@ export function LimitUpBoardPanel() {
   const refresh = useCallback(async () => {
     if (refreshing.current) return
     refreshing.current = true
+    setFundRefreshKey(key => key + 1)
     clearTimeout(refreshTimer.current)
     setLoading(true)
     setError(null)
@@ -113,6 +116,7 @@ export function LimitUpBoardPanel() {
             breadthError={breadthError}
             onRefresh={() => void refresh()}
           />
+          <MarketFundFlowPanel refreshKey={fundRefreshKey} />
         </DetailOverlay>
       ) : null}
       {industrySelection ? (

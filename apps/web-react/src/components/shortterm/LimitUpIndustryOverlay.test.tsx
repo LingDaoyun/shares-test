@@ -3,13 +3,13 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchShortTermLimitUpBoard, fetchShortTermLimitUpIndustry, fetchShortTermMarketBreadth } from '../../api/client'
+import { fetchShortTermLimitUpBoard, fetchShortTermLimitUpIndustry, fetchShortTermMarketBreadth, fetchShortTermMarketFundDirection } from '../../api/client'
 import { LimitUpBoardPanel } from './LimitUpBoardPanel'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpStock } from '../../types'
 
 vi.mock('../../api/client', () => ({
   fetchShortTermLimitUpBoard: vi.fn(), fetchShortTermMarketBreadth: vi.fn(), fetchShortTermLimitUpIndustry: vi.fn(),
-  fetchShortTermCatchUp: vi.fn(), fetchShortTermCatchUpFollowUp: vi.fn()
+  fetchShortTermCatchUp: vi.fn(), fetchShortTermCatchUpFollowUp: vi.fn(), fetchShortTermMarketFundDirection: vi.fn()
 }))
 
 const sealed: ShortTermLimitUpStock = {
@@ -34,6 +34,10 @@ describe('Limit-up industry third-level detail', () => {
     vi.resetAllMocks()
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(board)
     vi.mocked(fetchShortTermMarketBreadth).mockResolvedValue(null as never)
+    vi.mocked(fetchShortTermMarketFundDirection).mockResolvedValue({
+      topInflows: [], topOutflows: [], coveredIndustryCount: 0, expectedIndustryCount: 0,
+      coverageRatio: null, tradeDate: null, fetchedAt: null, sourceName: '行业资金流未返回', dataGaps: []
+    })
     vi.mocked(fetchShortTermLimitUpIndustry).mockResolvedValue({
       tradeDate: board.tradeDate, industry: '半导体', fetchedAt: board.fetchedAt,
       limitUpCount: 1, limitUpStocks: [sealed], risingStocks: [], risingAvailable: true,
