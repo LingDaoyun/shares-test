@@ -140,20 +140,24 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
   })
 
-  it('refreshes the homepage cards and market dialog from the same snapshot', async () => {
+  it.each(['homepage', 'dialog'])('refreshes cards and market data from the %s refresh button', async (location) => {
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
     await renderPanel()
-    await openMarketDialog()
+    if (location === 'dialog') await openMarketDialog()
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue({
       ...availableBoard,
       fetchedAt: '2026-09-11T02:05:00Z',
       stocks: [...availableBoard.stocks, { ...availableBoard.stocks[0], symbol: '600002', name: '新增封板样本' }],
       sentiment: { ...availableBoard.sentiment!, limitUpCount: 2 },
     })
-    await clickButton('刷新')
+    await clickButton(location === 'homepage' ? '手动刷新' : '刷新')
 
     expect(host.querySelector('button[aria-label="查看半导体涨停明细"]')?.textContent).toContain('涨停 2 家')
     expect(host.textContent).toContain('新增封板样本')
+    if (location === 'homepage') {
+      expect(document.querySelector('[role="dialog"]')).toBeNull()
+      await openMarketDialog()
+    }
     const dialog = document.querySelector('[role="dialog"]')!
     expect(dialog.textContent).toContain('共 2 只涨停')
     expect(dialog.textContent).toContain('2026-09-11 10:05:00')

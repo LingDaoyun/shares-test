@@ -79,7 +79,11 @@ export function LimitUpBoardPanel() {
       }
     }}>
       <Card>
-        <div className="mb-4 flex justify-end">
+        <div className="mb-4 flex flex-wrap justify-end gap-2">
+          <Button type="button" icon={<RefreshCw aria-hidden="true" className="h-4 w-4" />}
+            loading={loading || breadthLoading} onClick={() => void refresh()}>
+            手动刷新
+          </Button>
           <Button type="button" icon={<BarChart3 aria-hidden="true" className="h-4 w-4" />}
             aria-haspopup="dialog" aria-expanded={marketOpen} onClick={() => setMarketOpen(true)}>
             市场情绪与行业分布
