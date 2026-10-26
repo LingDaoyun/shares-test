@@ -165,6 +165,36 @@ export interface LeaderBarSeries {
   bars: LeaderBar[]
 }
 
+export interface StockIntradayPoint {
+  minute: string
+  price: number
+  averagePrice: number | null
+  volume: number | null
+  amount: number | null
+}
+
+export interface StockIntradaySnapshot {
+  symbol: string
+  tradeDate: string | null
+  source: string
+  volumeUnit: '手'
+  fetchedAt: string
+  points: StockIntradayPoint[]
+}
+
+export interface StockDailySnapshot {
+  symbol: string
+  adjustMode: 'QFQ'
+  volumeUnit: '手'
+  source: string
+  fetchedAt: string
+  bars: StockDailyBar[]
+}
+
+export interface StockDailyBar extends Omit<LeaderBar, 'volume'> {
+  volume: number | null
+}
+
 export interface LeaderAiReview {
   id: string
   tradeDate: string

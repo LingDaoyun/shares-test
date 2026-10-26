@@ -4,6 +4,8 @@ import type {
   BacktestReport,
   LeaderAiReview,
   LeaderBarSeries,
+  StockDailySnapshot,
+  StockIntradaySnapshot,
   PotentialLeaderCandidate,
   PotentialLeaderPreferences,
   PotentialLeaderSnapshot,
@@ -64,6 +66,16 @@ export function fetchPotentialLeaderSnapshot(params: PotentialLeaderPreferences)
 export function fetchPotentialLeaderBars(symbol: string) {
   return http
     .get<LeaderBarSeries>(`/potential-leaders/bars/${encodeURIComponent(symbol)}`)
+    .then((res) => res.data)
+}
+
+export function fetchStockIntraday(symbol: string) {
+  return http.get<StockIntradaySnapshot>(`/short-term/stocks/${encodeURIComponent(symbol)}/intraday`)
+    .then((res) => res.data)
+}
+
+export function fetchStockDaily(symbol: string) {
+  return http.get<StockDailySnapshot>(`/short-term/stocks/${encodeURIComponent(symbol)}/daily`)
     .then((res) => res.data)
 }
 

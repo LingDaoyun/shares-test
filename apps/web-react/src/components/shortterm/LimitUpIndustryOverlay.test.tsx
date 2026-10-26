@@ -9,7 +9,7 @@ import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpStock } from '../..
 
 vi.mock('../../api/client', () => ({
   fetchShortTermLimitUpBoard: vi.fn(), fetchShortTermMarketBreadth: vi.fn(), fetchShortTermLimitUpIndustry: vi.fn(),
-  fetchShortTermCatchUp: vi.fn(), fetchShortTermCatchUpFollowUp: vi.fn()
+  fetchShortTermCatchUp: vi.fn(), fetchShortTermCatchUpFollowUp: vi.fn(), fetchStockDaily: vi.fn(), fetchStockIntraday: vi.fn()
 }))
 
 const sealed: ShortTermLimitUpStock = {
@@ -91,6 +91,7 @@ describe('Limit-up industry third-level detail', () => {
     expect(table?.textContent).toContain('2 次')
     expect(table?.textContent).toContain('封板资金')
     expect(table?.textContent).toContain('0.20 亿')
+    expect(table?.querySelector('button[aria-label="查看行业样本0分时和日线"]')).not.toBeNull()
 
     const back = Array.from(topDialog().querySelectorAll('button')).find(button => button.textContent?.includes('返回涨停看板'))
     await act(async () => { back?.click() })

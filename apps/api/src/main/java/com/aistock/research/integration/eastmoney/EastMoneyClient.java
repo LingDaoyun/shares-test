@@ -605,6 +605,11 @@ public class EastMoneyClient {
         return List.of();
     }
 
+    /** Real minute OHLCV only: Tencent snapshots synthesize high/low from one sampled price. */
+    public List<EastMoneyIntradayPoint> fetchIntradayOhlcv(String symbol) {
+        return fetchEastMoneyIntradayTrends(symbol);
+    }
+
     private List<EastMoneyIntradayPoint> fetchEastMoneyIntradayTrends(String symbol) {
         String secId = secId(symbol);
         if (secId == null) {
