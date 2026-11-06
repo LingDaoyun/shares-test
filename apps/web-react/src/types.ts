@@ -1218,12 +1218,12 @@ export interface ShortTermEvidence {
 export interface ShortTermTailSignal {
   status: string
   statusLabel: string
-  afterTailConfirm: boolean
+  actionableTailWindow: boolean
   tradeDate: string | null
   latestMinute: string | null
   latestPrice: number | null
   tailStartPrice: number | null
-  changeFromTailConfirmPercent: number | null
+  changeFromActionableTailPercent: number | null
   drawdownFromTailHighPercent: number | null
   closeVsAveragePricePercent: number | null
   tailAmount: number | null
@@ -1231,6 +1231,20 @@ export interface ShortTermTailSignal {
   score: number | null
   reasons: string[]
   riskControls: string[]
+  intradayPullback?: ShortTermIntradayPullbackSignal | null
+}
+
+export interface ShortTermIntradayPullbackSignal {
+  status: string
+  statusLabel: string
+  pullbackMinute: string | null
+  breakoutMinute: string | null
+  platformHigh: number | null
+  pullbackLow: number | null
+  pullbackVolumeRatio: number | null
+  breakoutVolumeRatio: number | null
+  reasons: string[]
+  dataGaps: string[]
 }
 
 export interface ShortTermOpenScenario {

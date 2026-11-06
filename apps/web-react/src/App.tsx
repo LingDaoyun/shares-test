@@ -70,14 +70,10 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 }
 
 const LimitUpPage = lazyPage(() => import('./pages/LimitUpPage').then((m) => m.LimitUpPage))
-const MarketScanPage = lazyPage(() => import('./pages/MarketScanPage').then((m) => m.MarketScanPage))
 const ShortTermPage = lazyPage(() => import('./pages/ShortTermPage').then((m) => m.ShortTermPage))
-const FiveDayPage = lazyPage(() => import('./pages/FiveDayPage').then((m) => m.FiveDayPage))
 const OverseasMarketPage = lazyPage(() => import('./pages/OverseasMarketPage').then((m) => m.OverseasMarketPage))
 const PolicyIndustryPage = lazyPage(() => import('./pages/PolicyIndustryPage').then((m) => m.PolicyIndustryPage))
 const WatchlistPage = lazyPage(() => import('./pages/WatchlistPage').then((m) => m.WatchlistPage))
-const TradeReviewPage = lazyPage(() => import('./pages/TradeReviewPage').then((m) => m.TradeReviewPage))
-const RulesPage = lazyPage(() => import('./pages/RulesPage').then((m) => m.RulesPage))
 const SettingsPage = lazyPage(() => import('./pages/SettingsPage').then((m) => m.SettingsPage))
 
 export default function App() {
@@ -89,17 +85,11 @@ export default function App() {
             <Route element={<AppShell />}>
               <Route index element={<Navigate to="/limit-up" replace />} />
               <Route path="limit-up" element={<LimitUpPage />} />
-              <Route path="market" element={<MarketScanPage />} />
               <Route path="short-term" element={<ShortTermPage />} />
-              <Route path="potential-leader" element={<FiveDayPage />} />
-              <Route path="five-day" element={<FiveDayPage />} />
-              <Route path="first-board-alert" element={<Navigate to="/potential-leader" replace />} />
               <Route path="overseas" element={<OverseasMarketPage />} />
               <Route path="backtest" element={<Navigate to="/short-term" replace />} />
               <Route path="policy" element={<PolicyIndustryPage />} />
               <Route path="watchlist" element={<WatchlistPage />} />
-              <Route path="trade-review" element={<TradeReviewPage />} />
-              <Route path="rules" element={<RulesPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/limit-up" replace />} />
             </Route>

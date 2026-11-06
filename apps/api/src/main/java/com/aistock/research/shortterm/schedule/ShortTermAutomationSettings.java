@@ -48,12 +48,11 @@ public class ShortTermAutomationSettings {
         return new OvernightRuleSet(
                 entryStart,
                 entryEnd,
-                time("research.short-term.overnight.normal-exit-time", "14:50"),
-                integer("research.short-term.overnight.max-holding-trading-days", 2, 1, 10),
+                morningExitTime(),
+                1,
                 decimal("research.short-term.overnight.max-position-ratio", "0.3333",
                         new BigDecimal("0.01"), ONE),
-                decimal("research.short-term.overnight.max-t2-position-ratio", "0.50",
-                        new BigDecimal("0.01"), ONE),
+                ZERO,
                 decimal("research.short-term.overnight.first-target-floor-percent", "2.5", ZERO,
                         new BigDecimal("30")),
                 decimal("research.short-term.overnight.first-target-cap-percent", "4.0", ZERO,
@@ -110,14 +109,23 @@ public class ShortTermAutomationSettings {
         return fallback;
     }
 
-    private LocalTime time(String key, String fallbackText) {
-        String value = text(key, fallbackText);
-        try {
-            return LocalTime.parse(value);
-        } catch (DateTimeParseException exception) {
-            warnFallback(key, value, fallbackText);
-            return LocalTime.parse(fallbackText);
+    private LocalTime morningExitTime() {
+        String key = "research.short-term.overnight.normal-exit-time";
+        LocalTime fallback = LocalTime.of(10, 0);
+        String raw = environment.getProperty(key);
+        if (raw == null || raw.isBlank()) {
+            return fallback;
         }
+        try {
+            LocalTime value = LocalTime.parse(raw.trim());
+            if (!value.isBefore(LocalTime.of(9, 30)) && !value.isAfter(LocalTime.of(11, 30))) {
+                return value;
+            }
+        } catch (DateTimeParseException ignored) {
+            // Warning below includes the rejected refreshed value and fallback.
+        }
+        warnFallback(key, raw, fallback);
+        return fallback;
     }
 
     private LocalTime boundedEntryTime(String key, LocalTime fallback) {
@@ -136,14 +144,6 @@ public class ShortTermAutomationSettings {
         }
         warnFallback(key, raw, fallback);
         return fallback;
-    }
-
-    private String text(String key, String fallback) {
-        String raw = environment.getProperty(key);
-        if (raw == null || raw.isBlank()) {
-            return fallback;
-        }
-        return raw.trim();
     }
 
     private void warnFallback(String key, Object rejected, Object fallback) {

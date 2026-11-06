@@ -48,8 +48,8 @@ export function ShortTermSignalEvidencePanel({
           <h3 className="text-sm font-semibold text-ink-900">信号解释与历史验证</h3>
           <p className="mt-1 text-xs leading-relaxed text-ink-500">
             {signalProfile?.research
-              ? '历史分组沿用信号族口径，仅用于校准，不等于当前研究参数已验证，也不代表未来收益。'
-              : '推荐排序只使用当前时点可见证据；历史分组仅用于校准，不代表未来收益。'}
+              ? '历史分组按目标交易日收盘价统计，不代表次日早盘退出收益，也不等于当前研究参数已验证。'
+              : '推荐排序只使用当前时点可见证据；历史分组按目标交易日收盘价统计，不代表早盘退出收益。'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

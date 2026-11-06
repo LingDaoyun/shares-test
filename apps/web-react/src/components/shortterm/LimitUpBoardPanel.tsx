@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BarChart3, ChevronRight, RefreshCw } from 'lucide-react'
 import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
+import { fetchMarketThemes } from '../../api/marketThemes'
+import type { MarketTheme, MarketThemeSnapshot } from '../../types/marketThemes'
 import { DetailOverlay, isEscapeClose } from '../ui/DetailOverlay'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { Tag } from '../ui/Badge'
+import { CatchUpFollowUpPanel } from './CatchUpFollowUpPanel'
 import { LimitUpIndustryOverlay, type LimitUpIndustrySelection } from './LimitUpIndustryOverlay'
+import { MarketThemePanel } from './MarketThemePanel'
+import { MarketThemeDetailOverlay } from './MarketThemeDetailOverlay'
+import { ThemeRelatedNews } from './ThemeRelatedNews'
 import { formatAmount, formatDateTime, formatPercent, formatSignedPercent } from '../../lib/format'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment, ShortTermMarketBreadth, ShortTermMarketTurnover } from '../../types'
 
@@ -26,6 +32,11 @@ const turnoverTone: Record<string, 'success' | 'warning' | 'neutral'> = {
 }
 
 export function LimitUpBoardPanel() {
+  const [view, setView] = useState<'themes' | 'industries'>('themes')
+  const [themes, setThemes] = useState<MarketThemeSnapshot | null>(null)
+  const [themesLoading, setThemesLoading] = useState(false)
+  const [themesError, setThemesError] = useState<string | null>(null)
+  const [themeSelection, setThemeSelection] = useState<{ theme: MarketTheme; tradeDate: string | null } | null>(null)
   const [snapshot, setSnapshot] = useState<ShortTermLimitUpBoardSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -33,22 +44,45 @@ export function LimitUpBoardPanel() {
   const [breadthLoading, setBreadthLoading] = useState(false)
   const [breadthError, setBreadthError] = useState<string | null>(null)
   const [marketOpen, setMarketOpen] = useState(false)
+  const [followUpOpen, setFollowUpOpen] = useState(false)
   const [industrySelection, setIndustrySelection] = useState<LimitUpIndustrySelection | null>(null)
   const mounted = useRef(false)
   const refreshing = useRef(false)
+  const refreshingThemes = useRef(false)
   const refreshTimer = useRef<ReturnType<typeof setTimeout>>()
+
+  const refreshThemes = useCallback(async () => {
+    if (refreshingThemes.current) return
+    refreshingThemes.current = true
+    setThemesLoading(true)
+    try {
+      const value = await fetchMarketThemes()
+      if (mounted.current) { setThemes(value); setThemesError(null) }
+    } catch (reason) {
+      if (mounted.current) setThemesError(reason instanceof Error ? reason.message : '市场题材获取失败')
+    } finally {
+      refreshingThemes.current = false
+      if (mounted.current) setThemesLoading(false)
+    }
+  }, [])
 
   const refresh = useCallback(async () => {
     if (refreshing.current) return
     refreshing.current = true
     clearTimeout(refreshTimer.current)
     setLoading(true)
-    setError(null)
     setBreadthLoading(true)
     setBreadthError(null)
+    // 题材独立更新，不占用涨停池的刷新锁或轮询周期。
+    void refreshThemes()
     await Promise.all([
       fetchShortTermLimitUpBoard()
-        .then(value => { if (mounted.current) setSnapshot(value) })
+        .then(value => {
+          if (mounted.current) {
+            setSnapshot(value)
+            setError(null)
+          }
+        })
         .catch((reason: unknown) => { if (mounted.current) setError(reason instanceof Error ? reason.message : '涨停看板获取失败') })
         .finally(() => { if (mounted.current) setLoading(false) }),
       fetchShortTermMarketBreadth()
@@ -58,7 +92,7 @@ export function LimitUpBoardPanel() {
     ])
     refreshing.current = false
     if (mounted.current) refreshTimer.current = setTimeout(() => void refresh(), 60000)
-  }, [])
+  }, [refreshThemes])
 
   useEffect(() => {
     mounted.current = true
@@ -71,22 +105,55 @@ export function LimitUpBoardPanel() {
 
   return (
     <div onKeyDown={event => {
-      if ((industrySelection || marketOpen) && isEscapeClose(event.key, event.defaultPrevented)) {
+      if ((themeSelection || industrySelection || marketOpen || followUpOpen) && isEscapeClose(event.key, event.defaultPrevented)) {
         event.preventDefault()
         event.stopPropagation()
         setIndustrySelection(null)
+        setThemeSelection(null)
         setMarketOpen(false)
+        setFollowUpOpen(false)
       }
     }}>
       <Card>
-        <div className="mb-4 flex justify-end">
+        <div className="mb-4 flex flex-wrap justify-end gap-2">
+          <div className="mr-auto flex items-center gap-1" role="group" aria-label="看板视角">
+            <Button type="button" variant={view === 'themes' ? 'primary' : 'ghost'} aria-pressed={view === 'themes'} onClick={() => setView('themes')}>市场题材</Button>
+            <Button type="button" variant={view === 'industries' ? 'primary' : 'ghost'} aria-pressed={view === 'industries'} onClick={() => setView('industries')}>行业</Button>
+          </div>
+          <Button type="button" icon={<RefreshCw aria-hidden="true" className="h-4 w-4" />}
+            loading={loading || breadthLoading} onClick={() => void refresh()}>
+            刷新涨停看板
+          </Button>
           <Button type="button" icon={<BarChart3 aria-hidden="true" className="h-4 w-4" />}
             aria-haspopup="dialog" aria-expanded={marketOpen} onClick={() => setMarketOpen(true)}>
             市场情绪与行业分布
           </Button>
+          <Button type="button" aria-haspopup="dialog" aria-expanded={followUpOpen} onClick={() => setFollowUpOpen(true)}>
+            观察与隔日反馈
+          </Button>
+        </div>
+        {view === 'themes' ? (
+          <MarketThemePanel snapshot={themes} loading={themesLoading} error={themesError}
+            onRefresh={() => void refreshThemes()}
+            onSelect={theme => setThemeSelection({ theme, tradeDate: themes?.tradeDate ?? null })} />
+        ) : null}
+        {view === 'industries' || themesError || themes?.status === 'UNAVAILABLE' ? <div className={view === 'themes' ? 'mt-4 border-t border-line-soft pt-4' : undefined}>
+        {view === 'themes' ? <p className="mb-3 text-xs text-ink-600">题材暂不可用，继续展示涨停股票。</p> : null}
+        <div className="mb-3 flex flex-col gap-1 text-xs text-ink-500" aria-live="polite">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p>数据日 {snapshot?.tradeDate ?? '—'} · 快照获取时间 {snapshot ? formatDateTime(snapshot.fetchedAt) : '—'}</p>
+            <Tag tone={error ? 'danger' : loading || breadthLoading ? 'brand' : 'neutral'}>
+              {loading || breadthLoading ? `更新中${error && snapshot ? ' · 旧快照' : ''}`
+                : error ? `更新失败${snapshot ? ' · 旧快照' : ''}` : snapshot ? '已获取' : '待获取'}
+            </Tag>
+          </div>
+          <p className={snapshot?.dataGaps.length ? 'text-amber-700' : 'text-ink-400'}>
+            数据缺口：{snapshot ? snapshot.dataGaps.join('；') || '无已报告缺口' : '待获取'}
+          </p>
+          <p className="text-[11px] text-ink-400">获取时间不代表源行情时间；盘中快照不代表收盘结论。</p>
         </div>
         <BoardSnapshotStatus snapshot={snapshot} loading={loading} error={error} />
-        {!error && snapshot?.available ? (
+        {snapshot?.available ? (
           <LimitUpIndustryCards snapshot={snapshot} onSelectIndustry={(industry) => {
             setIndustrySelection({ industry, tradeDate: snapshot.tradeDate, fetchedAt: snapshot.fetchedAt,
               limitUpStocks: snapshot.stocks.filter(stock => (stock.industry?.trim() || '未分类') === industry) })
@@ -95,7 +162,13 @@ export function LimitUpBoardPanel() {
         {!loading && (error || !snapshot?.available) ? (
           <Button type="button" variant="ghost" className="mt-3" loading={breadthLoading} onClick={() => void refresh()}>重新加载</Button>
         ) : null}
+        </div> : null}
       </Card>
+      {themeSelection ? <MarketThemeDetailOverlay
+        key={`${themeSelection.tradeDate}:${themeSelection.theme.code}`}
+        selection={themeSelection} onClose={() => setThemeSelection(null)}>
+        {theme => <ThemeRelatedNews theme={theme} />}
+      </MarketThemeDetailOverlay> : null}
       {marketOpen ? (
         <DetailOverlay open title="市场情绪与行业分布"
           subtitle={snapshot ? `${snapshot.tradeDate} · 快照 ${formatDateTime(snapshot.fetchedAt)}` : undefined}
@@ -114,6 +187,11 @@ export function LimitUpBoardPanel() {
       {industrySelection ? (
         <LimitUpIndustryOverlay key={`${industrySelection.tradeDate}:${industrySelection.industry}`}
           selection={industrySelection} onClose={() => setIndustrySelection(null)} />
+      ) : null}
+      {followUpOpen ? (
+        <DetailOverlay open title="观察与隔日反馈" onClose={() => setFollowUpOpen(false)}>
+          <CatchUpFollowUpPanel />
+        </DetailOverlay>
       ) : null}
     </div>
   )
@@ -134,7 +212,9 @@ interface LimitUpBoardDetailProps extends MarketBreadthProps {
 
 function BoardSnapshotStatus({ snapshot, loading, error }: Pick<LimitUpBoardDetailProps, 'snapshot' | 'loading' | 'error'>) {
   if (error) {
-    return <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">涨停看板获取失败：{error}</p>
+    return <p role="alert" className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">
+      涨停看板获取失败：{error}{snapshot ? '；当前保留上次快照（旧快照），请注意数据日和获取时间。' : ''}
+    </p>
   }
   if (!snapshot) {
     return <p className="py-6 text-center text-sm text-ink-400">{loading ? '正在拉取涨停池数据…' : '暂无数据，请稍后重试。'}</p>
@@ -168,7 +248,7 @@ export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthL
             <Metric label="平盘" value={`${breadth.unchanged} 家`} />
             <Metric
               label="跌停"
-              value={!error && snapshot?.available && snapshot.sentiment?.limitDownCount != null
+              value={snapshot?.available && snapshot.sentiment?.limitDownCount != null
                 ? `${snapshot.sentiment.limitDownCount} 家` : '待补充'}
             />
           </dl>
@@ -179,7 +259,7 @@ export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthL
             {breadth.excludedCount > 0 ? ` 排除无当日报价、价格或涨跌幅缺失的 ${breadth.excludedCount} 只。` : ''}
             {breadthLoading ? ' 正在更新…' : ''}
           </p>
-          {!error && snapshot?.available && snapshot.sentiment?.limitDownCount != null ? (
+          {snapshot?.available && snapshot.sentiment?.limitDownCount != null ? (
             <p className="text-[11px] leading-relaxed text-ink-400">
               跌停家数取自 {snapshot.tradeDate} 跌停池 · 快照 {formatDateTime(snapshot.fetchedAt)}。
             </p>
@@ -194,7 +274,7 @@ export function LimitUpBoardDetail({ snapshot, loading, error, breadth, breadthL
         </p>
       ) : null}
       <BoardSnapshotStatus snapshot={snapshot} loading={loading} error={error} />
-      {!error && snapshot?.available && snapshot.sentiment ? (
+      {snapshot?.available && snapshot.sentiment ? (
         <>
           <SentimentSummary
             sentiment={snapshot.sentiment}
@@ -318,10 +398,15 @@ export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
         <h4 className="text-sm font-semibold text-ink-900">涨停明细 · 行业概览</h4>
         <span className="text-xs text-ink-400">{industryGroups.length} 个行业 · {snapshot.stocks.length} 只涨停</span>
       </div>
-      <p className="text-[11px] text-ink-500">按行业涨停家数排序，每卡预览前 3 只；点击卡片查看完整明细。</p>
+      <p className="text-[11px] text-ink-500">按行业涨停家数排序，每卡预览前 3 只；梯队按连续涨停板数统计，与“几天几板”分开。点击卡片查看完整明细。</p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {industryGroups.map(([industry, stocks]) => {
-          const maxBoards = Math.max(...stocks.map(stock => stock.consecutiveBoards))
+          const knownBoards = stocks.map(stock => stock.consecutiveBoards).filter(isKnownBoardCount)
+          const maxBoards = knownBoards.length ? Math.max(...knownBoards) : null
+          const firstBoards = knownBoards.filter(count => count === 1).length
+          const secondBoards = knownBoards.filter(count => count === 2).length
+          const thirdPlusBoards = knownBoards.filter(count => count >= 3).length
+          const unknownBoards = stocks.length - knownBoards.length
           return (
             <button key={industry} type="button" aria-label={`查看${industry}涨停明细`}
               onClick={() => onSelectIndustry?.(industry)}
@@ -330,8 +415,16 @@ export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
                 <span className="min-w-0 truncate text-sm font-semibold text-ink-900" title={industry}>{industry}</span>
                 <Tag tone="warning" className="shrink-0">涨停 {stocks.length} 家</Tag>
               </span>
+              <span className="mt-2 grid grid-cols-3 gap-1 text-[11px] text-ink-600">
+                <span>首板 {firstBoards} 家</span>
+                <span>二板 {secondBoards} 家</span>
+                <span>三板及以上 {thirdPlusBoards} 家</span>
+              </span>
+              {unknownBoards > 0 ? <span className="mt-1 text-[11px] text-amber-700">连板未知 {unknownBoards} 家</span> : null}
               <span className="mt-2 flex items-center justify-between gap-2 text-[11px]">
-                <span className={maxBoards >= 3 ? 'font-medium text-rose-600' : 'text-ink-500'}>最高 {maxBoards} 板</span>
+                <span className={maxBoards !== null && maxBoards >= 3 ? 'font-medium text-rose-600' : 'text-ink-500'}>
+                  {maxBoards === null ? '最高连板未知' : `最高 ${maxBoards} 板`}
+                </span>
                 <span className="text-ink-400">连板 / 首封</span>
               </span>
               <span className="my-2 flex flex-col divide-y divide-line-soft border-t border-line-soft">
@@ -343,7 +436,8 @@ export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
                       <Tag tone={stock.consecutiveBoards >= 3 ? 'danger' : stock.consecutiveBoards >= 2 ? 'warning' : 'neutral'}>
-                        {stock.statDays > 0 ? `${stock.statDays}天${stock.statBoards > 0 ? stock.statBoards : stock.consecutiveBoards}板` : `${stock.consecutiveBoards} 板`}
+                        {stock.statDays > 0 && stock.statBoards > 0 ? `${stock.statDays}天${stock.statBoards}板`
+                          : isKnownBoardCount(stock.consecutiveBoards) ? `${stock.consecutiveBoards} 板` : '连板未知'}
                       </Tag>
                       <span className="tabular text-[11px] text-ink-500">{shortTime(stock.firstSealTime)}</span>
                     </span>
@@ -360,6 +454,10 @@ export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
       </div>
     </section>
   )
+}
+
+function isKnownBoardCount(value: number) {
+  return Number.isInteger(value) && value > 0
 }
 
 function shortTime(value: string | null) {

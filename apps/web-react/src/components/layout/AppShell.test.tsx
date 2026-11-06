@@ -56,8 +56,15 @@ describe('AppShell', () => {
     expect(document.querySelector('[data-testid="nav-rail"]')).not.toBeNull()
   })
 
+  it('opens the overseas dashboard without the global header', async () => {
+    await renderShell(root, '/overseas')
+
+    expect(document.querySelector('[data-testid="global-header"]')).toBeNull()
+    expect(document.querySelector('[data-testid="nav-rail"]')).not.toBeNull()
+  })
+
   it('keeps the global header on other business pages too', async () => {
-    await renderShell(root, '/potential-leader')
+    await renderShell(root, '/watchlist')
 
     expect(document.querySelector('[data-testid="global-header"]')).not.toBeNull()
   })

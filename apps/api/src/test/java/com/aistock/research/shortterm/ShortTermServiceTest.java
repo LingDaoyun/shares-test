@@ -39,6 +39,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -154,6 +162,70 @@ class ShortTermServiceTest {
         }
         for (String symbol : eastMoneyClient.requestedFundFlowBatches.get(1)) {
             assertThat(find(report, symbol).score().mainNetInflowRatio()).isEqualByComparingTo("8");
+        }
+    }
+
+    @Test
+    void interruptingScanStopsKlineWorkersWithoutStartingRemainingStocks() throws Exception {
+        int candidateCount = Math.max(64, ForkJoinPool.getCommonPoolParallelism() + 2);
+        prepareEligiblePool(candidateCount);
+        CountDownLatch workersStarted = new CountDownLatch(1);
+        CountDownLatch releaseWorkers = new CountDownLatch(1);
+        CountDownLatch workerInterrupted = new CountDownLatch(1);
+        AtomicInteger requests = new AtomicInteger();
+        AtomicReference<Throwable> scanFailure = new AtomicReference<>();
+        AtomicBoolean scanInterruptPreserved = new AtomicBoolean();
+        eastMoneyClient.beforeKlineFetch = symbol -> {
+            if (requests.incrementAndGet() == 1) return; // The source probe succeeds before parallel work.
+            workersStarted.countDown();
+            try {
+                releaseWorkers.await();
+            } catch (InterruptedException interrupted) {
+                workerInterrupted.countDown();
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("测试行情请求被中断", interrupted);
+            }
+        };
+        Thread scanThread = new Thread(() -> {
+            try {
+                service.report(new ShortTermScanRequest(
+                        0, 0, 0, null, null, null, null, null, null, false, false));
+            } catch (Throwable failure) {
+                scanFailure.set(failure);
+                scanInterruptPreserved.set(Thread.currentThread().isInterrupted());
+            }
+        }, "test-short-term-cancel");
+        scanThread.setDaemon(true);
+        scanThread.start();
+        try {
+            assertThat(workersStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            scanThread.interrupt();
+            scanThread.join(2000);
+
+            assertThat(scanThread.isAlive()).as("cancelled scan must stop waiting for K-line workers").isFalse();
+            assertThat(scanFailure.get()).isInstanceOf(CancellationException.class);
+            assertThat(scanInterruptPreserved.get()).isTrue();
+            assertThat(workerInterrupted.await(2, TimeUnit.SECONDS)).isTrue();
+            int startedRequests = requests.get();
+            assertThat(startedRequests).isLessThan(candidateCount);
+        } finally {
+            releaseWorkers.countDown();
+            scanThread.interrupt();
+            scanThread.join(5000);
+        }
+    }
+
+    @Test
+    void alreadyInterruptedScanDoesNotRequestMarketData() {
+        Thread.currentThread().interrupt();
+        try {
+            assertThatThrownBy(() -> service.report(ShortTermScanRequest.empty()))
+                    .isInstanceOf(CancellationException.class);
+            assertThat(eastMoneyClient.requestedQuoteLimit).isZero();
+            assertThat(eastMoneyClient.requestedKlineSymbols).isEmpty();
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            Thread.interrupted();
         }
     }
 
@@ -320,6 +392,33 @@ class ShortTermServiceTest {
             assertThat(candidate.todayAdvice().action()).isEqualTo("WAIT");
             assertThat(candidate.tradePlan().status()).isEqualTo("BLOCKED");
         });
+    }
+
+    @Test
+    void fullScanStopsBeforeStockAnalysisWhenRawUniverseIsIncomplete() {
+        prepareEligiblePool(20);
+        eastMoneyClient.snapshotExpectedCount = 20;
+        eastMoneyClient.snapshotComplete = false;
+
+        ShortTermReport report = service.report(new ShortTermScanRequest(
+                0, 0, 0, null, null, null, null, null, null, false, false));
+
+        assertThat(report.coverage().coverageRatio()).isEqualByComparingTo("1");
+        assertThat(report.coverage().rawComplete()).isFalse();
+        assertThat(report.coverage().executionReliable()).isFalse();
+        assertThat(report.coverage().rawFetchedCount()).isEqualTo(20);
+        assertThat(report.coverage().rawExpectedCount()).isEqualTo(20);
+        assertThat(report.candidates()).isEmpty();
+        assertThat(report.reviewedSymbols()).isEmpty();
+        assertThat(report.technicalReviewCoverage().requestedCount()).isZero();
+        assertThat(eastMoneyClient.requestedKlineSymbols).isEmpty();
+        assertThat(eastMoneyClient.requestedFinancialSymbols).isEmpty();
+        assertThat(eastMoneyClient.requestedIntradaySymbols).isEmpty();
+        assertThat(report.quoteNote()).contains("原始行情全集未通过校验", "未进行个股技术和财务复核");
+        ShortTermFinalResultGate gate = new ShortTermFinalResultGate(
+                new ShortTermAutomationSettings(new MockEnvironment()), tradingClockService);
+        assertThat(gate.evaluateManual(report, TEST_CLOCK.instant()).status())
+                .isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
     }
 
     @Test
@@ -854,7 +953,7 @@ class ShortTermServiceTest {
 
         assertThat(report.candidates()).hasSize(5);
         assertThat(report.candidates()).allSatisfy(candidate -> {
-            assertThat(candidate.signalProfile().research().ruleVersion()).isEqualTo("short-term-research-v7-market-context");
+            assertThat(candidate.signalProfile().research().ruleVersion()).isEqualTo("short-term-research-v8-intraday-overnight");
             assertThat(candidate.todayAdvice().action()).isNotIn("ADD", "LIGHT_TRIAL");
             assertThat(candidate.tradePlan().status()).isEqualTo("BLOCKED");
         });
@@ -998,8 +1097,8 @@ class ShortTermServiceTest {
                 quote("600601", "确认样本", "10.62", "1.20", "90", "12", "600000000"),
                 quote("600602", "观察样本", "10.62", "1.20", "12", "1.2", "600000000")
         );
-        eastMoneyClient.klines.put("600601", rightEarlyKLines("600601", "10.62", "180000"));
-        eastMoneyClient.klines.put("600602", rightEarlyKLines("600602", "10.62", "105000"));
+        eastMoneyClient.klines.put("600601", rightEarlyKLinesWithoutRisingRecentLows("600601", "10.62", "180000"));
+        eastMoneyClient.klines.put("600602", rightEarlyKLinesWithoutRisingRecentLows("600602", "10.62", "105000"));
         eastMoneyClient.financials.put("600601", acceptableFinancial("600601"));
         eastMoneyClient.financials.put("600602", goodFinancial("600602"));
 
@@ -1007,6 +1106,8 @@ class ShortTermServiceTest {
 
         ShortTermCandidate confirmed = find(report, "600601");
         ShortTermCandidate observed = find(report, "600602");
+        assertThat(confirmed.signalProfile().research().setupType()).isNotEqualTo("TREND_PULLBACK");
+        assertThat(observed.signalProfile().research().setupType()).isNotEqualTo("TREND_PULLBACK");
         assertThat(confirmed.technical().rightSideSignal()).isEqualTo("右侧早期确认");
         assertThat(observed.technical().rightSideSignal()).isEqualTo("右侧早期观察");
         assertThat(confirmed.action()).isEqualTo(observed.action()).isEqualTo("WAIT_CONFIRM");
@@ -1284,14 +1385,16 @@ class ShortTermServiceTest {
                 quote("600603", "待复核确认样本", "10.62", "1.20", "18", "1.6", "600000000"),
                 quote("600604", "可执行观察样本", "10.62", "1.20", "18", "1.6", "600000000")
         );
-        eastMoneyClient.klines.put("600603", rightEarlyKLines("600603", "10.62", "180000"));
-        eastMoneyClient.klines.put("600604", rightEarlyKLines("600604", "10.62", "105000"));
+        eastMoneyClient.klines.put("600603", rightEarlyKLinesWithoutRisingRecentLows("600603", "10.62", "180000"));
+        eastMoneyClient.klines.put("600604", rightEarlyKLinesWithoutRisingRecentLows("600604", "10.62", "105000"));
         eastMoneyClient.financials.put("600604", goodFinancial("600604"));
 
         ShortTermReport report = service.report(2, 100, 10, null,null, null, null, null, null, null);
 
         ShortTermCandidate blocked = find(report, "600603");
         ShortTermCandidate eligible = find(report, "600604");
+        assertThat(blocked.signalProfile().research().setupType()).isNotEqualTo("TREND_PULLBACK");
+        assertThat(eligible.signalProfile().research().setupType()).isNotEqualTo("TREND_PULLBACK");
         assertThat(blocked.technical().rightSideSignal()).isEqualTo("右侧早期确认");
         assertThat(blocked.action()).isEqualTo("DATA_REVIEW");
         assertThat(eligible.technical().rightSideSignal()).isEqualTo("右侧早期观察");
@@ -1306,8 +1409,8 @@ class ShortTermServiceTest {
                 quote("600605", "等回踩确认样本", "12.90", "1.20", "18", "1.6", "600000000"),
                 quote("600606", "右侧观察样本", "10.62", "1.20", "18", "1.6", "600000000")
         );
-        eastMoneyClient.klines.put("600605", rightEarlyKLines("600605", "12.90", "180000"));
-        eastMoneyClient.klines.put("600606", rightEarlyKLines("600606", "10.62", "105000"));
+        eastMoneyClient.klines.put("600605", rightEarlyKLinesWithoutRisingRecentLows("600605", "12.90", "180000"));
+        eastMoneyClient.klines.put("600606", rightEarlyKLinesWithoutRisingRecentLows("600606", "10.62", "105000"));
         eastMoneyClient.quotes.forEach(quote ->
                 eastMoneyClient.financials.put(quote.symbol(), goodFinancial(quote.symbol())));
         ShortTermChipAnalysisService chipAnalysis = mock(ShortTermChipAnalysisService.class);
@@ -1321,6 +1424,8 @@ class ShortTermServiceTest {
 
         ShortTermCandidate pullback = find(report, "600605");
         ShortTermCandidate observation = find(report, "600606");
+        assertThat(pullback.signalProfile().research().setupType()).isNotEqualTo("TREND_PULLBACK");
+        assertThat(observation.signalProfile().research().setupType()).isNotEqualTo("TREND_PULLBACK");
         assertThat(pullback.technical().rightSideSignal()).isEqualTo("右侧已拉开");
         assertThat(pullback.action()).isEqualTo("WAIT_PULLBACK");
         assertThat(observation.technical().rightSideSignal()).isEqualTo("右侧早期观察");
@@ -2544,6 +2649,20 @@ class ShortTermServiceTest {
         return endingOn(rows, LocalDate.parse("2026-07-06"));
     }
 
+    private List<EastMoneyKLine> rightEarlyKLinesWithoutRisingRecentLows(
+            String symbol, String finalClose, String finalVolume) {
+        List<EastMoneyKLine> rows = new ArrayList<>(rightEarlyKLines(symbol, finalClose, finalVolume));
+        BigDecimal recentLow = rows.get(rows.size() - 2).low().min(rows.get(rows.size() - 1).low());
+        // Keep closes, volume and the latest candle for the legacy ranking cases. Equal early/late
+        // lows exclude the independent intraday-pullback background added on 2026-10-19.
+        for (int index = rows.size() - 5; index < rows.size() - 3; index++) {
+            EastMoneyKLine row = rows.get(index);
+            rows.set(index, new EastMoneyKLine(row.symbol(), row.tradeDate(), row.open(), row.close(),
+                    row.high(), recentLow, row.volume(), row.amount()));
+        }
+        return rows;
+    }
+
     private List<EastMoneyKLine> recentGoldenCrossKLines(String symbol, int barsAfterCross) {
         List<BigDecimal> closes = new ArrayList<>(Collections.nCopies(20, new BigDecimal("10.00")));
         closes.add(new BigDecimal("10.50"));
@@ -3021,6 +3140,7 @@ class ShortTermServiceTest {
         };
         private Set<String> unstableIndustrySymbols = Set.of();
         private final List<String> requestedKlineSymbols = Collections.synchronizedList(new ArrayList<>());
+        private Consumer<String> beforeKlineFetch = symbol -> { };
         private final List<String> requestedFinancialSymbols = Collections.synchronizedList(new ArrayList<>());
         private final List<String> requestedIntradaySymbols = Collections.synchronizedList(new ArrayList<>());
         private final List<List<String>> requestedFundFlowBatches = new ArrayList<>();
@@ -3080,6 +3200,7 @@ class ShortTermServiceTest {
         @Override
         public List<EastMoneyKLine> fetchDailyKLines(String symbol, LocalDate begin, LocalDate end) {
             requestedKlineSymbols.add(symbol);
+            beforeKlineFetch.accept(symbol);
             return klines.getOrDefault(symbol, List.of());
         }
 
@@ -3111,6 +3232,13 @@ class ShortTermServiceTest {
         @Override
         public List<EastMoneyIntradayPoint> fetchIntradayTrends(String symbol) {
             requestedIntradaySymbols.add(symbol);
+            return intraday.getOrDefault(symbol, List.of());
+        }
+
+        @Override
+        public List<EastMoneyIntradayPoint> fetchIntradayOhlcv(String symbol) {
+            requestedIntradaySymbols.add(symbol);
+            // Use the explicit OHLCV fixtures; unit tests must not request live minute bars.
             return intraday.getOrDefault(symbol, List.of());
         }
 

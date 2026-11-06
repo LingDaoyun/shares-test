@@ -1,11 +1,12 @@
 import { formatNumber, formatPerSharePrice } from '../../lib/format'
 import type { ShortTermCandidate, ShortTermResearchSetup } from '../../types'
 import { Tag } from '../ui/Badge'
+import { isMorningOvernightPlan } from './OvernightTradePlanPanel'
 
 export const researchSetupFilters = [
   { value: 'ALL', label: '全部形态' },
   { value: 'CONTRACTION_BREAKOUT', label: '收缩突破' },
-  { value: 'TREND_PULLBACK', label: '趋势回踩' },
+  { value: 'TREND_PULLBACK', label: '分时回踩' },
   { value: 'SUPPORT_REVERSAL', label: '支撑反转' },
   { value: 'GOLDEN_CROSS_MOMENTUM', label: '金叉动量' }
 ] as const
@@ -22,6 +23,9 @@ export function ResearchScoreTag({ research }: { research: ShortTermResearchSetu
 
 export function CandidateExecutionTag({ candidate }: { candidate: ShortTermCandidate }) {
   const executable = candidate.tradePlan?.status === 'ACTIONABLE'
+    && isMorningOvernightPlan(candidate.tradePlan)
+    && (candidate.signalProfile?.research?.setupType !== 'TREND_PULLBACK'
+      || candidate.tailSignal?.intradayPullback?.status === 'CONFIRMED')
     && (candidate.todayAdvice.action === 'ADD' || candidate.todayAdvice.action === 'LIGHT_TRIAL')
   const pullback = candidate.todayAdvice.action === 'WAIT_PULLBACK'
   return (
@@ -46,13 +50,15 @@ export function ShortTermResearchPanel({ research }: { research: ShortTermResear
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold text-ink-900">研究买点 · {research.setupLabel}</h3>
           <Tag tone={research.state === 'CONFIRMED' ? 'brand' : 'neutral'}>
-            {research.state === 'CONFIRMED' ? '形态确认' : research.state === 'WATCH' ? '形态待确认' : '数据待补'}
+            {research.setupType === 'TREND_PULLBACK' && research.state === 'WATCH'
+              ? '日线背景通过'
+              : research.state === 'CONFIRMED' ? '形态确认' : research.state === 'WATCH' ? '形态待确认' : '数据待补'}
           </Tag>
         </div>
         <ResearchScoreTag research={research} />
       </div>
       <p className="mt-2 text-xs leading-relaxed text-ink-500">
-        研究分是规则匹配度，并非上涨概率；1–2 日持有为本项目改编，初始研究参数待前瞻验证。
+        研究分是规则匹配度，并非上涨概率；尾盘入场、下一交易日早盘退出，初始研究参数待前瞻验证。
       </p>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {components.map((item) => (
@@ -66,21 +72,21 @@ export function ShortTermResearchPanel({ research }: { research: ShortTermResear
       <p className="mt-2 text-xs leading-relaxed text-ink-500">各项得分满分 100，按权重折算贡献后相加。缺失数据保留待补充，不以旧版分数替代。</p>
       <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
         <div className="border-l-2 border-brand-200 pl-2.5">
-          <dt className="text-ink-500">触发观察价</dt>
+          <dt className="text-ink-500">{research.setupType === 'TREND_PULLBACK' ? '日线背景观察价' : '触发观察价'}</dt>
           <dd className="mt-1 font-semibold text-ink-900">{price(research.triggerPrice)}</dd>
         </div>
         <div className="border-l-2 border-amber-200 pl-2.5">
-          <dt className="text-ink-500">形态失效参考价</dt>
+          <dt className="text-ink-500">{research.setupType === 'TREND_PULLBACK' ? '日线背景失效价' : '形态失效参考价'}</dt>
           <dd className="mt-1 font-semibold text-ink-900">{price(research.invalidationPrice)}</dd>
         </div>
       </dl>
-      <p className="mt-2 text-xs leading-relaxed text-ink-500">以上价格仅用于观察形态触发与失效，不保证成交或收益；是否可执行仍以尾盘确认及隔夜交易计划为准。</p>
+      <p className="mt-2 text-xs leading-relaxed text-ink-500">以上价格仅用于观察形态触发与失效；分时回踩确认后以实际回踩低点作为失效参考。是否可执行以分时证据、尾盘确认及隔夜交易计划为准。</p>
       <ResearchNotes label="形态证据" items={research.evidence} />
       <ResearchNotes label="风险与反证" items={research.risks} warning />
       <ResearchNotes label="数据缺口" items={research.dataGaps} warning />
       <details className="mt-3 border-t border-brand-100 pt-2 text-xs text-ink-500">
         <summary className="cursor-pointer font-medium text-ink-700">方法来源与参数说明</summary>
-        <p className="mt-2 leading-relaxed">参考公开的突破、趋势回踩及量价确认方法，并结合本项目支撑反转和金叉动量规则；具体阈值属于本项目研究参数，尚未证明有效。</p>
+        <p className="mt-2 leading-relaxed">回踩分支先筛五日整理与低点抬高，再以真实分钟数据确认下午10分钟缩量回踩均价线、放量突破小平台；其他形态保留各自规则。具体阈值属于初始研究参数，尚未证明有效。</p>
         <ul className="mt-2 flex flex-col gap-1.5">
           <li><a className="text-brand-700 underline" href="https://qullamaggie.com/my-3-timeless-setups-that-have-made-me-tens-of-millions/" target="_blank" rel="noreferrer">Qullamaggie：突破形态与整理</a></li>
           <li><a className="text-brand-700 underline" href="https://get.investors.com/wp-content/uploads/2023/05/MS-How-to-Read-Stock-Charts.pdf" target="_blank" rel="noreferrer">IBD：图表、趋势与量价基础</a></li>

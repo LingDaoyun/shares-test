@@ -6,9 +6,11 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from './api/client'
+import { fetchMarketThemes } from './api/marketThemes'
 import type { ShortTermLimitUpBoardSnapshot } from './types'
 
 vi.mock('./hooks/useBootstrap', () => ({ useBootstrap: vi.fn() }))
+vi.mock('./api/marketThemes', () => ({ fetchMarketThemes: vi.fn(), fetchMarketThemeDetail: vi.fn() }))
 vi.mock('./pages/ShortTermPage', () => ({
   ShortTermPage: () => <section aria-label="独立短线页面">短线扫描内容</section>
 }))
@@ -19,7 +21,6 @@ vi.mock('./api/client', () => ({
   fetchShortTermLimitUpBoard: vi.fn(),
   fetchShortTermMarketBreadth: vi.fn(),
   fetchShortTermCatchUp: vi.fn(),
-  fetchRules: vi.fn(),
   fetchLlmConfig: vi.fn(),
   fetchRuntimeConfig: vi.fn()
 }))
@@ -51,6 +52,11 @@ describe('App home routes and navigation', () => {
     vi.clearAllMocks()
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(board)
     vi.mocked(fetchShortTermMarketBreadth).mockResolvedValue(null as never)
+    vi.mocked(fetchMarketThemes).mockResolvedValue({
+      tradeDate: '2026-10-16', fetchedAt: '2026-10-16T07:00:00Z', status: 'UNAVAILABLE',
+      source: '路由测试的市场题材', totalConceptCount: 0, excludedStructuralCount: 0,
+      validQuoteCount: 0, themes: [], dataGaps: []
+    })
     vi.stubGlobal('ResizeObserver', class {
       observe() {}
       unobserve() {}
@@ -88,10 +94,11 @@ describe('App home routes and navigation', () => {
   function expectHome() {
     expect(host.querySelector('output[aria-label="当前路由"]')?.textContent).toBe('/limit-up')
     expect(host.querySelector('header')).toBeNull()
-    expect(host.querySelector('main')?.textContent).toContain('路由测试的涨停快照')
+    expect(host.querySelector('main')?.textContent).toContain('路由测试的市场题材')
     expect(host.querySelector('section[aria-label="独立短线页面"]')).toBeNull()
     expect(host.querySelector('nav button[aria-current="page"]')?.textContent).toContain('涨停看板')
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalled()
+    expect(fetchMarketThemes).toHaveBeenCalled()
   }
 
   it.each(['/', '/limit-up', '/unknown-page'])('opens the real limit-up home from %s', async path => {
@@ -108,10 +115,22 @@ describe('App home routes and navigation', () => {
     expect(fetchShortTermLimitUpBoard).not.toHaveBeenCalled()
   })
 
+  it.each(['/hotspots', '/market', '/potential-leader', '/five-day', '/first-board-alert', '/trade-review', '/rules'])('returns retired module path %s to the home board', async path => {
+    await renderRoute(path)
+    expectHome()
+  })
+
+  it('removes the retired modules from the navigation menu', async () => {
+    await renderRoute('/settings')
+    const labels = Array.from(host.querySelectorAll<HTMLButtonElement>('nav[aria-label="模块菜单"] button'))
+      .map(button => button.getAttribute('aria-label'))
+    expect(labels).toEqual(['涨停看板', '短线右侧', '消息面', '外围市场', '特别关注', '配置'])
+  })
+
   it('navigates between the first home item and the existing short-term item', async () => {
     await renderRoute('/short-term')
     const buttons = Array.from(host.querySelectorAll<HTMLButtonElement>('nav[aria-label="模块菜单"] button'))
-    expect(buttons).toHaveLength(10)
+    expect(buttons).toHaveLength(6)
     expect(buttons[0].textContent).toContain('涨停看板')
     expect(buttons[0].querySelector('small')?.textContent).toBe('首页')
     await act(async () => { buttons[0].click() })

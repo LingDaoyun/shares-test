@@ -19,7 +19,8 @@ public class ShortTermTradePlanService {
     private static final BigDecimal ONE = BigDecimal.ONE;
     private static final BigDecimal MINIMUM_PRICE_TICK = new BigDecimal("0.01");
     private static final BigDecimal FIRST_REDUCTION_RATIO = new BigDecimal("0.50");
-    private static final String STRATEGY_LABEL = "隔夜超短波段";
+    private static final String STRATEGY_LABEL = "隔夜早盘退出";
+    private static final LocalTime DEFAULT_EXIT_TIME = LocalTime.of(10, 0);
     private static final List<String> BLOCKED_RISK_WARNINGS = List.of(
             "当前计划未通过执行闸门，仅保留风险依据，不构成可执行交易建议。");
 
@@ -40,10 +41,8 @@ public class ShortTermTradePlanService {
         Objects.requireNonNull(rules, "rules");
         BigDecimal atr14Percent = technical == null ? null : technical.atr14Percent();
         BigDecimal recentSupportPrice = technical == null ? null : technical.recentSupportPrice();
-        LocalDate normalExitDate = tradeDate == null ? null : tradingClockService.nextTradingDay(tradeDate);
-        LocalDate absoluteExitDate = tradeDate == null
-                ? null
-                : tradingClockService.tradingDayAfter(tradeDate, 2);
+        LocalDate normalExitDate = tradingClockService.verifiedTradingDayAfter(tradeDate, 1).orElse(null);
+        LocalDate absoluteExitDate = normalExitDate;
         Instant validUntil = tradeDate == null
                 ? null
                 : ZonedDateTime.of(
@@ -231,17 +230,23 @@ public class ShortTermTradePlanService {
             LocalDate absoluteExitDate,
             List<String> analysisBasis
     ) {
+        LocalTime exitTime = morningExitTime(rules.normalExitTime());
+        List<String> basis = new ArrayList<>(analysisBasis);
+        if (normalExitDate == null) {
+            status = "BLOCKED";
+            basis.add("下一交易日的交易日历未核实，无法确定隔夜退出日期，计划不可执行");
+        }
         return new ShortTermTradePlan(
                 STRATEGY_LABEL,
                 status,
-                "BLOCKED".equals(status) ? List.copyOf(analysisBasis) : List.of(),
+                "BLOCKED".equals(status) ? List.copyOf(basis) : List.of(),
                 time(rules.entryStart()) + "-" + time(rules.entryEnd()),
                 validUntil,
                 money(referencePrice),
                 money(entryLow),
                 money(entryHigh),
                 rules.maxPositionRatio(),
-                rules.maxT2PositionRatio(),
+                BigDecimal.ZERO,
                 percentValue(firstTargetPercent),
                 money(firstTargetPrice),
                 FIRST_REDUCTION_RATIO,
@@ -251,59 +256,59 @@ public class ShortTermTradePlanService {
                 money(hardStopPrice),
                 rules.trailingDrawdownPercent(),
                 "首次止盈后启动移动止损；剩余仓位从目标后最高价回撤 "
-                        + percent(rules.trailingDrawdownPercent()) + "% 时退出",
+                        + percent(rules.trailingDrawdownPercent()) + "% 时退出，最晚不超过 T+1 " + time(exitTime),
                 normalExitDate,
-                rules.normalExitTime(),
+                exitTime,
                 absoluteExitDate,
-                rules.normalExitTime(),
-                List.of(
-                        "T+1 收益为正",
-                        "T+1 收盘价高于 MA5",
-                        "T+1 收盘价高于信号日收盘价",
-                        "行情新鲜度和风险闸门均未失败"
-                ),
-                openScenarios(),
-                List.copyOf(analysisBasis),
+                exitTime,
+                List.of(),
+                openScenarios(exitTime),
+                List.copyOf(basis),
                 "BLOCKED".equals(status)
                         ? BLOCKED_RISK_WARNINGS
-                        : actionableRiskWarnings(rules)
+                        : actionableRiskWarnings(exitTime)
         );
     }
 
-    private List<String> actionableRiskWarnings(OvernightRuleSet rules) {
+    private List<String> actionableRiskWarnings(LocalTime exitTime) {
         return List.of(
                 "普通 A 股新买仓位遵循 T+1：买入当日无法卖出，盘中急跌也只能等次一交易日处理。",
                 "最大仓位比例是相对于短线资金分配，不是总账户资产。",
-                "T+2 只允许保留不超过计划仓位的 "
-                        + percent(rules.maxT2PositionRatio().movePointRight(2)) + "%，"
-                        + "并必须在 " + time(rules.normalExitTime()) + " 前退出。"
+                "T+1 未冲高或未达到止盈目标，也按 " + time(exitTime) + " 截止退出，不延长至 T+2。",
+                "停牌、跌停或流动性不足可能导致无法按时成交；本模块仅生成计划，不自动下单或记录成交。"
         );
     }
 
-    private List<ShortTermOpenScenario> openScenarios() {
+    private List<ShortTermOpenScenario> openScenarios(LocalTime exitTime) {
+        String deadline = "T+1 " + time(exitTime);
         return List.of(
                 new ShortTermOpenScenario(
                         "HIGH_OPEN",
                         "明显高开",
                         "T+1 开盘涨幅达到第一止盈目标附近或以上",
-                        "不追价；已有仓位优先兑现至少一半，剩余仓位按移动止损处理",
+                        "已有仓位优先兑现至少一半，剩余仓位按移动止损处理，最晚于 " + deadline + " 截止退出",
                         List.of("开盘后跌回参考入场价", "放量冲高回落", "行情或风险闸门失败")
                 ),
                 new ShortTermOpenScenario(
                         "FLAT_OPEN",
                         "平开或小幅波动",
                         "T+1 开盘围绕参考入场价窄幅波动",
-                        "观察 MA5、前收盘价和量价承接；未达到延长条件则在 T+1 14:50 前退出",
-                        List.of("跌破硬止损价", "跌破 MA5 且无法收回", "行情或风险闸门失败")
+                        "冲高达到目标按计划兑现；未冲高或未达到目标也于 " + deadline + " 截止退出，不继续等待",
+                        List.of("跌破硬止损价", "冲高回落触及移动止损", "行情或风险闸门失败")
                 ),
                 new ShortTermOpenScenario(
                         "LOW_OPEN",
                         "明显低开",
                         "T+1 开盘低于参考入场价且接近或跌破硬止损价",
-                        "承担 T+1 强制隔夜风险；新仓买入当日无法卖出，只能在次一交易日开盘后按硬止损纪律处理",
+                        "承担 T+1 强制隔夜风险；次一交易日开盘后触及硬止损优先退出，未触发也于 " + deadline + " 截止退出",
                         List.of("一字跌停无法成交时只记录延迟退出风险", "打开跌停后优先执行风险退出", "不得补仓摊低成本")
                 )
         );
+    }
+
+    private LocalTime morningExitTime(LocalTime configured) {
+        return configured != null && !configured.isBefore(LocalTime.of(9, 30))
+                && !configured.isAfter(LocalTime.of(11, 30)) ? configured : DEFAULT_EXIT_TIME;
     }
 
     private BigDecimal priceAbove(BigDecimal referencePrice, BigDecimal targetPercent) {

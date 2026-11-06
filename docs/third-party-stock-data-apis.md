@@ -575,7 +575,7 @@ CSV 行字段映射：
 | 项 | 内容 |
 | --- | --- |
 | 调用方法 | `EastMoneyClient.fetchDailyKLineSeries` 的优先路径 `fetchTencentDailyKLines` |
-| URL | `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get` |
+| URL | `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get`（原始公开接口优先；网络失败时保留 `proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get` 备用。HTML/验证页面不能作为K线数据。） |
 | Method | `GET` |
 | 业务用途 | 历史 K 线主数据源，供近一年 K 线、技术指标、筹码本地模型、回测使用。 |
 
@@ -785,11 +785,12 @@ CSV 行字段映射：
 | 机制 | 当前实现 |
 | --- | --- |
 | 东方财富 Host 轮询 | 对 `push2.eastmoney.com`、`push2delay.eastmoney.com` 和数字前缀 `*.push2.eastmoney.com` 做候选 Host 轮询。候选包括 `push2delay`、`push2`、`17.push2`、`29.push2`、`73.push2`、`91.push2`。 |
-| 全市场行情备用 | 东方财富无法返回行情时，分页获取新浪 `Market_Center.getHQNodeData?node=hs_a` 的沪深北证券清单，复用腾讯批量行情；清单前后总数一致、实际返回覆盖完整才标记完整。另核验申万证券Ⅱ `sw2_490100` 完整清单并补充证券行业标记，保留原券商排除规则；行业清单不完整则报错。股票缺失、重复冲突或规模变化仍受原覆盖率和交易时间门禁约束。 |
+| 全市场行情备用 | 东方财富无法完整返回行情时，分页获取新浪 `hs_a`，逐代码核验其集合恰等于 `sh_a`、`sz_a`、`hs_bjs` 三个分市场的无交叉并集；每个节点必须前后总数稳定、无非法身份、无重复且完整覆盖。另核验 `kcb` 的688股票与沪市688集合完全一致，再补入689科创CDR（新浪 `hs_a` 不含九号公司689009）。只有该独立清单核验成功、腾讯行情精确全覆盖且无冲突时才可标记完整，来源明确为“新浪沪深京A股及科创CDR清单（分市场身份核验）”，不以两源总数相等证明身份等价。核验失败保留不完整状态；原95%有效报价、交易日/时间及K线门禁不变。仍核验申万证券Ⅱ `sw2_490100` 完整清单以保留券商排除规则。限量研究不执行额外全集核验，也不宣称全市场完整。 |
 | 东方财富限速 | 同进程内最小请求间隔 650 ms。 |
 | 东方财富请求方式 | 先 `RestClient`，失败后使用 `curl -L --compressed --ipv4 --http1.1` 兜底。 |
 | 腾讯编码 | `qt.gtimg.cn` 响应按 GB18030 解码。 |
 | K 线完整性 | 腾讯优先，东方财富回退；如果只拿到部分数据，工程标记为 `HISTORICAL_KLINE_PARTIAL` 并拒绝把部分数据当完整证据。 |
+| K 线源访问受阻 | 腾讯响应明确为 `waf.tencent.com/501page.html` 验证页面时停止继续请求该股票的时间分片，仍允许东方财富提供完整日线。备用源也无法补齐时，右侧扫描终止并取消排队复核，显示源访问受阻原因；普通个股缺历史仍单独记录缺口，不据此判定全源故障。 |
 | 筹码认证 | Tushare 未配置、超时、限流或业务错误时，短线筹码展示降级为本地单源，不阻断扫描。 |
 | 巨潮公告 | 先用证券列表解析 `orgId`，失败后按交易所编码猜测；公告和 PDF 失败均不阻断公司主流程。 |
 | Token 安全 | Tushare Token 只来自环境变量，不能写入仓库、日志、报告或前端响应。 |

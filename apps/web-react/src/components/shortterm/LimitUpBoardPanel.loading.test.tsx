@@ -6,10 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermMarketBreadth } from '../../types'
 import { LimitUpBoardPanel } from './LimitUpBoardPanel'
+import { fetchMarketThemes } from '../../api/marketThemes'
+
+vi.mock('../../api/marketThemes', () => ({ fetchMarketThemes: vi.fn(), fetchMarketThemeDetail: vi.fn() }))
 
 vi.mock('../../api/client', () => ({
   fetchShortTermLimitUpBoard: vi.fn(),
   fetchShortTermMarketBreadth: vi.fn()
+}))
+vi.mock('./CatchUpFollowUpPanel', () => ({
+  CatchUpFollowUpPanel: () => <p>观察反馈测试内容</p>,
 }))
 
 const board: ShortTermLimitUpBoardSnapshot = {
@@ -48,6 +54,7 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
   beforeEach(() => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     vi.resetAllMocks()
+    vi.mocked(fetchMarketThemes).mockResolvedValue({ tradeDate: null, fetchedAt: "2026-10-26T07:00:00Z", status: "UNAVAILABLE", source: "东方财富概念板块", totalConceptCount: 0, excludedStructuralCount: 0, validQuoteCount: 0, themes: [], dataGaps: ["题材源暂不可用"] })
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(board)
     vi.mocked(fetchShortTermMarketBreadth).mockResolvedValue(breadth)
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { callback(0); return 1 })
@@ -67,6 +74,7 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
 
   async function renderPanel() {
     await act(async () => { root.render(<LimitUpBoardPanel />) })
+    await act(async () => { Array.from(host.querySelectorAll("button")).find(button => button.textContent === "行业")?.click() })
   }
 
   async function clickButton(label: string) {
@@ -81,6 +89,23 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     return clickButton('市场情绪与行业分布')
   }
 
+  it('defaults to market themes while keeping the industry snapshot available behind the switch', async () => {
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
+    vi.mocked(fetchMarketThemes).mockResolvedValue({ tradeDate: '2026-10-26', fetchedAt: '2026-10-26T07:00:00Z',
+      status: 'READY', source: '东方财富概念板块', totalConceptCount: 1, excludedStructuralCount: 0, validQuoteCount: 1,
+      themes: [{ code: 'BK1090', name: '机器人概念', changePercent: 2.5, amount: 1000000000,
+        advancing: 8, declining: 2, unchanged: 0, advancingRatioPercent: 80, marketTimestamp: '2026-10-26T07:00:00Z' }], dataGaps: [] })
+    await act(async () => { root.render(<LimitUpBoardPanel />) })
+    expect(host.textContent).toContain('机器人概念')
+    expect(host.querySelector('section[aria-label="涨停行业卡片"]')).toBeNull()
+    expect(fetchMarketThemes).toHaveBeenCalledTimes(1)
+    await clickButton('行业')
+    expect(host.querySelector('button[aria-label="查看半导体涨停明细"]')).not.toBeNull()
+    await clickButton('市场题材')
+    expect(host.textContent).toContain('机器人概念')
+    expect(fetchMarketThemes).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps market data hidden until the market sentiment button is opened', async () => {
     await renderPanel()
 
@@ -89,7 +114,8 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(host.textContent).not.toContain('最新可用涨跌数据')
     expect(host.textContent).not.toContain('上涨3123 家')
-    expect(host.textContent).not.toContain('2026-09-11')
+    expect(host.textContent).toContain('数据日 2026-09-11')
+    expect(host.textContent).toContain('快照获取时间 2026-09-11 10:00:00')
     const trigger = host.querySelector('button[aria-haspopup="dialog"]')
     expect(trigger?.textContent).toBe('市场情绪与行业分布')
     expect(trigger?.getAttribute('aria-expanded')).toBe('false')
@@ -106,13 +132,74 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     expect(document.body.textContent).toContain('东方财富行情')
   })
 
+  it('can refresh themes independently while the wider market request is still pending', async () => {
+    let resolveBreadth!: (value: ShortTermMarketBreadth) => void
+    vi.mocked(fetchShortTermMarketBreadth).mockReturnValueOnce(new Promise(resolve => { resolveBreadth = resolve }))
+    await act(async () => { root.render(<LimitUpBoardPanel />) })
+    await clickButton('刷新题材')
+    expect(fetchMarketThemes).toHaveBeenCalledTimes(2)
+    expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
+    await act(async () => { resolveBreadth(breadth) })
+  })
+
+  it('shows and refreshes limit-up stocks in the default view after the theme request fails', async () => {
+    let resolveBoard!: (value: ShortTermLimitUpBoardSnapshot) => void
+    vi.mocked(fetchShortTermLimitUpBoard).mockReturnValueOnce(new Promise(resolve => { resolveBoard = resolve }))
+    vi.mocked(fetchMarketThemes).mockRejectedValue(new Error('Request failed with status code 500'))
+    await act(async () => { root.render(<LimitUpBoardPanel />) })
+
+    expect(host.textContent).toContain('题材获取失败：Request failed with status code 500')
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('正在拉取涨停池数据')
+    await act(async () => { resolveBoard(availableBoard) })
+    expect(host.textContent).toContain('封板样本')
+    expect(host.querySelector('button[aria-label="查看半导体涨停明细"]')).not.toBeNull()
+
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue({
+      ...availableBoard,
+      stocks: [{ ...availableBoard.stocks[0], name: '持续更新的封板样本' }],
+    })
+    await clickButton('刷新涨停看板')
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(2)
+    expect(host.textContent).toContain('持续更新的封板样本')
+    expect(host.textContent).toContain('题材获取失败')
+  })
+
+  it('shows limit-up stocks when the theme source reports an unavailable snapshot', async () => {
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
+    await act(async () => { root.render(<LimitUpBoardPanel />) })
+
+    expect(host.textContent).toContain('题材源暂不可用')
+    expect(host.textContent).toContain('封板样本')
+    expect(host.querySelector('section[aria-label="涨停行业卡片"]')).not.toBeNull()
+  })
+
+  it('keeps manual and automatic board refresh independent of a pending theme request', async () => {
+    vi.useFakeTimers()
+    vi.mocked(fetchMarketThemes).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
+    await renderPanel()
+    expect(host.textContent).toContain('封板样本')
+    await clickButton('刷新涨停看板')
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(2)
+
+    await openMarketDialog()
+    const dialogRefresh = Array.from(document.querySelector('[role="dialog"]')!.querySelectorAll('button'))
+      .find(button => button.textContent === '刷新')!
+    expect(dialogRefresh.disabled).toBe(false)
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000) })
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(3)
+    expect(fetchMarketThemes).toHaveBeenCalledTimes(1)
+  })
+
   it.each(['close button', 'Escape'])('keeps industry cards on the homepage and restores focus after %s', async closeMethod => {
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
     await renderPanel()
     const card = host.querySelector('button[aria-label="查看半导体涨停明细"]')
     expect(card?.textContent).toContain('封板样本')
     expect(host.textContent).not.toContain('测试市场情绪')
-    expect(host.textContent).not.toContain('2026-09-11')
+    expect(host.textContent).toContain('数据日 2026-09-11')
     const trigger = await openMarketDialog()
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
     expect(dialog.querySelector('h2')?.textContent).toBe('市场情绪与行业分布')
@@ -159,6 +246,113 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     expect(dialog.textContent).toContain('2026-09-11 10:05:00')
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(2)
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshes directly from the homepage and keeps the snapshot date and data gaps visible', async () => {
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue({ ...availableBoard, dataGaps: ['炸板池暂缺'] })
+    await renderPanel()
+
+    expect(host.textContent).toContain('数据日 2026-09-11')
+    expect(host.textContent).toContain('快照获取时间 2026-09-11 10:00:00')
+    expect(host.textContent).toContain('数据缺口：炸板池暂缺')
+    expect(host.textContent).toContain('获取时间不代表源行情时间')
+    expect(host.textContent).toContain('已获取')
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue({
+      ...availableBoard, fetchedAt: '2026-09-11T02:05:00Z',
+      stocks: [...availableBoard.stocks, { ...availableBoard.stocks[0], symbol: '600002', name: '新快照样本' }],
+    })
+    await clickButton('刷新涨停看板')
+
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(host.textContent).toContain('新快照样本')
+    expect(host.textContent).toContain('快照获取时间 2026-09-11 10:05:00')
+    expect(host.textContent).toContain('数据缺口：无已报告缺口')
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(2)
+    expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the last successful cards and timestamp visibly stale until a retry succeeds', async () => {
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
+    await renderPanel()
+    const card = host.querySelector('button[aria-label="查看半导体涨停明细"]')
+    vi.mocked(fetchShortTermLimitUpBoard).mockRejectedValueOnce(new Error('涨停池超时'))
+    await clickButton('刷新涨停看板')
+
+    expect(host.querySelector('button[aria-label="查看半导体涨停明细"]')).toBe(card)
+    expect(host.textContent).toContain('封板样本')
+    expect(host.textContent).toContain('快照获取时间 2026-09-11 10:00:00')
+    expect(host.textContent).toContain('更新失败 · 旧快照')
+    expect(host.textContent).toContain('当前保留上次快照（旧快照）')
+    expect(host.textContent).toContain('涨停池超时')
+
+    let resolveBoard!: (value: ShortTermLimitUpBoardSnapshot) => void
+    vi.mocked(fetchShortTermLimitUpBoard).mockReturnValueOnce(new Promise(resolve => { resolveBoard = resolve }))
+    await clickButton('刷新涨停看板')
+    expect(host.textContent).toContain('更新中 · 旧快照')
+    expect(host.textContent).toContain('封板样本')
+    await act(async () => { resolveBoard({ ...availableBoard, fetchedAt: '2026-09-11T02:08:00Z' }) })
+
+    expect(host.textContent).not.toContain('旧快照')
+    expect(host.textContent).not.toContain('涨停池超时')
+    expect(host.textContent).toContain('快照获取时间 2026-09-11 10:08:00')
+  })
+
+  it('replaces old cards with the reason when a successful new snapshot is unavailable', async () => {
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
+    await renderPanel()
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue({
+      ...board, tradeDate: '2026-09-14', fetchedAt: '2026-09-14T01:00:00Z', unavailableReason: '当前交易日尚无涨停池',
+    })
+    await clickButton('刷新涨停看板')
+
+    expect(host.querySelector('button[aria-label="查看半导体涨停明细"]')).toBeNull()
+    expect(host.textContent).toContain('当前交易日尚无涨停池')
+    expect(host.textContent).toContain('数据日 2026-09-14')
+    expect(host.textContent).not.toContain('旧快照')
+    expect(host.textContent).not.toContain('封板样本')
+  })
+
+  it('shares the in-flight lock across homepage and market refresh buttons', async () => {
+    let resolveBreadth!: (value: ShortTermMarketBreadth) => void
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
+    vi.mocked(fetchShortTermMarketBreadth).mockReturnValueOnce(new Promise(resolve => { resolveBreadth = resolve }))
+    await renderPanel()
+    await openMarketDialog()
+    const homepageRefresh = Array.from(host.querySelectorAll('button')).find(button => button.textContent === '刷新涨停看板')!
+    const dialogRefresh = Array.from(document.querySelector('[role="dialog"]')!.querySelectorAll('button')).find(button => button.textContent === '刷新')!
+
+    expect(homepageRefresh.disabled).toBe(true)
+    expect(dialogRefresh.disabled).toBe(true)
+    expect(host.textContent).toContain('更新中')
+    await act(async () => { homepageRefresh.click(); dialogRefresh.click() })
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
+    expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
+    await act(async () => { resolveBreadth(breadth) })
+    expect(homepageRefresh.disabled).toBe(false)
+    expect(dialogRefresh.disabled).toBe(false)
+  })
+
+  it.each(['close button', 'Escape'])('opens observation feedback and restores its trigger focus after %s', async closeMethod => {
+    await renderPanel()
+    const trigger = await clickButton('观察与隔日反馈')
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(dialog.querySelector('h2')?.textContent).toBe('观察与隔日反馈')
+    expect(dialog.textContent).toContain('观察反馈测试内容')
+    expect(dialog.textContent).not.toContain('最新可用涨跌数据')
+    await act(async () => {
+      if (closeMethod === 'Escape') {
+        dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      } else {
+        dialog.querySelector<HTMLButtonElement>('button[aria-label="关闭详情"]')!.click()
+      }
+    })
+
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
+    expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
   })
 
   it('shows the board while breadth is pending and then updates the counts', async () => {
@@ -243,7 +437,7 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     await renderPanel()
     await openMarketDialog()
     await act(async () => { await vi.advanceTimersByTimeAsync(50000) })
-    await clickButton('刷新')
+    await clickButton('刷新涨停看板')
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(2)
     await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(2)

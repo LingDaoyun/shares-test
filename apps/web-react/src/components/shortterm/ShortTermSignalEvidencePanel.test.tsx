@@ -162,7 +162,8 @@ describe('ShortTermSignalEvidencePanel', () => {
     expect(html).toContain('平均净收益 +1.12%')
     expect(html).toContain('T2 · 样本积累中 7/30')
     expect(html).not.toContain('T2 · 正收益占比')
-    expect(html).toContain('历史分组仅用于校准')
+    expect(html).toContain('历史分组按目标交易日收盘价统计')
+    expect(html).toContain('不代表早盘退出收益')
   })
 
   it('distinguishes disabled validation from an accumulating cohort', () => {

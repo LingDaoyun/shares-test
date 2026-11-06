@@ -8,6 +8,7 @@ import { Tag } from '../components/ui/Badge'
 import { Loader } from '../components/ui/Loader'
 import { DetailOverlay } from '../components/ui/DetailOverlay'
 import { PolicyResearchDetail, PolicySources } from '../components/policy/PolicyResearchDetail'
+import { FinancialNewsPanel } from '../components/news/FinancialNewsPanel'
 import { extractErrorMessage, formatDateTime } from '../lib/format'
 import { isHistoricalPolicySignal, policyEvidence } from '../lib/policyTrend'
 import type { PolicyAiReview, PolicyDailySnapshot } from '../types'
@@ -28,6 +29,18 @@ function mergeReviewHistory(previous: PolicyAiReview[], incoming: PolicyAiReview
 }
 
 export function PolicyIndustryPage() {
+  const [view, setView] = useState<'news' | 'industry'>('news')
+  const heading = <div><h1 className="text-2xl font-semibold text-ink-900">消息面</h1><p className="mt-1.5 text-xs leading-5 text-ink-500">财经新闻与官方金融发布</p></div>
+  const navigation = <div role="tablist" aria-label="消息面内容" className="flex gap-1">{[{ value: 'news', label: '消息列表' }, { value: 'industry', label: '行业解读' }].map(tab => <button key={tab.value} type="button" role="tab" aria-selected={view === tab.value} onClick={() => setView(tab.value as 'news' | 'industry')} className={`rounded-lg px-3 py-2 text-sm ${view === tab.value ? 'bg-brand-50 font-semibold text-brand-700' : 'text-ink-500 hover:bg-line-soft'}`}>{tab.label}</button>)}</div>
+  if (view === 'news') return <FinancialNewsPanel heading={heading} navigation={navigation} />
+  return <div className="flex flex-col gap-4">
+    <header>{heading}</header>
+    <div className="border-b border-line-soft pb-3">{navigation}</div>
+    <PolicyIndustryContent />
+  </div>
+}
+
+function PolicyIndustryContent() {
   const [snapshot, setSnapshot] = useState<PolicyDailySnapshot | null>(null)
   const [history, setHistory] = useState<Record<string, PolicyAiReview[]>>({})
   const [loading, setLoading] = useState(true)

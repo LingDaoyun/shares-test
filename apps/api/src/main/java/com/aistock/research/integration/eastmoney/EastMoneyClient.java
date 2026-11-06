@@ -34,7 +34,12 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 
 @Component
@@ -66,6 +71,9 @@ public class EastMoneyClient {
     private static final int GENERIC_REMOTE_ATTEMPTS = 2;
     private static final long EASTMONEY_MIN_INTERVAL_MILLIS = 650;
     private static final long TENCENT_HISTORY_MIN_INTERVAL_MILLIS = 200;
+    private static final long SINA_HISTORY_MIN_INTERVAL_MILLIS = 200;
+    private static final long HISTORY_SOURCE_COOLDOWN_MILLIS = TimeUnit.MINUTES.toMillis(5);
+    private static final long TURNOVER_SUPPLEMENT_COOLDOWN_MILLIS = TimeUnit.MINUTES.toMillis(5);
     private static final List<String> EASTMONEY_PUSH2_HOSTS = List.of(
             "push2delay.eastmoney.com",
             "push2.eastmoney.com",
@@ -101,13 +109,18 @@ public class EastMoneyClient {
     private final LiveDataProperties properties;
     private final KlineHistoryRecorder klineHistoryRecorder;
     private final Object industryBoardCacheLock = new Object();
-    private final Object eastMoneyRequestLock = new Object();
+    private final ReentrantLock eastMoneyRequestLock = new ReentrantLock(true);
     private final Object tencentHistoryRequestLock = new Object();
+    private final ReentrantLock sinaHistoryRequestLock = new ReentrantLock(true);
     private final Map<String, CachedQuotes> industryConstituentCache = new ConcurrentHashMap<>();
     private final Map<String, CachedBoardStockFundFlows> boardStockFundFlowCache = new ConcurrentHashMap<>();
     private volatile CachedIndustryBoards cachedIndustryBoards = new CachedIndustryBoards(List.of(), Instant.EPOCH);
     private volatile long lastEastMoneyRequestMillis;
     private volatile long lastTencentHistoryRequestMillis;
+    private volatile long lastSinaHistoryRequestMillis;
+    private volatile HistoryFailure tencentHistoryFailure;
+    private volatile HistoryFailure eastMoneyHistoryFailure;
+    private volatile long turnoverSupplementRetryAfterMillis;
     private final Map<String, CachedIndexMinutes> indexMinuteCache = new HashMap<>();
 
     public EastMoneyClient(RestClient restClient, ObjectMapper objectMapper, LiveDataProperties properties) {
@@ -150,6 +163,7 @@ public class EastMoneyClient {
     }
 
     public AshareQuoteSnapshot fetchAshareQuoteSnapshot(int limit) {
+        ensureNotInterrupted();
         AshareQuoteSnapshot primary = null;
         RuntimeException primaryFailure = null;
         try {
@@ -158,12 +172,14 @@ public class EastMoneyClient {
             logger.warn("东方财富全市场行情覆盖不完整（{}/{}），尝试新浪证券清单和腾讯行情",
                     primary.fetchedCount(), primary.expectedCount());
         } catch (RuntimeException eastMoneyFailure) {
+            if (eastMoneyFailure instanceof CancellationException cancelled) throw cancelled;
+            ensureNotInterrupted();
             primaryFailure = eastMoneyFailure;
             logger.warn("东方财富全市场行情不可用，改用新浪证券清单和腾讯行情：{}", rootMessage(eastMoneyFailure));
         }
         try {
             AshareQuoteSnapshot backup = fetchTencentAshareQuoteSnapshot(limit);
-            if (primary != null && primary.expectedCount() > 0 && backup.expectedCount() > 0
+            if (!backup.complete() && primary != null && primary.expectedCount() > 0 && backup.expectedCount() > 0
                     && primary.expectedCount() != backup.expectedCount()) {
                 backup = new AshareQuoteSnapshot(backup.quotes(), backup.requestedCount(), backup.expectedCount(),
                         backup.fetchedCount(), backup.missingCount(), false,
@@ -181,6 +197,8 @@ public class EastMoneyClient {
                     + backup.fetchedCount() + "/" + backup.expectedCount() + "；保留"
                     + (selected == primary ? "主源" : "备用") + "不完整快照）");
         } catch (RuntimeException backupFailure) {
+            if (backupFailure instanceof CancellationException cancelled) throw cancelled;
+            ensureNotInterrupted();
             if (primary != null) {
                 return quoteSnapshotWithSource(primary, primary.source() + "（主源不完整，覆盖"
                         + primary.fetchedCount() + "/" + primary.expectedCount()
@@ -193,7 +211,8 @@ public class EastMoneyClient {
 
     private boolean fulfillsQuoteRequest(AshareQuoteSnapshot snapshot) {
         return snapshot.expectedCount() > 0 && snapshot.fetchedCount() == snapshot.quotes().size()
-                && snapshot.fetchedCount() >= Math.min(snapshot.requestedCount(), snapshot.expectedCount());
+                && snapshot.fetchedCount() >= Math.min(snapshot.requestedCount(), snapshot.expectedCount())
+                && (snapshot.requestedCount() < snapshot.expectedCount() || snapshot.complete());
     }
 
     private AshareQuoteSnapshot betterCoveredQuoteSnapshot(AshareQuoteSnapshot primary, AshareQuoteSnapshot backup) {
@@ -221,11 +240,17 @@ public class EastMoneyClient {
             // Tencent quotes have no industry field. Verify Sina's Shenwan securities node
             // so the existing securities/broker exclusion still works during an EastMoney outage.
             SinaSymbolList securities = fetchSinaSymbols("sw2_490100", Integer.MAX_VALUE);
-            if (securities.expectedCount() <= 0 || securities.symbols().size() != securities.expectedCount()) {
+            if (!securities.complete()) {
                 throw new IllegalStateException("新浪证券行业清单不完整，无法保留证券/券商排除规则");
             }
             Set<String> securitiesSymbols = new HashSet<>(securities.symbols());
             int expectedCount = universe.expectedCount();
+            Set<String> verifiedSymbols = universe.complete() ? verifySinaAshareUniverse(symbols) : Set.of();
+            boolean universeVerified = !verifiedSymbols.isEmpty();
+            if (universeVerified) {
+                symbols = verifiedSymbols;
+                expectedCount = symbols.size();
+            }
             Map<String, EastMoneyQuote> quotes = new LinkedHashMap<>();
             Set<String> conflicts = new HashSet<>();
             for (EastMoneyQuote quote : fetchTencentQuotes(new ArrayList<>(symbols), Integer.MAX_VALUE)) {
@@ -250,14 +275,68 @@ public class EastMoneyClient {
                     .toList();
             return new AshareQuoteSnapshot(
                     rows, requestedCount, expectedCount, rows.size(), Math.max(0, expectedCount - rows.size()),
-                    expectedCount > 0 && rows.size() == expectedCount,
-                    "新浪hs_a清单范围 + 腾讯行情（本清单" + rows.size() + "/"
-                            + (expectedCount > 0 ? expectedCount : "未知") + "；非东财全集核验，东方财富不可用）",
+                    universeVerified && conflicts.isEmpty() && rows.size() == expectedCount,
+                    (universeVerified ? "新浪沪深京A股及科创CDR清单（分市场身份核验）" : "新浪hs_a清单范围")
+                            + " + 腾讯行情（本清单" + rows.size() + "/"
+                            + (expectedCount > 0 ? expectedCount : "未知")
+                            + (universeVerified ? "；独立清单核验）" : "；分市场身份未通过，非东财全集核验）"),
                     rows.stream().map(EastMoneyQuote::fetchedAt).filter(Objects::nonNull)
                             .max(Instant::compareTo).orElseGet(Instant::now)
             );
         } catch (Exception exception) {
+            if (exception instanceof CancellationException cancelled) throw cancelled;
+            ensureNotInterrupted();
             throw new IllegalStateException("新浪/腾讯全市场备用行情获取失败", exception);
+        }
+    }
+
+    Set<String> verifySinaAshareUniverse(Set<String> listedSymbols) {
+        try {
+            Set<String> exchanges = new HashSet<>();
+            for (String node : List.of("sh_a", "sz_a", "hs_bjs")) {
+                SinaSymbolList market = fetchSinaSymbols(node, Integer.MAX_VALUE);
+                if (!market.complete()) return Set.of();
+                String prefix = switch (node) {
+                    case "sh_a" -> "sh";
+                    case "sz_a" -> "sz";
+                    default -> "bj";
+                };
+                for (String symbol : market.symbols()) {
+                    if (!(prefix + symbol).equals(tencentCode(symbol)) || !exchanges.add(symbol)) {
+                        logger.warn("新浪分市场身份核验失败：节点{}，证券{}市场错误或重复", node, symbol);
+                        return Set.of();
+                    }
+                }
+            }
+            if (!exchanges.equals(listedSymbols)) {
+                logger.warn("新浪分市场身份核验失败：分市场并集{}与hs_a清单{}证券身份不一致",
+                        exchanges.size(), listedSymbols.size());
+                return Set.of();
+            }
+            // Sina's hs_a/sh_a omit STAR CDRs (689...), which the original STAR scope includes.
+            SinaSymbolList star = fetchSinaSymbols("kcb", Integer.MAX_VALUE);
+            if (!star.complete() || star.symbols().stream()
+                    .anyMatch(symbol -> !symbol.startsWith("688") && !symbol.startsWith("689"))) {
+                logger.warn("新浪分市场身份核验失败：科创板清单不完整或包含范围外证券");
+                return Set.of();
+            }
+            Set<String> starShares = new HashSet<>(star.symbols().stream()
+                    .filter(symbol -> symbol.startsWith("688")).toList());
+            Set<String> listedStarShares = new HashSet<>(listedSymbols.stream()
+                    .filter(symbol -> symbol.startsWith("688")).toList());
+            if (!starShares.equals(listedStarShares)) {
+                logger.warn("新浪分市场身份核验失败：科创板688清单{}与hs_a的688清单{}证券身份不一致",
+                        starShares.size(), listedStarShares.size());
+                return Set.of();
+            }
+            Set<String> verified = new java.util.LinkedHashSet<>(listedSymbols);
+            verified.addAll(star.symbols());
+            return verified;
+        } catch (Exception exception) {
+            if (exception instanceof CancellationException cancelled) throw cancelled;
+            ensureNotInterrupted();
+            logger.warn("新浪分市场证券身份核验未完成：{}", rootMessage(exception));
+            return Set.of();
         }
     }
 
@@ -270,6 +349,7 @@ public class EastMoneyClient {
         int target = Math.min(Math.max(1, limit), initialCount);
         int pageCount = Math.min(160, (target + SINA_QUOTE_PAGE_SIZE - 1) / SINA_QUOTE_PAGE_SIZE);
         Set<String> symbols = new java.util.LinkedHashSet<>();
+        boolean validIdentities = true;
         for (int page = 1; page <= pageCount && symbols.size() < target; page++) {
             String url = SINA_QUOTE_API + "getHQNodeData?node=" + node + "&page=" + page
                     + "&num=" + SINA_QUOTE_PAGE_SIZE + "&sort=symbol&asc=1";
@@ -277,22 +357,40 @@ public class EastMoneyClient {
             if (rows == null || !rows.isArray()) {
                 throw new IllegalStateException("新浪证券清单结构异常：" + node);
             }
+            int expectedRows = Math.min(SINA_QUOTE_PAGE_SIZE, target - (page - 1) * SINA_QUOTE_PAGE_SIZE);
+            if (rows.size() < expectedRows) {
+                logger.warn("新浪证券清单{}第{}页缺行（{}/{}），重新获取当前页一次",
+                        node, page, rows.size(), expectedRows);
+                rows = objectMapper.readTree(fetchBody(url));
+                if (rows == null || !rows.isArray()) {
+                    throw new IllegalStateException("新浪证券清单结构异常：" + node + "，第" + page + "页");
+                }
+                logger.info("新浪证券清单{}第{}页重取返回{}/{}行", node, page, rows.size(), expectedRows);
+            }
             for (JsonNode row : rows) {
                 String symbol = row.path("code").asText("");
                 if (symbol.matches("\\d{6}") && row.path("symbol").asText("").equals(tencentCode(symbol))) {
-                    symbols.add(symbol);
+                    if (!symbols.add(symbol)) validIdentities = false;
+                } else {
+                    validIdentities = false;
                 }
-                if (symbols.size() >= target) break;
+                if (target < initialCount && symbols.size() >= target) break;
             }
         }
         if (symbols.isEmpty()) {
             throw new IllegalStateException("新浪证券清单为空：" + node);
         }
         int finalCount = objectMapper.readTree(fetchBody(countUrl)).asInt(0);
-        return new SinaSymbolList(finalCount == initialCount ? initialCount : 0, List.copyOf(symbols));
+        boolean complete = validIdentities && finalCount == initialCount && symbols.size() == initialCount;
+        if (!complete && target == initialCount) {
+            logger.warn("新浪证券清单核验未通过：节点{}，起始总数{}，结束总数{}，唯一证券数{}，身份及去重校验{}",
+                    node, initialCount, finalCount, symbols.size(), validIdentities ? "通过" : "未通过");
+        }
+        return new SinaSymbolList(finalCount == initialCount ? initialCount : 0, List.copyOf(symbols),
+                complete);
     }
 
-    private record SinaSymbolList(int expectedCount, List<String> symbols) {}
+    private record SinaSymbolList(int expectedCount, List<String> symbols, boolean complete) {}
 
     AshareQuoteSnapshot fetchEastMoneyQuoteSnapshot(int limit) {
         int requestedCount = Math.max(1, limit);
@@ -302,7 +400,10 @@ public class EastMoneyClient {
         RuntimeException pageFailure = null;
         int reportedTotal = 0;
         boolean reportedTotalConsistent = true;
+        int observedPageCapacity = 0;
         int fetchTarget = requestedCount;
+        int missingPageNumber = 0;
+        boolean paginationFinished = false;
         int maxPages = 160;
 
         for (int pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
@@ -310,7 +411,16 @@ public class EastMoneyClient {
             try {
                 page = fetchSnapshotPage(pageNumber, pageSize);
             } catch (RuntimeException exception) {
+                ensureNotInterrupted();
+                if (exception instanceof CancellationException cancelled) throw cancelled;
                 pageFailure = exception;
+                // A single failed middle page can be retried after the remaining full-market pages.
+                // A second failure stops the pass instead of probing every page during an outage.
+                if (missingPageNumber == 0 && reportedTotalConsistent && reportedTotal > 0
+                        && requestedCount >= reportedTotal) {
+                    missingPageNumber = pageNumber;
+                    continue;
+                }
                 break;
             }
             if (page == null) {
@@ -318,7 +428,11 @@ public class EastMoneyClient {
             }
             // An empty page is the provider's normal page-after-end sentinel; its total is not authoritative.
             if (page.quotes().isEmpty()) {
+                paginationFinished = true;
                 break;
+            }
+            if (observedPageCapacity == 0) {
+                observedPageCapacity = Math.min(pageSize, page.quotes().size());
             }
             if (page.totalCount() <= 0) {
                 reportedTotalConsistent = false;
@@ -331,17 +445,36 @@ public class EastMoneyClient {
                 }
                 fetchTarget = Math.min(requestedCount, reportedTotal);
             }
-            for (EastMoneyQuote quote : page.quotes()) {
-                String symbol = quote.symbol();
-                if (symbol == null || symbol.isBlank() || conflictingSymbols.contains(symbol)) continue;
-                EastMoneyQuote previous = merged.putIfAbsent(symbol, quote);
-                if (previous != null && !sameExecutionQuote(previous, quote)) {
-                    merged.remove(symbol);
-                    conflictingSymbols.add(symbol);
-                }
-            }
-            if (merged.size() >= fetchTarget) {
+            mergeQuotePage(merged, conflictingSymbols, page.quotes());
+            // Recover a skipped page after the known page range, without requiring an extra
+            // sentinel request: EastMoney can return rc=102/data=null beyond its last page.
+            boolean reachedKnownEnd = missingPageNumber > 0 && reportedTotalConsistent && reportedTotal > 0
+                    && conflictingSymbols.isEmpty() && observedPageCapacity > 0
+                    && (long) pageNumber * observedPageCapacity >= reportedTotal;
+            if (merged.size() >= fetchTarget || reachedKnownEnd) {
+                paginationFinished = true;
                 break;
+            }
+        }
+
+        if (missingPageNumber > 0 && paginationFinished && reportedTotalConsistent) {
+            ensureNotInterrupted();
+            try {
+                // This final attempt is deliberately not wrapped in the immediate page retry loop.
+                AshareQuotePage recovered = fetchAshareQuotePage(missingPageNumber, pageSize);
+                ensureNotInterrupted();
+                if (recovered != null && !recovered.quotes().isEmpty()) {
+                    if (recovered.totalCount() <= 0 || recovered.totalCount() != reportedTotal) {
+                        reportedTotalConsistent = false;
+                    }
+                    mergeQuotePage(merged, conflictingSymbols, recovered.quotes());
+                    missingPageNumber = 0;
+                    pageFailure = null;
+                }
+            } catch (RuntimeException exception) {
+                ensureNotInterrupted();
+                if (exception instanceof CancellationException cancelled) throw cancelled;
+                pageFailure = exception;
             }
         }
 
@@ -368,7 +501,8 @@ public class EastMoneyClient {
                 expectedCount,
                 fetchedCount,
                 missingCount,
-                expectedCount > 0 && fetchedCount == expectedCount,
+                expectedCount > 0 && fetchedCount == expectedCount && merged.size() == expectedCount
+                        && conflictingSymbols.isEmpty() && missingPageNumber == 0 && pageFailure == null,
                 source.isBlank() ? "行情源未标注" : source,
                 quotes.stream()
                         .map(EastMoneyQuote::fetchedAt)
@@ -376,6 +510,19 @@ public class EastMoneyClient {
                         .max(Instant::compareTo)
                         .orElseGet(Instant::now)
         );
+    }
+
+    private void mergeQuotePage(Map<String, EastMoneyQuote> merged, Set<String> conflictingSymbols,
+                                List<EastMoneyQuote> quotes) {
+        for (EastMoneyQuote quote : quotes) {
+            String symbol = quote.symbol();
+            if (symbol == null || symbol.isBlank() || conflictingSymbols.contains(symbol)) continue;
+            EastMoneyQuote previous = merged.putIfAbsent(symbol, quote);
+            if (previous != null && !sameExecutionQuote(previous, quote)) {
+                merged.remove(symbol);
+                conflictingSymbols.add(symbol);
+            }
+        }
     }
 
     private boolean sameExecutionQuote(EastMoneyQuote first, EastMoneyQuote second) {
@@ -394,9 +541,14 @@ public class EastMoneyClient {
     private AshareQuotePage fetchSnapshotPage(int pageNumber, int pageSize) {
         RuntimeException failure = null;
         for (int attempt = 1; attempt <= SNAPSHOT_PAGE_ATTEMPTS; attempt++) {
+            ensureNotInterrupted();
             try {
-                return fetchAshareQuotePage(pageNumber, pageSize);
+                AshareQuotePage page = fetchAshareQuotePage(pageNumber, pageSize);
+                ensureNotInterrupted();
+                return page;
             } catch (RuntimeException exception) {
+                ensureNotInterrupted();
+                if (exception instanceof CancellationException cancelled) throw cancelled;
                 failure = exception;
                 if (attempt < SNAPSHOT_PAGE_ATTEMPTS) {
                     logger.warn("A股全市场行情第 {} 页瞬时失败，将从当前页续抓：{}",
@@ -453,6 +605,8 @@ public class EastMoneyClient {
             }
             return new AshareQuotePage(data.path("total").asInt(0), quotes);
         } catch (Exception exception) {
+            if (exception instanceof CancellationException cancelled) throw cancelled;
+            ensureNotInterrupted();
             throw new IllegalStateException("东方财富行情数据获取失败", exception);
         }
     }
@@ -472,10 +626,13 @@ public class EastMoneyClient {
             String url = "https://qt.gtimg.cn/q=" + String.join(",", tencentSymbols.subList(start, end));
             try {
                 String body = fetchTencentBody(url, attempts);
+                ensureNotInterrupted();
                 for (String line : body.split(";")) {
                     readTencentQuote(line, fetchedAt).ifPresent(quotes::add);
                 }
             } catch (Exception exception) {
+                if (exception instanceof CancellationException cancelled) throw cancelled;
+                ensureNotInterrupted();
                 lastException = exception;
             }
         }
@@ -1493,6 +1650,9 @@ public class EastMoneyClient {
     public List<EastMoneyKLine> fetchDailyKLines(String symbol, LocalDate begin, LocalDate end) {
         EastMoneyKLineSeries series = fetchDailyKLineSeries(symbol, begin, end);
         if (!series.complete()) {
+            if ("HISTORICAL_KLINE_PARTIAL".equals(series.sourceName())) {
+                throw new IncompleteKLineHistoryException("历史 K 线数据获取不完整：" + symbol + "，" + series.detail());
+            }
             throw new IllegalStateException("历史 K 线数据获取不完整：" + symbol + "，" + series.detail());
         }
         return series.rows();
@@ -1509,6 +1669,12 @@ public class EastMoneyClient {
         if (!safeRows.isEmpty() && covered * 100L >= safeRows.size() * 95L) {
             return safeRows;
         }
+        ensureNotInterrupted();
+        // This auxiliary source must not make every stock repeat a known transport failure.
+        // Missing turnover remains missing; the existing chip-data quality gate still applies.
+        if (System.currentTimeMillis() < turnoverSupplementRetryAfterMillis) {
+            return safeRows;
+        }
         try {
             EastMoneyKLineFetch supplement = fetchEastMoneyDailyKLines(symbol, begin, end);
             if (!supplement.complete() || supplement.rows().isEmpty()) {
@@ -1518,7 +1684,11 @@ public class EastMoneyClient {
             recordKlineHistory(merged, "腾讯前复权日线+东方财富换手率");
             return merged;
         } catch (RuntimeException exception) {
-            logger.warn("东方财富换手率补齐失败，保留原 K 线并让筹码模型自行降级：{}", symbol, exception);
+            ensureNotInterrupted();
+            if (exception instanceof CancellationException) throw exception;
+            turnoverSupplementRetryAfterMillis = System.currentTimeMillis() + TURNOVER_SUPPLEMENT_COOLDOWN_MILLIS;
+            logger.warn("东方财富换手率补齐失败，暂停该辅助请求5分钟，保留原 K 线及缺失字段：{}，{}",
+                    symbol, rootMessage(exception));
             return safeRows;
         }
     }
@@ -1616,41 +1786,103 @@ public class EastMoneyClient {
                 return new EastMoneyKLineSeries(
                         tencent.rows(), "TENCENT_QFQ_DAILY", true, tencent.detail());
             }
+        } catch (CancellationException exception) {
+            throw exception;
         } catch (Exception exception) {
+            ensureNotInterrupted();
             tencentFailure = exception;
         }
 
         EastMoneyKLineFetch eastMoney = null;
         Exception eastMoneyFailure = null;
         try {
+            HistoryFailure recentFailure = eastMoneyHistoryFailure;
+            if (recentFailure != null && recentFailure.coolingDown()) throw recentFailure.cause();
             eastMoney = fetchEastMoneyDailyKLines(symbol, begin, end);
             if (eastMoney.complete() && !eastMoney.rows().isEmpty()) {
                 recordKlineHistory(eastMoney.rows(), "东方财富前复权日线");
                 return new EastMoneyKLineSeries(
                         eastMoney.rows(), "EAST_MONEY_QFQ_DAILY", true, eastMoney.detail());
             }
+        } catch (CancellationException exception) {
+            throw exception;
         } catch (Exception exception) {
+            ensureNotInterrupted();
             eastMoneyFailure = exception;
         }
 
-        if (tencent != null || eastMoney != null) {
+        EastMoneyKLineSeries sina = null;
+        Exception sinaFailure = null;
+        try {
+            sina = fetchSinaDailyKLines(symbol, begin, end);
+            if (sina.complete() && !sina.rows().isEmpty()) {
+                recordKlineHistory(sina.rows(), "新浪前复权日线（当日由已核验实时行情更新）");
+                return sina;
+            }
+        } catch (CancellationException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            ensureNotInterrupted();
+            sinaFailure = exception;
+        }
+        String eastMoneyDetail = eastMoney == null
+                ? (eastMoneyFailure == null ? "不可用" : rootMessage(eastMoneyFailure)) : eastMoney.detail();
+        String sinaDetail = sina == null
+                ? (sinaFailure == null ? "不可用" : rootMessage(sinaFailure)) : sina.detail();
+
+        boolean singleStockGap = sina != null && (!sina.rows().isEmpty() || !supportsSinaDaily(symbol));
+        if (tencentFailure instanceof HistorySourceAccessBlockedException && !singleStockGap) {
+            HistorySourceAccessBlockedException blocked = new HistorySourceAccessBlockedException(
+                    "腾讯历史行情返回访问验证页面；东方财富：" + eastMoneyDetail
+                            + "；新浪：" + sinaDetail + "；无法继续日线复核");
+            blocked.addSuppressed(tencentFailure);
+            if (eastMoneyFailure != null) blocked.addSuppressed(eastMoneyFailure);
+            if (sinaFailure != null) blocked.addSuppressed(sinaFailure);
+            throw blocked;
+        }
+
+        if (tencent != null || eastMoney != null || singleStockGap) {
             List<EastMoneyKLine> partialRows = tencent != null && !tencent.rows().isEmpty()
                     ? tencent.rows()
-                    : eastMoney == null ? List.of() : eastMoney.rows();
+                    : eastMoney != null && !eastMoney.rows().isEmpty() ? eastMoney.rows()
+                    : sina == null ? List.of() : sina.rows();
             String tencentDetail = tencent == null
                     ? "腾讯历史行情不可用"
                     : "腾讯：" + tencent.detail();
-            String eastMoneyDetail = eastMoney == null
-                    ? "东方财富：" + (eastMoneyFailure == null ? "不可用" : rootMessage(eastMoneyFailure))
-                    : "东方财富：" + eastMoney.detail();
             return new EastMoneyKLineSeries(
                     partialRows, "HISTORICAL_KLINE_PARTIAL", false,
-                    tencentDetail + "；" + eastMoneyDetail + "；拒绝使用部分数据");
+                    tencentDetail + "；东方财富：" + eastMoneyDetail + "；新浪：" + sinaDetail + "；拒绝使用部分数据");
         }
 
         Throwable failure = eastMoneyFailure != null ? eastMoneyFailure : tencentFailure;
         String detail = failure == null ? "历史行情源未返回可用数据" : rootMessage(failure);
-        return new EastMoneyKLineSeries(List.of(), "HISTORICAL_KLINE_UNAVAILABLE", false, detail);
+        return new EastMoneyKLineSeries(List.of(), "HISTORICAL_KLINE_UNAVAILABLE", false,
+                detail + "；新浪：" + sinaDetail);
+    }
+
+    private EastMoneyKLineSeries fetchSinaDailyKLines(String symbol, LocalDate begin, LocalDate end) {
+        if (!supportsSinaDaily(symbol)) {
+            return new EastMoneyKLineSeries(List.of(), "SINA_QFQ_DAILY", false, "新浪日线备用源不支持该证券类型");
+        }
+        ensureNotInterrupted();
+        String code = tencentCode(symbol);
+        String daily = fetchBodyWithCurl(
+                "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
+                        + "?symbol=" + code + "&scale=240&ma=no&datalen=1023", null, "https://finance.sina.com.cn/");
+        String factors = fetchBodyWithCurl(
+                "https://finance.sina.com.cn/realstock/company/" + code + "/qfq.js", null, "https://finance.sina.com.cn/");
+        EastMoneyQuote currentQuote = null;
+        if (end.equals(LocalDate.now(CHINA_MARKET_ZONE))) {
+            currentQuote = fetchTencentQuotes(List.of(symbol), 1).stream()
+                    .filter(quote -> symbol.equals(quote.symbol())).findFirst().orElse(null);
+        }
+        ensureNotInterrupted();
+        return SinaDailyKLineParser.parse(symbol, daily, factors, begin, end,
+                currentQuote, LocalDateTime.now(CHINA_MARKET_ZONE));
+    }
+
+    private boolean supportsSinaDaily(String symbol) {
+        return symbol != null && symbol.matches("(?:[03648]\\d{5}|92\\d{4})") && !symbol.startsWith("689");
     }
 
     private void recordKlineHistory(List<EastMoneyKLine> rows, String sourceName) {
@@ -1677,7 +1909,18 @@ public class EastMoneyClient {
                 + "&beg=" + dateParam(begin)
                 + "&end=" + dateParam(end);
         try {
-            JsonNode klines = objectMapper.readTree(fetchBodyWithCurl(url, null, "https://quote.eastmoney.com/"))
+            String body;
+            try {
+                body = fetchBodyWithCurl(url, null, "https://quote.eastmoney.com/");
+            } catch (CancellationException cancelled) {
+                throw cancelled;
+            } catch (RuntimeException transportFailure) {
+                ensureNotInterrupted();
+                eastMoneyHistoryFailure = new HistoryFailure(transportFailure,
+                        System.currentTimeMillis() + HISTORY_SOURCE_COOLDOWN_MILLIS);
+                throw transportFailure;
+            }
+            JsonNode klines = objectMapper.readTree(body)
                     .path("data")
                     .path("klines");
             if (!klines.isArray() || klines.isEmpty()) {
@@ -1702,7 +1945,10 @@ public class EastMoneyClient {
             KLineSeriesIntegrity.Result integrity = KLineSeriesIntegrity.assess(
                     items, klines.size(), parsedRows, duplicateRows, 1, 1, begin, end);
             return new EastMoneyKLineFetch(items, integrity.complete(), integrity.detail());
+        } catch (CancellationException exception) {
+            throw exception;
         } catch (Exception exception) {
+            ensureNotInterrupted();
             throw new IllegalStateException("东方财富历史 K 线数据获取失败：" + symbol, exception);
         }
     }
@@ -1768,6 +2014,9 @@ public class EastMoneyClient {
         if (code == null) {
             return new TencentKLineFetch(List.of(), 0, 0, false, "股票代码无法映射到行情市场");
         }
+        ensureNotInterrupted();
+        HistoryFailure recentFailure = tencentHistoryFailure;
+        if (recentFailure != null && recentFailure.coolingDown()) throw recentFailure.cause();
         Map<LocalDate, EastMoneyKLine> byDate = new HashMap<>();
         int requestedSlices = 0;
         int successfulSlices = 0;
@@ -1775,11 +2024,14 @@ public class EastMoneyClient {
         int parsedRows = 0;
         int duplicateRows = 0;
         int excludedRows = 0;
+        Exception lastSliceFailure = null;
         LocalDate today = LocalDate.now(CHINA_MARKET_ZONE);
         LocalDate cursor = begin;
         while (!cursor.isAfter(end)) {
             requestedSlices++;
-            LocalDate sliceEnd = cursor.plusYears(1).minusDays(1);
+            LocalDate sliceEnd = begin.plusDays(499).isBefore(end)
+                    ? cursor.plusYears(1).minusDays(1)
+                    : end;
             if (sliceEnd.isAfter(end)) {
                 sliceEnd = end;
             }
@@ -1793,7 +2045,15 @@ public class EastMoneyClient {
                     + (currentLastSlice ? "" : sliceEnd)
                     + ",500,qfq";
             try {
-                JsonNode rows = objectMapper.readTree(fetchBodyWithCurl(url, null, "https://gu.qq.com/"))
+                String body = fetchBodyWithCurl(url, null, "https://gu.qq.com/");
+                if (body.stripLeading().startsWith("<") && body.contains("waf.tencent.com/501page.html")) {
+                    HistorySourceAccessBlockedException blocked =
+                            new HistorySourceAccessBlockedException("腾讯历史行情返回访问验证页面");
+                    tencentHistoryFailure = new HistoryFailure(blocked,
+                            System.currentTimeMillis() + HISTORY_SOURCE_COOLDOWN_MILLIS);
+                    throw blocked;
+                }
+                JsonNode rows = objectMapper.readTree(body)
                         .path("data")
                         .path(code);
                 JsonNode dailyRows = rows.path("qfqday");
@@ -1845,11 +2105,18 @@ public class EastMoneyClient {
                         successfulSlices++;
                     }
                 }
+            } catch (HistorySourceAccessBlockedException | CancellationException exception) {
+                throw exception;
             } catch (Exception exception) {
+                ensureNotInterrupted();
+                lastSliceFailure = exception;
                 logger.warn("腾讯历史 K 线分片获取失败：{} {}~{}，原因：{}",
                         symbol, cursor, sliceEnd, rootMessage(exception));
             }
             cursor = sliceEnd.plusDays(1);
+        }
+        if (byDate.isEmpty() && lastSliceFailure != null) {
+            throw new IllegalStateException("腾讯历史 K 线数据获取失败：" + symbol, lastSliceFailure);
         }
         List<EastMoneyKLine> items = byDate.values().stream()
                 .sorted(java.util.Comparator.comparing(EastMoneyKLine::tradeDate))
@@ -1876,6 +2143,10 @@ public class EastMoneyClient {
             boolean complete,
             String detail
     ) {
+    }
+
+    private record HistoryFailure(RuntimeException cause, long retryAfterMillis) {
+        boolean coolingDown() { return System.currentTimeMillis() < retryAfterMillis; }
     }
 
     JsonNode fetchQuoteRoot(String url) {
@@ -1906,10 +2177,14 @@ public class EastMoneyClient {
         List<String> candidateUrls = remoteCandidateUrls(url);
         Exception restClientException = null;
         for (String candidateUrl : candidateUrls) {
+            ensureNotInterrupted();
             throttleRemote(candidateUrl);
+            ensureNotInterrupted();
             try {
                 return restClient.get().uri(URI.create(candidateUrl)).retrieve().body(String.class);
             } catch (Exception exception) {
+                ensureNotInterrupted();
+                if (exception instanceof CancellationException cancelled) throw cancelled;
                 if (restClientException == null) {
                     restClientException = exception;
                 } else {
@@ -1935,6 +2210,8 @@ public class EastMoneyClient {
                 }
                 lastException = new IllegalStateException("腾讯行情返回结构异常：" + sampleBody(decodedBody));
             } catch (Exception exception) {
+                if (exception instanceof CancellationException cancelled) throw cancelled;
+                ensureNotInterrupted();
                 lastException = exception;
             }
         }
@@ -1963,6 +2240,7 @@ public class EastMoneyClient {
         int attempts = remoteAttempts(url);
         for (int attempt = 1; attempt <= attempts; attempt++) {
             for (String candidateUrl : rotate(candidateUrls, attempt - 1)) {
+                ensureNotInterrupted();
                 try {
                     return fetchBytesOnceWithCurl(
                             candidateUrl,
@@ -1974,6 +2252,8 @@ public class EastMoneyClient {
                             retryCount
                     );
                 } catch (Exception exception) {
+                    ensureNotInterrupted();
+                    if (exception instanceof CancellationException cancelled) throw cancelled;
                     failures.add(exception);
                 }
                 quietSleep(180L * attempt);
@@ -2001,8 +2281,12 @@ public class EastMoneyClient {
             int processWaitSeconds,
             int retryCount
     ) {
+        Process process = null;
+        ExecutorService streamReaders = null;
         try {
+            ensureNotInterrupted();
             throttleRemote(url);
+            ensureNotInterrupted();
             List<String> command = new ArrayList<>(List.of(
                     "curl",
                     "-L",
@@ -2029,24 +2313,51 @@ public class EastMoneyClient {
                 command.add("Referer: " + referer);
             }
             command.add(url);
-            Process process = new ProcessBuilder(command).start();
-            boolean completed = process.waitFor(Math.max(2, processWaitSeconds), TimeUnit.SECONDS);
-            byte[] stdout = process.getInputStream().readAllBytes();
-            String stderr = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+            process = new ProcessBuilder(command).start();
+            Process runningProcess = process;
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(Math.max(2, processWaitSeconds));
+            // Drain both pipes while curl runs; a full stdout/stderr pipe otherwise blocks its exit.
+            streamReaders = Executors.newFixedThreadPool(2, task -> {
+                Thread thread = new Thread(task, "market-curl-stream");
+                thread.setDaemon(true);
+                return thread;
+            });
+            Future<byte[]> stdoutRead = streamReaders.submit(() -> {
+                try (var stream = runningProcess.getInputStream()) { return stream.readAllBytes(); }
+            });
+            Future<byte[]> stderrRead = streamReaders.submit(() -> {
+                try (var stream = runningProcess.getErrorStream()) { return stream.readAllBytes(); }
+            });
+            boolean completed = process.waitFor(Math.max(1L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
             if (!completed) {
                 process.destroyForcibly();
                 throw new IllegalStateException("curl 请求超时：" + hostLabel(url), restClientException);
             }
+            byte[] stdout = stdoutRead.get(Math.max(1L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+            String stderr = new String(stderrRead.get(Math.max(1L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS),
+                    StandardCharsets.UTF_8);
             if (process.exitValue() != 0) {
                 throw new IllegalStateException("curl 请求失败：" + hostLabel(url) + "，" + stderr, restClientException);
             }
             return stdout;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new CancellationException("行情请求已取消");
+        } catch (CancellationException cancelled) {
+            throw cancelled;
         } catch (Exception curlException) {
             if (restClientException != null) {
                 curlException.addSuppressed(restClientException);
             }
             throw new IllegalStateException("curl 执行失败：" + hostLabel(url), curlException);
+        } finally {
+            if (process != null && process.isAlive()) process.destroyForcibly();
+            if (streamReaders != null) streamReaders.shutdownNow();
         }
+    }
+
+    private static void ensureNotInterrupted() {
+        if (Thread.currentThread().isInterrupted()) throw new CancellationException("行情请求已取消");
     }
 
     List<String> remoteCandidateUrls(String url) {
@@ -2063,8 +2374,8 @@ public class EastMoneyClient {
             String proxyUrl = url.replace(
                     "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
                     "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get");
-            urls.put(proxyUrl, proxyUrl);
             urls.put(url, url);
+            urls.put(proxyUrl, proxyUrl);
             return new ArrayList<>(urls.values());
         }
         if (isPush2Host(host)) {
@@ -2154,13 +2465,21 @@ public class EastMoneyClient {
             return;
         }
         if (url.contains("eastmoney.com")) {
-            synchronized (eastMoneyRequestLock) {
-                long now = System.currentTimeMillis();
-                long waitMillis = EASTMONEY_MIN_INTERVAL_MILLIS - (now - lastEastMoneyRequestMillis);
-                if (waitMillis > 0) {
-                    quietSleep(waitMillis);
+            try {
+                eastMoneyRequestLock.lockInterruptibly();
+                try {
+                    long now = System.currentTimeMillis();
+                    long waitMillis = EASTMONEY_MIN_INTERVAL_MILLIS - (now - lastEastMoneyRequestMillis);
+                    if (waitMillis > 0) {
+                        Thread.sleep(waitMillis);
+                    }
+                    lastEastMoneyRequestMillis = System.currentTimeMillis();
+                } finally {
+                    eastMoneyRequestLock.unlock();
                 }
-                lastEastMoneyRequestMillis = System.currentTimeMillis();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new CancellationException("行情请求已取消");
             }
             return;
         }
@@ -2173,6 +2492,24 @@ public class EastMoneyClient {
                     quietSleep(waitMillis);
                 }
                 lastTencentHistoryRequestMillis = System.currentTimeMillis();
+            }
+            return;
+        }
+        if (url.contains("sina.com.cn")
+                && (url.contains("CN_MarketData.getKLineData") || url.endsWith("/qfq.js"))) {
+            try {
+                sinaHistoryRequestLock.lockInterruptibly();
+                try {
+                    long waitMillis = SINA_HISTORY_MIN_INTERVAL_MILLIS
+                            - (System.currentTimeMillis() - lastSinaHistoryRequestMillis);
+                    if (waitMillis > 0) Thread.sleep(waitMillis);
+                    lastSinaHistoryRequestMillis = System.currentTimeMillis();
+                } finally {
+                    sinaHistoryRequestLock.unlock();
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new CancellationException("行情请求已取消");
             }
         }
     }

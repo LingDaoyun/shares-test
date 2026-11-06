@@ -156,7 +156,23 @@ class ShortTermManualResultGateTest {
 
         assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
         assertThat(result.blockedReasons()).containsExactly("QUOTE_UNIVERSE_INCOMPLETE");
-        assertThat(result.message()).isEqualTo("全市场原始行情抓取不完整（104/105）");
+        assertThat(result.message()).isEqualTo("全市场原始行情抓取不完整（104/105）；来源：东方财富行情");
+    }
+
+    @Test
+    void reportsUniverseMismatchEvenWhenFallbackHasEveryRowInItsOwnList() {
+        ShortTermReport report = report(DECISION_AT.minusSeconds(10), true,
+                BigDecimal.ONE, false, List.of());
+        String source = "新浪hs_a清单范围 + 腾讯行情（东财5924/新浪hs_a5574；范围差异未核实）";
+        when(report.coverage()).thenReturn(new ShortTermCoverageSnapshot(
+                5574, 5574, 0, BigDecimal.ONE, false, source, DECISION_AT.minusSeconds(5),
+                5574, 5574, 0, false));
+
+        ShortTermFinalResultGate.Result result = gate.evaluateManual(report, DECISION_AT);
+
+        assertThat(result.status()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
+        assertThat(result.blockedReasons()).containsExactly("QUOTE_UNIVERSE_INCOMPLETE");
+        assertThat(result.message()).contains("5574/5574", "东财5924/新浪hs_a5574", "范围差异未核实");
     }
 
     @Test

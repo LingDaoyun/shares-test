@@ -50,7 +50,6 @@ public class ShortTermScanJobService {
     private final TradingClockService tradingClockService;
     private final ShortTermFinalResultGate finalResultGate;
     private final ShortTermObservationService observationService;
-    private final ShortTermUpperShadowService upperShadowService;
     private final ShortTermScanResultCache resultCache;
     private final Clock clock;
     private final Duration scanTimeout;
@@ -66,13 +65,12 @@ public class ShortTermScanJobService {
             TradingClockService tradingClockService,
             ShortTermFinalResultGate finalResultGate,
             ShortTermObservationService observationService,
-            ShortTermUpperShadowService upperShadowService,
             ShortTermScanResultCache resultCache,
             @Value("${research.short-term.scan-job-timeout:PT45M}") String scanTimeout
     ) {
         this(
                 shortTermService, researchHistoryService, tradingClockService, finalResultGate,
-                observationService, upperShadowService, resultCache,
+                observationService, resultCache,
                 Clock.system(TradingClockService.CHINA_MARKET_ZONE),
                 parseScanTimeout(scanTimeout));
     }
@@ -110,7 +108,7 @@ public class ShortTermScanJobService {
             Duration scanTimeout
     ) {
         this(shortTermService, researchHistoryService, tradingClockService, finalResultGate, observationService,
-                null, null, clock, scanTimeout);
+                null, clock, scanTimeout);
     }
 
     ShortTermScanJobService(
@@ -119,7 +117,6 @@ public class ShortTermScanJobService {
             TradingClockService tradingClockService,
             ShortTermFinalResultGate finalResultGate,
             ShortTermObservationService observationService,
-            ShortTermUpperShadowService upperShadowService,
             ShortTermScanResultCache resultCache,
             Clock clock,
             Duration scanTimeout
@@ -129,7 +126,6 @@ public class ShortTermScanJobService {
         this.tradingClockService = tradingClockService;
         this.finalResultGate = finalResultGate;
         this.observationService = observationService;
-        this.upperShadowService = upperShadowService;
         this.resultCache = resultCache;
         this.clock = clock.withZone(TradingClockService.CHINA_MARKET_ZONE);
         this.scanTimeout = scanTimeout == null || scanTimeout.isNegative() || scanTimeout.isZero()
@@ -187,31 +183,16 @@ public class ShortTermScanJobService {
     }
 
     private void timeoutJob(MutableJob job, Future<?> future) {
-        if (job.failIfRunning("短线联合扫描超时，本次结果未更新缓存，请稍后重试", clock.instant())) {
+        if (job.failIfRunning("短线扫描超时，本次结果未更新缓存，请稍后重试", clock.instant())) {
             future.cancel(true);
         }
     }
 
     private void runJob(MutableJob job, ShortTermScanRequest request) {
         List<String> gaps = new ArrayList<>();
-        ShortTermUpperShadowScan upper = null;
         ShortTermReport report = null;
         ShortTermFinalResultGate.Result result = null;
         try {
-            if (upperShadowService != null) {
-                try {
-                    upper = upperShadowService.scan();
-                    if (upper == null) {
-                        gaps.add("横盘长上影观察未返回结果。");
-                    } else if (!"READY".equals(upper.status())) {
-                        if (upper.dataGaps().isEmpty()) gaps.add("横盘长上影观察未完整完成。");
-                        else gaps.addAll(upper.dataGaps());
-                    }
-                } catch (Exception exception) {
-                    logger.warn("短线形态扫描任务失败，jobId={}", job.jobId(), exception);
-                    gaps.add("横盘长上影观察未完成：" + rootMessage(exception));
-                }
-            }
             if (!"RUNNING".equals(job.snapshot().status())) return;
             try {
                 report = shortTermService.report(request);
@@ -220,6 +201,7 @@ public class ShortTermScanJobService {
                 if (result == null) throw new IllegalStateException("右侧扫描未返回结果校验状态");
                 if (!visibleRightResult(result.status()) || result.status() == ShortTermSnapshotStatus.CACHE_PREVIEW) {
                     gaps.add(result.message());
+                    gaps.addAll(result.blockedReasons());
                 }
                 appendRightDataGaps(report, gaps);
             } catch (Exception exception) {
@@ -227,44 +209,33 @@ public class ShortTermScanJobService {
                 gaps.add("右侧候选未完成：" + rootMessage(exception));
             }
             Instant finishedAt = clock.instant();
-            boolean hasUpper = upper != null && ("READY".equals(upper.status()) || "PARTIAL".equals(upper.status()));
-            boolean rightCompleted = result != null;
-            if (!rightCompleted && !hasUpper) {
-                job.fail(String.join("；", gaps), finishedAt, upper, gaps);
+            if (result == null) {
+                job.fail(String.join("；", gaps), finishedAt, gaps);
                 return;
             }
-            if (result == null) {
-                result = new ShortTermFinalResultGate.Result(ShortTermSnapshotStatus.FAILED,
-                        "右侧扫描未完成，已保留本次形态观察。", List.of());
-            }
-            ShortTermReport cacheReport = rightCompleted && visibleRightResult(result.status()) ? report : null;
-            ShortTermDailySnapshot snapshot = cacheReport != null || hasUpper
-                    ? new ShortTermDailySnapshot(job.tradeDate, null, job.startedAt, finishedAt,
-                        cacheReport != null && upper != null && "READY".equals(upper.status()) && gaps.isEmpty()
-                                ? "READY" : "PARTIAL",
-                        result.status() == ShortTermSnapshotStatus.CACHE_PREVIEW
-                                ? result.message() + " 两类扫描结果已统一保存。"
-                                : "手动扫描结果已保存，两类候选属于同一次扫描。",
-                        cacheReport, upper, gaps, job.jobId())
-                    : null;
+            ShortTermReport cacheReport = visibleRightResult(result.status()) ? report : null;
+            ShortTermDailySnapshot snapshot = new ShortTermDailySnapshot(job.tradeDate, null, job.startedAt, finishedAt,
+                        cacheReport != null && gaps.isEmpty() ? "READY" : "PARTIAL",
+                        !visibleRightResult(result.status()) || result.status() == ShortTermSnapshotStatus.CACHE_PREVIEW
+                                ? result.message() + " 本次扫描结果已保存。"
+                                : "手动扫描结果已保存。",
+                        cacheReport, null, gaps, job.jobId());
             if (!"RUNNING".equals(job.snapshot().status())) return;
-            if (rightCompleted) {
-                recordHistorySafely(report);
-                recordObservationSafely(job.jobId(), report, result, finishedAt);
-            }
+            recordHistorySafely(report);
+            recordObservationSafely(job.jobId(), report, result, finishedAt);
             // Publication and cache replacement share the timeout guard; an interrupted provider may return late.
             synchronized (job) {
                 if (!"RUNNING".equals(job.status)) return;
                 String message = result.message();
-                if (snapshot != null && resultCache != null) {
+                if (resultCache != null) {
                     boolean saved = resultCache.save(snapshot);
-                    message += saved ? " 两类扫描结果已统一缓存。" : " 本次结果未替换已保存缓存。";
+                    message += saved ? " 扫描结果已缓存。" : " 本次结果未替换已保存缓存。";
                 }
-                job.succeed(report, upper, gaps, result, message, finishedAt);
+                job.succeed(report, gaps, result, message, finishedAt);
             }
         } catch (Exception exception) {
-            logger.warn("短线联合扫描结果发布失败，jobId={}", job.jobId(), exception);
-            job.fail(rootMessage(exception), clock.instant(), upper, gaps);
+            logger.warn("短线扫描结果发布失败，jobId={}", job.jobId(), exception);
+            job.fail(rootMessage(exception), clock.instant(), gaps);
         }
     }
 
@@ -373,7 +344,6 @@ public class ShortTermScanJobService {
         private String status;
         private String message;
         private ShortTermReport report;
-        private ShortTermUpperShadowScan upperShadow;
         private List<String> dataGaps = List.of();
         private ShortTermSnapshotStatus resultStatus;
         private List<String> blockedReasons;
@@ -386,7 +356,7 @@ public class ShortTermScanJobService {
             this.status = "RUNNING";
             this.resultStatus = ShortTermSnapshotStatus.RUNNING;
             this.blockedReasons = List.of();
-            this.message = "右侧启动与横盘长上影联合扫描中";
+            this.message = "短线右侧扫描中";
         }
 
         static MutableJob running(String jobId, LocalDate tradeDate, Instant createdAt) {
@@ -399,7 +369,6 @@ public class ShortTermScanJobService {
 
         synchronized void succeed(
                 ShortTermReport report,
-                ShortTermUpperShadowScan upperShadow,
                 List<String> dataGaps,
                 ShortTermFinalResultGate.Result result,
                 String message,
@@ -414,15 +383,12 @@ public class ShortTermScanJobService {
             this.finishedAt = finishedAt;
             this.message = message;
             this.report = report;
-            this.upperShadow = upperShadow;
             this.dataGaps = List.copyOf(dataGaps);
         }
 
-        synchronized void fail(String message, Instant finishedAt, ShortTermUpperShadowScan upperShadow,
-                               List<String> dataGaps) {
+        synchronized void fail(String message, Instant finishedAt, List<String> dataGaps) {
             if (!"RUNNING".equals(status)) return;
             failNow(message, finishedAt);
-            this.upperShadow = upperShadow;
             this.dataGaps = List.copyOf(dataGaps);
         }
 
@@ -446,7 +412,7 @@ public class ShortTermScanJobService {
         synchronized ShortTermScanJobStatus snapshot() {
             return new ShortTermScanJobStatus(
                     jobId, status, tradeDate, resultStatus, blockedReasons,
-                    createdAt, startedAt, finishedAt, message, report, upperShadow, dataGaps);
+                    createdAt, startedAt, finishedAt, message, report, null, dataGaps);
         }
     }
 }

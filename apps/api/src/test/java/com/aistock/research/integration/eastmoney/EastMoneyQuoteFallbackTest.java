@@ -37,7 +37,7 @@ class EastMoneyQuoteFallbackTest {
     }
 
     @Test
-    void disconnectedEastMoneyFallsBackToTheWholeSinaUniverseAndTencentQuotes() {
+    void disconnectedEastMoneyKeepsSinaScopeWithoutClaimingCanonicalCompleteness() {
         expectUniverse(ALL_SYMBOLS, 3);
 
         AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
@@ -46,7 +46,7 @@ class EastMoneyQuoteFallbackTest {
         assertThat(snapshot.expectedCount()).isEqualTo(3);
         assertThat(snapshot.fetchedCount()).isEqualTo(3);
         assertThat(snapshot.missingCount()).isZero();
-        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.complete()).isFalse();
         assertThat(snapshot.source()).contains("新浪hs_a清单范围", "腾讯", "本清单3/3", "非东财全集核验");
         assertThat(snapshot.quotes()).allSatisfy(quote -> {
             assertThat(quote.marketTimestamp()).isEqualTo(Instant.parse("2026-10-08T07:00:00Z"));
@@ -119,7 +119,26 @@ class EastMoneyQuoteFallbackTest {
     }
 
     @Test
-    void nonEmptyIncompleteEastMoneySnapshotUsesTheCompleteBackupWithoutMixingRows() {
+    void cancelledPrimaryScanDoesNotStartTheBackup() {
+        EastMoneyClient cancelled = new EastMoneyClient(null, new ObjectMapper(), null) {
+            @Override
+            AshareQuoteSnapshot fetchEastMoneyQuoteSnapshot(int limit) {
+                throw new java.util.concurrent.CancellationException("scan cancelled");
+            }
+
+            @Override
+            String fetchBodyWithCurl(String url, Exception failure, String referer) {
+                throw new AssertionError("Cancelled scan must not request a fallback source");
+            }
+        };
+
+        assertThatThrownBy(() -> cancelled.fetchAshareQuoteSnapshot(Integer.MAX_VALUE))
+                .isInstanceOf(java.util.concurrent.CancellationException.class)
+                .hasMessage("scan cancelled");
+    }
+
+    @Test
+    void equalCountsWithDifferentIdentitiesCannotConfirmTheCanonicalUniverse() {
         client.eastMoneyAvailable = true;
         client.eastMoneyRows = List.of(quote("600999"));
         expectUniverse(ALL_SYMBOLS, 3);
@@ -127,7 +146,7 @@ class EastMoneyQuoteFallbackTest {
         AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
 
         assertThat(client.requestedSymbols).containsExactly("600000", "000001", "920000");
-        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.complete()).isFalse();
         assertThat(snapshot.expectedCount()).isEqualTo(3);
         assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol)
                 .containsExactly("600000", "000001", "920000");
@@ -140,7 +159,7 @@ class EastMoneyQuoteFallbackTest {
         client.eastMoneyAvailable = true;
         client.eastMoneyRows = List.of(quote("600999"));
         expectUniverseRequests(ALL_SYMBOLS, 3);
-        expectSecurities("[{\"symbol\":\"sz300059\",\"code\":\"300059\"}]", 2);
+        expectSecurities("[{\"symbol\":\"sz300059\",\"code\":\"300059\"}]", 2, 2);
 
         AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
 
@@ -221,6 +240,22 @@ class EastMoneyQuoteFallbackTest {
     }
 
     @Test
+    void unknownPrimaryTotalCannotPromoteTheFallbackToCanonicalCompleteness() {
+        client.eastMoneyAvailable = true;
+        client.eastMoneyTotal = 0;
+        client.eastMoneyRows = List.of(quote("600999"));
+        expectUniverse(ALL_SYMBOLS, 3);
+
+        AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
+
+        assertThat(snapshot.expectedCount()).isEqualTo(3);
+        assertThat(snapshot.fetchedCount()).isEqualTo(3);
+        assertThat(snapshot.complete()).isFalse();
+        assertThat(snapshot.source()).contains("非东财全集核验");
+        server.verify();
+    }
+
+    @Test
     void aSatisfiedLimitedPrimaryRequestDoesNotFetchTheBackupOrClaimCompleteCoverage() {
         client.eastMoneyAvailable = true;
 
@@ -258,7 +293,7 @@ class EastMoneyQuoteFallbackTest {
 
         AshareQuoteSnapshot snapshot = client.fetchAshareQuoteSnapshot(6000);
 
-        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.complete()).isFalse();
         assertThat(snapshot.quotes()).filteredOn(quote -> !quote.symbol().equals("600000"))
                 .allSatisfy(quote -> assertThat(quote.industry()).isEqualTo("证券"));
         assertThat(snapshot.quotes()).filteredOn(quote -> quote.symbol().equals("600000"))
@@ -269,7 +304,7 @@ class EastMoneyQuoteFallbackTest {
     @Test
     void incompleteSecuritiesClassificationBlocksTheBackup() {
         expectUniverseRequests(ALL_SYMBOLS, 3);
-        expectSecurities("[{\"symbol\":\"sz300059\",\"code\":\"300059\"}]", 2);
+        expectSecurities("[{\"symbol\":\"sz300059\",\"code\":\"300059\"}]", 2, 2);
 
         assertThatThrownBy(() -> client.fetchAshareQuoteSnapshot(6000))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("证券行业清单不完整");
@@ -322,8 +357,14 @@ class EastMoneyQuoteFallbackTest {
     }
 
     private void expectSecurities(String rows, int finalCount) {
+        expectSecurities(rows, finalCount, 1);
+    }
+
+    private void expectSecurities(String rows, int finalCount, int pageAttempts) {
         server.expect(requestTo(SECURITIES_COUNT_URL)).andRespond(withSuccess("\"2\"", MediaType.APPLICATION_JSON));
-        server.expect(requestTo(SECURITIES_PAGE_URL)).andRespond(withSuccess(rows, MediaType.APPLICATION_JSON));
+        for (int attempt = 0; attempt < pageAttempts; attempt++) {
+            server.expect(requestTo(SECURITIES_PAGE_URL)).andRespond(withSuccess(rows, MediaType.APPLICATION_JSON));
+        }
         server.expect(requestTo(SECURITIES_COUNT_URL)).andRespond(withSuccess("\"" + finalCount + "\"", MediaType.APPLICATION_JSON));
     }
 
@@ -345,6 +386,13 @@ class EastMoneyQuoteFallbackTest {
 
         private FallbackClient(RestClient restClient) {
             super(restClient, new ObjectMapper(), null);
+        }
+
+        @Override
+        java.util.Set<String> verifySinaAshareUniverse(java.util.Set<String> symbols) {
+            // These fixtures deliberately model an unverified universe; the exchange verifier
+            // and successful complete fallback are covered by SinaQuoteUniverseVerificationTest.
+            return java.util.Set.of();
         }
 
         @Override

@@ -191,6 +191,43 @@ describe('LimitUpIndustryCards', () => {
     )
   })
 
+  it('counts consecutive-board tiers independently of multi-day statistics and labels unknown values', () => {
+    const counts = [1, 2, 3, 5, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5, null, undefined]
+    const stocks = counts.map((count, index) => ({
+      ...snapshot.stocks[0], symbol: `6000${index.toString().padStart(2, '0')}`, industry: '半导体',
+      consecutiveBoards: count as number, statDays: 9, statBoards: 7,
+    }))
+    const container = document.createElement('div')
+    container.innerHTML = renderToStaticMarkup(
+      <LimitUpIndustryCards snapshot={{ ...snapshot, stocks }} />
+    )
+    const card = container.querySelector('button')!
+
+    expect(card.textContent).toContain('涨停 11 家')
+    expect(card.textContent).toContain('首板 1 家')
+    expect(card.textContent).toContain('二板 1 家')
+    expect(card.textContent).toContain('三板及以上 2 家')
+    expect(card.textContent).toContain('连板未知 7 家')
+    expect(card.textContent).toContain('最高 5 板')
+    expect(card.textContent).toContain('9天7板')
+    expect(card.textContent).not.toContain('最高 7 板')
+    expect(card.textContent).not.toContain('NaN')
+  })
+
+  it('keeps the maximum unknown when every consecutive-board count is invalid', () => {
+    const container = document.createElement('div')
+    container.innerHTML = renderToStaticMarkup(
+      <LimitUpIndustryCards snapshot={{ ...snapshot, stocks: [{
+        ...snapshot.stocks[0], consecutiveBoards: 0, statDays: 0, statBoards: 0,
+      }] }} />
+    )
+
+    expect(container.textContent).toContain('首板 0 家')
+    expect(container.textContent).toContain('连板未知 1 家')
+    expect(container.textContent).toContain('最高连板未知')
+    expect(container.textContent).not.toContain('最高 0 板')
+  })
+
 })
 
 describe('LimitUpBoardDetail', () => {
@@ -234,6 +271,18 @@ describe('LimitUpBoardDetail', () => {
     expect(html).not.toContain('涨停行业卡片')
     expect(html).not.toContain('深中华A')
     expect(html).toContain('快照口径')
+  })
+
+  it('retains successful market metrics with an explicit stale-snapshot warning after a board refresh fails', () => {
+    const html = renderToStaticMarkup(
+      <LimitUpBoardDetail snapshot={snapshot} breadth={breadth} loading={false} error="更新超时" onRefresh={() => undefined} />
+    )
+
+    expect(html).toContain('涨停看板获取失败：更新超时')
+    expect(html).toContain('当前保留上次快照（旧快照）')
+    expect(html).toContain('共 2 只涨停')
+    expect(html).toContain('10 点前封板占比')
+    expect(html).toContain('跌停家数取自')
   })
 
   it('keeps the unavailable reason inside the market dialog body', () => {

@@ -9,6 +9,8 @@ import com.aistock.research.integration.eastmoney.EastMoneyFundFlowSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyIndustryFundFlowSnapshot;
 import com.aistock.research.integration.eastmoney.EastMoneyIntradayPoint;
 import com.aistock.research.integration.eastmoney.EastMoneyKLine;
+import com.aistock.research.integration.eastmoney.HistorySourceAccessBlockedException;
+import com.aistock.research.integration.eastmoney.IncompleteKLineHistoryException;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import com.aistock.research.integration.eastmoney.EastMoneyStockFundFlowRank;
 import com.aistock.research.quality.EvidenceCompleteness;
@@ -43,7 +45,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.Future;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -150,6 +158,7 @@ public class ShortTermService {
     private final ShortTermSupportReversalEvaluator supportReversalEvaluator = new ShortTermSupportReversalEvaluator();
     private final ShortTermCoreSignalScorer coreSignalScorer = new ShortTermCoreSignalScorer();
     private final ShortTermResearchSetupEvaluator researchSetupEvaluator = new ShortTermResearchSetupEvaluator();
+    private final ShortTermIntradayPullbackEvaluator intradayPullbackEvaluator = new ShortTermIntradayPullbackEvaluator();
     private final ShortTermSupplyDemandScorer supplyDemandScorer = new ShortTermSupplyDemandScorer();
     private final ShortTermCrossSectionAnalyzer crossSectionAnalyzer = new ShortTermCrossSectionAnalyzer();
     private final ShortTermVolatilityQualityEvaluator volatilityQualityEvaluator = new ShortTermVolatilityQualityEvaluator();
@@ -343,6 +352,7 @@ public class ShortTermService {
     }
 
     private ShortTermReport buildReport(ShortTermScanRequest request) {
+        checkScanInterrupted();
         ShortTermRuleSet ruleSet = resolveRuleSet(
                 request.scanLimit(),
                 request.klineLimit(),
@@ -381,6 +391,9 @@ public class ShortTermService {
                 false,
                 allowClosedMarketCachePreview
         );
+        if (ruleSet.scanLimit() == 0 && !coverage.rawComplete()) {
+            return incompleteUniverseReport(ruleSet, quoteUniverse.size(), coverage, pointInTimeCoverageQuotes);
+        }
         Set<String> unstableIndustrySymbols = fetchUnstableIndustrySymbols();
         List<ShortTermRiskExclusion> quoteExclusions = quoteUniverse.stream()
                 .map(quote -> preFilterExclusion(quote, ruleSet, unstableIndustrySymbols))
@@ -592,7 +605,7 @@ public class ShortTermService {
                                 : "候选先完成执行门禁再截断：可执行计划优先，同层按研究分排序，不为补足数量制造买点。",
                         "新形态须研究分至少 75、相对强弱至少 60、触发位与失效位明确，且换手和上影风险通过后，才进入尾盘确认流程；这些都是未经样本外验证的初始参数。",
                         "盈亏空间按区间上沿买入、分批目标及往返费用滑点 0.20% 假设计算，净目标空间/风险至少 1.20；它是情景约束，不是预期收益。",
-                        "公开方法来自 Minervini、O’Neil/IBD、Qullamaggie 与 SMB 的原始资料；1–2 交易日持有及具体阈值为本项目改编，尚无收益改善结论。",
+                        "日线筛选结合下午10分钟缩量回踩与放量突破；隔夜持有至下一交易日早盘，具体阈值为初始研究参数，尚无收益改善结论。",
                         "14:45-14:49 使用当时已经产生的分时、均价线、尾盘成交占比和高点回落完成普通股票尾盘决策；14:50 后数据只用于历史复盘，不能反推当日买点。"
                 ),
                 ruleSet,
@@ -610,6 +623,27 @@ public class ShortTermService {
                 technicalReviewCoverage,
                 crossSection.context(),
                 marketRegime
+        );
+    }
+
+    private ShortTermReport incompleteUniverseReport(
+            ShortTermRuleSet ruleSet,
+            int universeCount,
+            ShortTermCoverageSnapshot coverage,
+            List<EastMoneyQuote> pointInTimeQuotes
+    ) {
+        String note = "原始行情全集未通过校验（" + coverage.rawFetchedCount() + "/"
+                + coverage.rawExpectedCount() + "）；来源：" + coverage.source()
+                + "。本轮未进行个股技术和财务复核，未发布右侧候选。";
+        return new ShortTermReport(
+                "A 股短线研究候选", universeCount, 0, 0, 0, note,
+                tradingClockService.currentSession(),
+                List.of("全量扫描先校验证券全集；原始清单不完整或范围未核实时停止，不用另一个清单的数量补足。"),
+                ruleSet, WEIGHT_PROFILE, List.of(), List.of(),
+                marketSentiment(List.of(), coverage), null, List.of(), Map.of(),
+                coverage, List.of(), dataCutoffAt(pointInTimeQuotes, List.of()), Instant.now(),
+                ShortTermTechnicalReviewCoverage.unavailable(), ShortTermCrossSectionContext.unavailable(),
+                ShortTermMarketRegime.unavailable("原始行情全集未通过校验，本次未评估市场状态")
         );
     }
 
@@ -1874,7 +1908,7 @@ public class ShortTermService {
                     ),
                     List.of(
                             "单票试错仓位不超过计划短线仓位的 1/5。",
-                            "不追第二笔，次日不能继续站稳 5/10/20 日线时退出。",
+                            "不追第二笔，下一交易日早盘按计划截止退出，不等待日线再次确认。",
                             "尾盘从高点回落或跌回均价线下方时取消试错。"
                     )
             );
@@ -1891,7 +1925,7 @@ public class ShortTermService {
                     ),
                     List.of(
                             "单票试错仓位不超过计划短线仓位的 1/5。",
-                            "尾盘承接减弱时取消试错，次日不能延续则退出。",
+                            "尾盘承接减弱时取消试错；已买仓位下一交易日早盘按计划退出。",
                             "市场状态转为系统性退潮时停止新增短线仓位。"
                     )
             );
@@ -1910,7 +1944,7 @@ public class ShortTermService {
                     List.of(
                             "单票试错仓位不超过计划短线仓位的 1/5。",
                             "跌破本次承接低点或重新失守 " + supportName(support) + " 时退出。",
-                            "次日弱开且 30 分钟内不能收回支撑时不补仓。"
+                            "次日弱开触及止损优先退出，不补仓；最晚按早盘计划截止退出。"
                     )
             );
         }
@@ -1935,7 +1969,8 @@ public class ShortTermService {
     }
 
     private ShortTermCandidate enrichTailSignal(ShortTermCandidate candidate) {
-        ShortTermTailSignal tailSignal = tailSignal(candidate.symbol(), expectedTailTradeDate(candidate));
+        boolean intradayPullback = isIntradayPullback(researchOf(candidate));
+        ShortTermTailSignal tailSignal = tailSignal(candidate.symbol(), expectedTailTradeDate(candidate), intradayPullback);
         EvidenceCompleteness completeness = evidenceCompleteness(candidate, tailSignal);
         TradingAdvice tailAdjusted = isGoldenCrossWatchLayer(candidate.technical())
                 && !independentResearchSetup(researchOf(candidate))
@@ -1975,7 +2010,8 @@ public class ShortTermService {
                 candidate.financial(),
                 candidate.buyZoneLow(),
                 candidate.buyZoneHigh(),
-                candidate.stopPrice(),
+                intradayPullback && tailSignal.intradayPullback() != null && tailSignal.intradayPullback().confirmed()
+                        ? tailSignal.intradayPullback().pullbackLow() : candidate.stopPrice(),
                 candidate.strengths(),
                 candidate.risks(),
                 withTailEntryRule(candidate.entryRules()),
@@ -1998,13 +2034,16 @@ public class ShortTermService {
                 && !candidate.quoteFreshness().blocksRealtimeDecision();
         boolean evidenceAllowsExecution = candidate.evidenceCompleteness() != null
                 && candidate.evidenceCompleteness().allowsBuy();
+        boolean pullbackAllowsExecution = !isIntradayPullback(researchOf(candidate))
+                || candidate.tailSignal() != null && candidate.tailSignal().intradayPullback() != null
+                && candidate.tailSignal().intradayPullback().confirmed();
         LocalDate tradeDate = candidate.quoteFreshness() != null
                 && candidate.quoteFreshness().tradeDate() != null
                 ? candidate.quoteFreshness().tradeDate()
                 : candidate.technical() == null ? null : candidate.technical().tradeDate();
 
         ShortTermTradePlan plan;
-        if (executableAction && freshnessAllowsExecution && evidenceAllowsExecution) {
+        if (executableAction && freshnessAllowsExecution && evidenceAllowsExecution && pullbackAllowsExecution) {
             plan = tradePlanService.create(
                     tradeDate,
                     candidate.latestPrice(),
@@ -2024,6 +2063,9 @@ public class ShortTermService {
             if (!evidenceAllowsExecution) {
                 blockedReasons.add("证据完整度未通过，交易计划不可执行");
             }
+            if (!pullbackAllowsExecution) {
+                blockedReasons.add("下午10分钟缩量回踩和放量突破未确认，不能用日线背景或尾盘拉升替代");
+            }
             plan = tradePlanService.blocked(
                     tradeDate,
                     candidate.latestPrice(),
@@ -2036,7 +2078,10 @@ public class ShortTermService {
         }
         if (researchOf(candidate) != null) {
             if (hasResearchPattern(researchOf(candidate))) {
-                plan = plan.withResearchInvalidation(researchOf(candidate).invalidationPrice());
+                BigDecimal invalidation = isIntradayPullback(researchOf(candidate)) && pullbackAllowsExecution
+                        ? candidate.tailSignal().intradayPullback().pullbackLow()
+                        : researchOf(candidate).invalidationPrice();
+                plan = plan.withResearchInvalidation(invalidation);
             }
             plan = plan.withResearchRiskAssessment(ShortTermResearchRiskGate.assess(plan));
         }
@@ -2159,16 +2204,36 @@ public class ShortTermService {
         return candidate.technical() == null ? null : candidate.technical().tradeDate();
     }
 
-    private ShortTermTailSignal tailSignal(String symbol, LocalDate expectedTradeDate) {
+    private boolean isIntradayPullback(ShortTermResearchSetup research) {
+        return research != null && "TREND_PULLBACK".equals(research.setupType());
+    }
+
+    private ShortTermTailSignal tailSignal(String symbol, LocalDate expectedTradeDate, boolean requiresPullback) {
         try {
-            List<EastMoneyIntradayPoint> points = eastMoneyClient.fetchIntradayTrends(symbol).stream()
+            List<EastMoneyIntradayPoint> source = requiresPullback
+                    ? eastMoneyClient.fetchIntradayOhlcv(symbol) : eastMoneyClient.fetchIntradayTrends(symbol);
+            List<EastMoneyIntradayPoint> points = source.stream()
+                    .filter(point -> point != null)
                     .filter(point -> point.minute() != null && point.close() != null)
                     .sorted(Comparator.comparing(EastMoneyIntradayPoint::minute))
                     .toList();
-            return evaluateTailSignal(points, expectedTradeDate);
+            LocalDateTime decisionAt = tradingClockService.currentMarketDateTime();
+            if (requiresPullback) {
+                // A current minute can still change; both tail and pattern use completed minutes only.
+                points = points.stream().filter(point -> point.minute().isBefore(decisionAt.withSecond(0).withNano(0))).toList();
+                // The pattern validates conflicts against source; identical minute repeats count only once in the tail.
+                Map<LocalDateTime, EastMoneyIntradayPoint> distinctMinutes = new java.util.TreeMap<>();
+                points.forEach(point -> distinctMinutes.putIfAbsent(point.minute(), point));
+                points = List.copyOf(distinctMinutes.values());
+            }
+            ShortTermTailSignal tail = evaluateTailSignal(points, expectedTradeDate);
+            if (!requiresPullback) return tail;
+            LocalDateTime cutoff = expectedTradeDate == null ? decisionAt : expectedTradeDate.atTime(ACTIONABLE_TAIL_END_EXCLUSIVE);
+            if (decisionAt.isBefore(cutoff)) cutoff = decisionAt;
+            return tail.withIntradayPullback(intradayPullbackEvaluator.evaluate(source, expectedTradeDate, cutoff));
         } catch (RuntimeException exception) {
             logger.warn("尾盘分时数据获取失败：{}", symbol, exception);
-            return new ShortTermTailSignal(
+            ShortTermTailSignal unavailable = new ShortTermTailSignal(
                     "UNAVAILABLE",
                     "分时缺失",
                     false,
@@ -2185,6 +2250,9 @@ public class ShortTermService {
                     List.of("当天 1 分钟分时数据暂不可用，不能确认 14:45-14:49 可执行尾盘承接。"),
                     List.of("尾盘分时缺失时不执行短线买入。")
             );
+            return requiresPullback ? unavailable.withIntradayPullback(new ShortTermIntradayPullbackSignal(
+                    "UNAVAILABLE", "分时回踩数据不足", null, null, null, null, null, null,
+                    List.of(), List.of("真实分钟OHLCV不可用，不能用采样价格合成的高低价确认10分钟回踩。"))) : unavailable;
         }
     }
 
@@ -2484,7 +2552,7 @@ public class ShortTermService {
                     lightTrialConfidence(base, tailSignal),
                     lightTrialSummary(base),
                     merge(List.of("日线右侧结构进入观察区。", "当日分时证据不晚于服务端决策时刻，具备小仓验证条件。"), base.reasons()),
-                    merge(base.riskControls(), List.of("轻仓试错不超过计划短线仓位的 1/5。", "次日不能继续站稳 5/10/20 日线时退出试错。"))
+                    merge(base.riskControls(), List.of("轻仓试错不超过计划短线仓位的 1/5。", "下一交易日早盘按交易计划截止退出，不延长到T+2。"))
             );
         }
         if (shouldNextDayWatch(base, candidateAction, tailSignal)) {
@@ -2498,6 +2566,8 @@ public class ShortTermService {
             );
         }
         String summary = switch (tailSignal.status()) {
+            case "PULLBACK_WAIT" -> "下午缩量回踩与放量突破尚未同时成立，继续观察。";
+            case "PULLBACK_UNAVAILABLE" -> "真实10分钟回踩证据不完整，今日不执行回踩买入。";
             case "CONFIRMED" -> "14:45-14:49 尾盘证据已形成，但当前已不在普通股票可成交决策窗口；结果只用于研究，不可新建短线仓位。";
             case "NOT_READY" -> "当前还没有进入 14:45-14:49 可执行尾盘窗口，先保留候选观察。";
             case "POST_CLOSE_FIXED_PRICE" -> "当前数据属于盘后固定价格区间，不能和普通尾盘买点混用，今日先观察。";
@@ -2939,10 +3009,10 @@ public class ShortTermService {
 
     private List<String> exitRules(ShortTermRuleSet ruleSet) {
         return List.of(
-                "跌破 20 日线且次日不能收回，退出短线试错。",
-                "放量长阴跌破启动阳线低点，退出。",
-                "单日涨幅过快后不加仓，等回踩确认。",
-                "财报或公告出现经营恶化证据，取消价值回归逻辑。"
+                "仅隔夜持有，下一交易日早盘按交易计划截止时间退出，未冲高也退出，不延长到T+2。",
+                "次日触及止损价优先退出；冲高达到目标先兑现，剩余仓位按移动止损和早盘截止时间处理。",
+                "次日低开不补仓摊低成本；跳空或跌停可能使实际退出价差于计划。",
+                "买入当日受T+1约束无法卖出，分时回踩低点只作为次日风险处理参考。"
         );
     }
 
@@ -3408,21 +3478,29 @@ public class ShortTermService {
     }
 
     private List<EastMoneyKLine> fetchKLinesOrThrow(String symbol) {
+        checkScanInterrupted();
         LocalDate end = tradingClockService.currentMarketDate();
         LocalDate begin = end.minusDays(420);
         List<EastMoneyKLine> rows = eastMoneyClient.fetchDailyKLines(symbol, begin, end);
+        checkScanInterrupted();
         if (chipAnalysisService == null || !chipSettings.enabled()) {
             return rows;
         }
         List<EastMoneyKLine> enriched = eastMoneyClient.enrichDailyKLineTurnover(
                 symbol, begin, end, rows);
+        checkScanInterrupted();
         return enriched == null || enriched.isEmpty() ? rows : enriched;
     }
 
     private List<EastMoneyKLine> fetchKLinesSafely(String symbol) {
         try {
             return fetchKLinesOrThrow(symbol);
+        } catch (HistorySourceAccessBlockedException exception) {
+            throw exception;
+        } catch (CancellationException exception) {
+            throw exception;
         } catch (RuntimeException exception) {
+            checkScanInterrupted();
             logger.warn("短线右侧 K 线获取失败：{}", symbol, exception);
             return List.of();
         }
@@ -3435,7 +3513,14 @@ public class ShortTermService {
         List<EastMoneyKLine> probeRows;
         try {
             probeRows = fetchKLinesOrThrow(probe.symbol());
+        } catch (IncompleteKLineHistoryException exception) {
+            checkScanInterrupted();
+            // A verified single-stock gap does not establish that the source is down.
+            probeRows = List.of();
+        } catch (CancellationException exception) {
+            throw exception;
         } catch (RuntimeException exception) {
+            checkScanInterrupted();
             throw new IllegalStateException(
                     "K线数据源当前不可用（" + probe.symbol() + " 探测失败，可能被行情接口限流），请稍后重试",
                     exception
@@ -3443,11 +3528,38 @@ public class ShortTermService {
         }
         Map<String, List<EastMoneyKLine>> klineMap = new ConcurrentHashMap<>();
         klineMap.put(probe.symbol(), probeRows);
-        tradableQuotes.stream()
-                .filter(quote -> !quote.symbol().equals(probe.symbol()))
-                .parallel()
-                .forEach(quote -> klineMap.put(quote.symbol(), fetchKLinesSafely(quote.symbol())));
-        return klineMap;
+        if (tradableQuotes.size() == 1) return klineMap;
+        int workerCount = Math.min(tradableQuotes.size() - 1, Math.max(1, ForkJoinPool.getCommonPoolParallelism()));
+        ExecutorService workers = Executors.newFixedThreadPool(workerCount, runnable -> {
+            Thread thread = new Thread(runnable, "short-term-kline");
+            thread.setDaemon(true);
+            return thread;
+        });
+        List<Future<?>> requests = new ArrayList<>();
+        try {
+            for (EastMoneyQuote quote : tradableQuotes) {
+                if (quote.symbol().equals(probe.symbol())) continue;
+                checkScanInterrupted();
+                requests.add(workers.submit(() -> klineMap.put(quote.symbol(), fetchKLinesSafely(quote.symbol()))));
+            }
+            for (Future<?> request : requests) request.get();
+            checkScanInterrupted();
+            return klineMap;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new CancellationException("短线扫描已中断");
+        } catch (ExecutionException exception) {
+            if (exception.getCause() instanceof RuntimeException failure) throw failure;
+            throw new IllegalStateException("短线 K 线复核任务失败", exception.getCause());
+        } finally {
+            // Stop queued requests before interrupting active providers; the timeout owns this whole batch.
+            workers.shutdownNow();
+            requests.forEach(request -> request.cancel(true));
+        }
+    }
+
+    private void checkScanInterrupted() {
+        if (Thread.currentThread().isInterrupted()) throw new CancellationException("短线扫描已中断");
     }
 
     private Map<String, EastMoneyFundFlowSnapshot> fetchFundFlows(List<String> symbols) {

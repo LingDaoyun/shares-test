@@ -1,15 +1,11 @@
 import { forwardRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { RefreshCw, Settings, ArrowLeft } from 'lucide-react'
-import { useAppStore } from '../../store/appStore'
+import { Settings, ArrowLeft } from 'lucide-react'
 import { pageMeta, pathToPage } from './pageMeta'
-import { Spinner } from '../ui/Loader'
 
 export const Header = forwardRef<HTMLElement>(function Header(_props, ref) {
   const location = useLocation()
   const navigate = useNavigate()
-  const loading = useAppStore((s) => s.loading)
-  const loadAll = useAppStore((s) => s.loadAll)
 
   const key = location.pathname.replace(/^\/+|\/+$/g, '').trim()
   const page = pathToPage[key] ?? 'limitUp'
@@ -33,15 +29,6 @@ export const Header = forwardRef<HTMLElement>(function Header(_props, ref) {
         >
           {isSettings ? <ArrowLeft className="h-4 w-4" /> : <Settings className="h-4 w-4" />}
           {isSettings ? '返回首页' : '系统配置'}
-        </button>
-        <button
-          type="button"
-          title="刷新全部数据"
-          onClick={() => void loadAll()}
-          disabled={loading}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line bg-white text-ink-600 transition hover:border-brand-300 hover:text-brand-600 disabled:opacity-50"
-        >
-          {loading ? <Spinner className="text-brand-500" /> : <RefreshCw className="h-4 w-4" />}
         </button>
       </div>
     </header>

@@ -1,6 +1,7 @@
 package com.aistock.research.shortterm;
 
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
+import com.aistock.research.integration.eastmoney.EastMoneyIntradayPoint;
 import com.aistock.research.integration.eastmoney.EastMoneyQuote;
 import com.aistock.research.quality.EvidenceCompletenessService;
 import com.aistock.research.trading.TradingAdvice;
@@ -15,6 +16,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.ArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
@@ -118,6 +120,66 @@ class ShortTermResearchIntegrationTest {
         assertThat(adjust("WATCH", "14:46").action()).isEqualTo("WAIT");
         assertThat(adjust("CONFIRMED", "14:47").action()).isEqualTo("WAIT");
         assertThat(adjust("CONFIRMED", "14:46").action()).isEqualTo("LIGHT_TRIAL");
+    }
+
+    @Test
+    void strongTailCannotBypassMissingIntradayPullbackSequence() {
+        ShortTermTailSignal tail = new ShortTermTailSignal("CONFIRMED", "尾盘确认", true,
+                "2026-07-23", "14:46", new BigDecimal("10.5"), new BigDecimal("10.3"),
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, new BigDecimal("30000000"),
+                new BigDecimal("5"), new BigDecimal("80"), List.of(), List.of());
+        ShortTermIntradayPullbackSignal missing = new ShortTermIntradayPullbackSignal(
+                "UNAVAILABLE", "分时数据不足", null, null, null, null, null, null,
+                List.of(), List.of("缺少连续分钟"));
+        ShortTermTailSignal gated = tail.withIntradayPullback(missing);
+        assertThat(gated.status()).isEqualTo("PULLBACK_UNAVAILABLE");
+        assertThat(gated.intradayPullback()).isEqualTo(missing);
+        assertThat(gated.reasons()).contains("缺少连续分钟");
+        ShortTermService service = new ShortTermService(mock(EastMoneyClient.class),
+                new EvidenceCompletenessService(), new TradingClockService(
+                Clock.fixed(Instant.parse("2026-07-23T06:46:00Z"), ZoneId.of("Asia/Shanghai"))));
+        TradingAdvice base = new TradingAdvice("LIGHT_TRIAL", "研究候选", 60, "", List.of(), List.of());
+        TradingAdvice result = ReflectionTestUtils.invokeMethod(service, "tailAdjustedAdvice", base,
+                "RESEARCH_LIGHT_TRIAL", gated, true);
+        assertThat(result.action()).isEqualTo("WAIT");
+    }
+
+    @Test
+    void pullbackDoesNotFallbackToSampledMinuteHighsAndLows() {
+        EastMoneyClient client = mock(EastMoneyClient.class);
+        when(client.fetchIntradayOhlcv("600001")).thenReturn(List.of());
+        ShortTermService service = new ShortTermService(client, new EvidenceCompletenessService(),
+                new TradingClockService(Clock.fixed(Instant.parse("2026-07-23T06:48:00Z"), ZoneId.of("Asia/Shanghai"))));
+        ShortTermTailSignal signal = ReflectionTestUtils.invokeMethod(service, "tailSignal",
+                "600001", LocalDate.of(2026, 7, 23), true);
+        assertThat(signal.status()).isEqualTo("PULLBACK_UNAVAILABLE");
+        assertThat(signal.intradayPullback().confirmed()).isFalse();
+        verify(client).fetchIntradayOhlcv("600001");
+        verify(client, never()).fetchIntradayTrends(anyString());
+    }
+
+    @Test
+    void duplicateMinuteCannotSupplyAThirdTailObservation() {
+        EastMoneyClient client = mock(EastMoneyClient.class);
+        LocalDate date = LocalDate.of(2026, 7, 23);
+        List<EastMoneyIntradayPoint> minutes = new ArrayList<>();
+        for (int i = 1; i <= 106; i++) {
+            String close = i <= 20 ? "10.12" : i <= 30 ? "10.03" : i <= 40 ? "10.15" : i == 106 ? "10.20" : "10.16";
+            String high = i <= 20 ? "10.14" : i <= 30 ? "10.10" : "10.22";
+            String low = i <= 20 ? "10.08" : i <= 30 ? "10.02" : "10.04";
+            String volume = i <= 20 ? "100" : i <= 30 ? "60" : i <= 40 ? "180" : "100";
+            minutes.add(new EastMoneyIntradayPoint("600001", date.atTime(13, 0).plusMinutes(i),
+                    new BigDecimal(close), new BigDecimal(close), new BigDecimal(high), new BigDecimal(low),
+                    new BigDecimal(volume), new BigDecimal(i >= 105 ? "10000000" : "10000"), new BigDecimal("10.00")));
+        }
+        minutes.add(minutes.get(minutes.size() - 1));
+        when(client.fetchIntradayOhlcv("600001")).thenReturn(minutes);
+        ShortTermService service = new ShortTermService(client, new EvidenceCompletenessService(),
+                new TradingClockService(Clock.fixed(Instant.parse("2026-07-23T06:47:00Z"), ZoneId.of("Asia/Shanghai"))));
+        ShortTermTailSignal signal = ReflectionTestUtils.invokeMethod(service, "tailSignal", "600001", date, true);
+        assertThat(signal.intradayPullback().confirmed()).isTrue();
+        assertThat(signal.status()).isEqualTo("WATCH");
+        assertThat(signal.tailAmount()).isEqualByComparingTo("20000000");
     }
 
     private TradingAdvice adjust(String status, String minute) {

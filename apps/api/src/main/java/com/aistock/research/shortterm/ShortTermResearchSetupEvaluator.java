@@ -19,7 +19,7 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * Deterministic, initial research settings for a 1–2 trading-day review horizon.
+ * Deterministic research settings for a tail entry and next-session morning exit.
  * These thresholds are our quantitative approximations, not an expert's original
  * system or a validated performance claim. A single 5/20 true-range contraction is
  * deliberately called 收缩突破, never a complete Minervini VCP pattern.
@@ -30,17 +30,16 @@ import java.util.TreeMap;
  * Trend extension is bounded by 2.5 prior ATR14 and the configured MA20 distance
  * (8% default). Breakout: prior TR5/TR20 <=0.80, above prior 20-bar high by at
  * most min(3%, 1.5 ATR); volume 0.8–3.0x to observe, >=1.2x to confirm.
- * Pullback: 2–5 consecutive declining completed closes after an established trend,
- * retreat volume <=0.85 of the preceding 20-day average, touch within 0.5 ATR
- * of MA10/MA20 without losing MA20 by >0.5 ATR, then reclaim MA10/prior-day high;
- * recovery <=2 ATR above MA20, volume 0.9–3.0x (>=1.0x for confirmation).
+ * Pullback daily background: five completed bars within 2 ATR, rising lows,
+ * and price above MA5/MA10. Only the separate afternoon ten-minute evaluator can
+ * confirm low-volume VWAP support followed by a volume-backed platform breakout.
  * Confirmation additionally requires a completed cutoff-day bar, trusted data,
  * measured RS >=60, and the family-specific conditions. Intraday quote price and
  * provider realtime volume ratio can identify WATCH only. No daily-derived VWAP.
  */
 @Component
 public class ShortTermResearchSetupEvaluator {
-    public static final String RULE_VERSION = "short-term-research-v7-market-context";
+    public static final String RULE_VERSION = "short-term-research-v8-intraday-overnight";
     private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal HUNDRED = new BigDecimal("100");
@@ -114,13 +113,14 @@ public class ShortTermResearchSetupEvaluator {
         Family family = Family.none();
         if (trend.qualified() && positive(atr)) {
             family = breakout(prior, price, atr, volumeRatio, completed, last, evidence);
-            if (!family.matched()) family = pullback(prior, price, atr, volumeRatio, completed, rules, evidence);
             if (!family.matched()) family = support(technical, quote, price, atr, completed, evidence, gaps);
             if (!family.matched()) family = goldenCross(technical, quote, rows, last, price, ma20, atr,
                     volumeRatio, completed, evidence);
+            // Daily consolidation is only background, so it must not replace an existing specific setup.
+            if (!family.matched()) family = pullback(prior, price, atr, evidence);
         } else risks.add("MA20/MA60趋势或ATR延伸条件未通过，不能以普通上涨替代明确形态");
         if (family.matched()) evidence.add("趋势：价格在MA20/MA60上方，MA20不低于MA60且两均线方向不下降");
-        else risks.add("未匹配收缩突破、趋势回踩、支撑反转或近期金叉动量");
+        else risks.add("未匹配收缩突破、分时回踩日线背景、支撑反转或近期金叉动量");
         if (relativeScore != null && relativeScore.compareTo(bd("60")) < 0)
             risks.add("横截面相对强度低于60，仅保留观察");
         if (volatility != null && "OVEREXTENDED".equals(volatility.state()))
@@ -150,7 +150,8 @@ public class ShortTermResearchSetupEvaluator {
     private boolean executionVolumeReady(Family family, BigDecimal volumeRatio, ShortTermTechnicalSnapshot technical) {
         return switch (family.type()) {
             case "CONTRACTION_BREAKOUT" -> between(volumeRatio, "1.2", "3.0");
-            case "TREND_PULLBACK" -> between(volumeRatio, "1.0", "3.0");
+            // Daily volume cannot substitute for the subsequent ten-minute sequence.
+            case "TREND_PULLBACK" -> true;
             case "SUPPORT_REVERSAL" -> technical != null && technical.supportReversal() != null
                     && technical.supportReversal().volumeQualified() && technical.supportReversal().turnoverQualified()
                     && technical.supportReversal().dataGaps().isEmpty();
@@ -177,30 +178,22 @@ public class ShortTermResearchSetupEvaluator {
     }
 
     private Family pullback(List<EastMoneyKLine> prior, BigDecimal price, BigDecimal atr,
-            BigDecimal volumeRatio, boolean completed, ShortTermRuleSet rules, List<String> evidence) {
-        int end = prior.size() - 1;
-        int retreat = 0;
-        while (end - retreat > 0 && retreat < 6
-                && prior.get(end - retreat).close().compareTo(prior.get(end - retreat - 1).close()) < 0) retreat++;
-        if (retreat < 2 || retreat > 5 || prior.size() - retreat < 61) return Family.none();
-        List<EastMoneyKLine> before = prior.subList(0, prior.size() - retreat);
-        if (!trend(before, before.get(before.size() - 1).close(), atr(before, 14), rules).qualified())
-            return Family.none();
-        BigDecimal retreatRatio = ratio(averageVolume(prior, retreat), averageVolume(before, 20));
+            List<String> evidence) {
+        if (prior.size() < 5) return Family.none();
+        List<EastMoneyKLine> recent = prior.subList(prior.size() - 5, prior.size());
+        BigDecimal range = high(recent, 5).subtract(low(recent, 5));
+        BigDecimal earlyLow = low(recent.subList(0, 2), 2);
+        BigDecimal recentLow = low(recent.subList(3, 5), 2);
+        BigDecimal ma5 = averageClose(prior, 5, 0);
         BigDecimal ma10 = averageClose(prior, 10, 0);
-        BigDecimal ma20 = averageClose(prior, 20, 0);
-        BigDecimal retreatLow = low(prior, retreat);
-        BigDecimal trigger = ma10.max(prior.get(end).high());
-        boolean touch = retreatLow.subtract(ma10).abs().min(retreatLow.subtract(ma20).abs())
-                .compareTo(atr.multiply(bd("0.5"))) <= 0;
-        if (retreatRatio.compareTo(bd("0.85")) > 0 || !touch
-                || retreatLow.compareTo(ma20.subtract(atr.multiply(bd("0.5")))) < 0
-                || price.compareTo(trigger) < 0 || price.subtract(ma20).compareTo(atr.multiply(bd("2"))) > 0
-                || !between(volumeRatio, "0.9", "3.0")) return Family.none();
-        evidence.add("趋势回踩量化近似：连续 " + retreat + " 根缩量回落，回落量比 " + scale(retreatRatio)
-                + "，触及MA10/MA20后重新站上回升触发价 " + scale(trigger));
-        return new Family("TREND_PULLBACK", "趋势回踩", bd("95"), trigger,
-                retreatLow.subtract(atr.multiply(bd("0.25"))), completed && volumeRatio.compareTo(BigDecimal.ONE) >= 0);
+        if (range.compareTo(atr.multiply(bd("2"))) > 0 || recentLow.compareTo(earlyLow) <= 0
+                || ma5 == null || ma10 == null || price.compareTo(ma5.max(ma10)) < 0) return Family.none();
+        evidence.add("分时回踩日线背景：最近5根已完成日K区间 " + scale(range)
+                + " 元不超过2 ATR，后2日低点 " + scale(recentLow) + " 高于前2日 " + scale(earlyLow)
+                + "，当前价格站在MA5/MA10上方。");
+        evidence.add("仍须下午已完成10分钟K线先缩量回踩当日均价线，再放量突破小平台；日线背景不能确认买点。");
+        return new Family("TREND_PULLBACK", "分时回踩", bd("90"), ma5.max(ma10),
+                low(recent, 5), false);
     }
 
     private Family support(ShortTermTechnicalSnapshot technical, EastMoneyQuote quote, BigDecimal price,

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { isAxiosError } from 'axios'
 import { fetchShortTermScanJob, startShortTermScanJob } from '../api/client'
 import type { ShortTermParams } from '../api/client'
 import type { ShortTermDailySnapshot, UpperShadowScan } from '../api/dailyShortTerm'
@@ -23,8 +24,10 @@ interface ShortTermScanState {
 }
 
 let manualRunGeneration = 0
+let lastManualScanStartedAt = Number.NaN
 export function getShortTermManualScanGeneration() { return manualRunGeneration }
 let pollTimer: number | undefined
+const POLLING_RECOVERY_WINDOW_MS = 60000
 const MANUAL_SCAN_TOAST_KEY = 'short-term-manual-scan'
 const MANUAL_SCAN_PERSISTENT_TOAST = {
   key: MANUAL_SCAN_TOAST_KEY,
@@ -54,6 +57,12 @@ function clearPollTimer() {
   }
 }
 
+function isTemporaryPollingError(error: unknown) {
+  if (!isAxiosError(error) || error.code === 'ERR_CANCELED') return false
+  if (error.response) return [502, 503, 504].includes(error.response.status)
+  return ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'].includes(error.code ?? '')
+}
+
 export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
   ...initialState(),
 
@@ -63,25 +72,31 @@ export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
     if (source === 'cache') {
       if (state.loading) return false
       if (!force) {
-        if (state.error || (state.report && !state.resultMetadata)) return false
+        if (state.report && !state.resultMetadata) return false
         const current = state.resultMetadata
+        const incomingTime = Date.parse(result.startedAt ?? result.scheduledAt ?? '')
+        const currentTime = Date.parse(current?.startedAt ?? current?.scheduledAt ?? '')
+        if (state.error) {
+          // Failed requests have no result metadata, but must still reject older caches.
+          const failedScanTime = Number.isFinite(currentTime) ? currentTime : lastManualScanStartedAt
+          if (!Number.isFinite(failedScanTime) || !Number.isFinite(incomingTime) || incomingTime <= failedScanTime) return false
+        }
         if (current) {
           if (result.runId && result.runId === current.runId) return false
-          const incomingTime = Date.parse(result.startedAt ?? result.scheduledAt ?? '')
-          const currentTime = Date.parse(current.startedAt ?? current.scheduledAt ?? '')
           if (Number.isFinite(currentTime) && (!Number.isFinite(incomingTime) || incomingTime < currentTime
             || (incomingTime === currentTime && (current.source === 'manual' || (result.runId && current.runId))))) return false
         }
       }
     }
     const report = result.report && source === 'cache' ? { ...result.report, tradeCaptureTokens: {} } : result.report ?? null
-    const upperShadow = result.upperShadow && result.upperShadow.tradeDate === result.tradeDate ? result.upperShadow : null
     const { report: _report, upperShadow: _upperShadow, ...metadata } = result
-    set({ report, upperShadow, resultMetadata: { ...metadata, source }, error: '' })
+    set({ report, upperShadow: null, resultMetadata: { ...metadata, source }, error: '' })
+    if (source === 'cache') toast.dismiss(MANUAL_SCAN_TOAST_KEY)
     return true
   },
 
   runManualScan: async (params) => {
+    lastManualScanStartedAt = Date.now()
     const generation = manualRunGeneration + 1
     manualRunGeneration = generation
     clearPollTimer()
@@ -110,15 +125,20 @@ export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
         scanMessage: runningMessage
       })
 
+      let pollingFailureSince: number | undefined
       const poll = async () => {
         try {
           const job = await fetchShortTermScanJob(started.jobId)
           if (!ownsRun()) return
           const runningJobMessage = job.message || '短线右侧实时扫描中'
           set({ scanMessage: runningJobMessage })
+          if (pollingFailureSince !== undefined && job.status === 'RUNNING') {
+            toast.loading(runningJobMessage, MANUAL_SCAN_PERSISTENT_TOAST)
+          }
+          pollingFailureSince = undefined
 
           if (job.status === 'SUCCEEDED') {
-            if (!job.report && !job.upperShadow && !manualResultMayOmitReport(job.resultStatus)) {
+            if (!job.report && !manualResultMayOmitReport(job.resultStatus)) {
               const message = missingReportMessage(job)
               set({
                 report: null,
@@ -141,14 +161,14 @@ export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
               startedAt: job.startedAt ?? job.createdAt,
               finishedAt: job.finishedAt,
               status: job.resultStatus === 'DATA_BLOCKED' || job.resultStatus === 'CACHE_PREVIEW' || job.resultStatus === 'FAILED'
-                || (job.dataGaps?.length ?? 0) > 0 || job.upperShadow?.status === 'PARTIAL' || job.upperShadow?.status === 'DATA_BLOCKED' ? 'PARTIAL' : 'READY',
+                || (job.dataGaps?.length ?? 0) > 0 ? 'PARTIAL' : 'READY',
               message: job.message,
               report: visibleReport,
-              upperShadow: job.upperShadow ?? null,
+              upperShadow: null,
               dataGaps: job.dataGaps ?? []
             }, { source: 'manual' })
             set({
-              error: outcome.tone === 'error' || (visibleReport === null && !job.upperShadow) ? outcome.message : '',
+              error: outcome.tone === 'error' || visibleReport === null ? outcome.message : '',
               loading: false,
               activeJobId: ''
             })
@@ -173,7 +193,20 @@ export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
           pollTimer = window.setTimeout(() => void poll(), 1500)
         } catch (error) {
           if (!ownsRun()) return
-          const message = extractErrorMessage(error)
+          const temporary = isTemporaryPollingError(error)
+          if (temporary) {
+            pollingFailureSince ??= Date.now()
+            if (Date.now() - pollingFailureSince < POLLING_RECOVERY_WINDOW_MS) {
+              const message = `扫描状态读取暂时失败，正在重试同一任务：${extractErrorMessage(error)}`
+              set({ scanMessage: message })
+              toast.loading(message, MANUAL_SCAN_PERSISTENT_TOAST)
+              pollTimer = window.setTimeout(() => void poll(), 1500)
+              return
+            }
+          }
+          const message = temporary
+            ? `持续无法读取任务状态，尚未确认扫描结果：${extractErrorMessage(error)}`
+            : extractErrorMessage(error)
           set({
             report: null,
             upperShadow: null,
@@ -205,6 +238,7 @@ export const useShortTermScanStore = create<ShortTermScanState>((set, get) => ({
 
 export function resetShortTermScanStoreForTest() {
   manualRunGeneration += 1
+  lastManualScanStartedAt = Number.NaN
   clearPollTimer()
   useShortTermScanStore.setState(initialState())
 }
@@ -247,7 +281,7 @@ function outcomeMessage(
 }
 
 function manualScanOutcome(job: ShortTermScanJobStatus): ManualScanOutcome {
-  const candidateCount = combinedCandidateCount(job)
+  const candidateCount = rightCandidateCount(job)
   if ((job.resultStatus === 'FINAL_READY' || job.resultStatus === 'NO_TRADE') && candidateCount > 0) {
     return {
       tone: 'success',
@@ -257,13 +291,6 @@ function manualScanOutcome(job: ShortTermScanJobStatus): ManualScanOutcome {
   }
 
   if (job.resultStatus === 'FAILED') {
-    if (job.upperShadow && job.upperShadow.status !== 'DATA_BLOCKED') {
-      return {
-        tone: 'warning',
-        message: outcomeMessage(`手动扫描已生成 ${candidateCount} 个候选，右侧未完成`, job.message, job.dataGaps ?? [], '形态扫描已完成'),
-        options: MANUAL_SCAN_PERSISTENT_TOAST
-      }
-    }
     return {
       tone: 'error',
       message: outcomeMessage(
@@ -331,14 +358,11 @@ function publishManualScanFailure(message: string, blockedReasons: string[] = []
 }
 
 function scanCompletionToastMessage(job: ShortTermScanJobStatus) {
-  const count = combinedCandidateCount(job)
+  const count = rightCandidateCount(job)
   if (count === 0) return `${job.message}，暂无候选`
   return `${job.message}，已生成 ${count} 个候选`
 }
 
-function combinedCandidateCount(job: ShortTermScanJobStatus) {
-  return new Set([
-    ...(visibleManualReport(job)?.candidates ?? []).map(candidate => candidate.symbol),
-    ...(job.upperShadow && job.upperShadow.tradeDate === job.tradeDate ? job.upperShadow.candidates : []).map(candidate => candidate.symbol)
-  ]).size
+function rightCandidateCount(job: ShortTermScanJobStatus) {
+  return visibleManualReport(job)?.candidates.length ?? 0
 }

@@ -15,6 +15,7 @@ tmp/
 *.tsbuildinfo
 
 # Runtime
+.codex-run/
 .env
 .env.*
 !.env.example

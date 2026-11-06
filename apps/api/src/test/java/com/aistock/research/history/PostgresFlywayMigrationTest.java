@@ -70,7 +70,9 @@ class PostgresFlywayMigrationTest {
                             "trend_analysis_run",
                             "policy_ai_review_history",
                             "policy_daily_snapshot",
-                            "gov_policy_archive"
+                            "gov_policy_archive",
+                            "industry_hotspot_snapshot",
+                            "financial_news_snapshot"
                     );
                 }
             }
@@ -125,7 +127,7 @@ class PostgresFlywayMigrationTest {
             }
             Flyway current = Flyway.configure().dataSource(url, username, password).schemas(schema).defaultSchema(schema)
                     .locations("classpath:db/migration").load();
-            assertThat(current.migrate().migrationsExecuted).isEqualTo(6);
+            assertThat(current.migrate().migrationsExecuted).isEqualTo(8);
             assertThat(current.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, username, password)) {
                 connection.setSchema(schema);
@@ -205,8 +207,8 @@ class PostgresFlywayMigrationTest {
             }
             Flyway current = Flyway.configure().dataSource(url, username, password).schemas(schema).defaultSchema(schema)
                     .locations("classpath:db/migration").load();
-            assertThat(current.migrate().migrationsExecuted).isEqualTo(5);
-            assertThat(current.info().current().getVersion()).isEqualTo(MigrationVersion.fromVersion("10"));
+            assertThat(current.migrate().migrationsExecuted).isEqualTo(7);
+            assertThat(current.info().current().getVersion()).isEqualTo(MigrationVersion.fromVersion("12"));
             assertThat(current.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, username, password)) {
                 connection.setSchema(schema);
@@ -279,8 +281,8 @@ class PostgresFlywayMigrationTest {
             }
             Flyway current = Flyway.configure().dataSource(url, username, password).schemas(schema).defaultSchema(schema)
                     .locations("classpath:db/migration").load();
-            assertThat(current.migrate().migrationsExecuted).isEqualTo(4);
-            assertThat(current.info().current().getVersion()).isEqualTo(MigrationVersion.fromVersion("10"));
+            assertThat(current.migrate().migrationsExecuted).isEqualTo(6);
+            assertThat(current.info().current().getVersion()).isEqualTo(MigrationVersion.fromVersion("12"));
             assertThat(current.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, username, password)) {
                 connection.setSchema(schema);

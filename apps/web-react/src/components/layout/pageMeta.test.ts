@@ -2,19 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { navItems, pageMeta, pathToPage } from './pageMeta'
 
 describe('page navigation meta', () => {
-  it('removes retired research modules and exposes the policy dashboard', () => {
+  it('keeps only the active research and configuration modules', () => {
     const labels = navItems.map((item) => item.label)
 
     expect(labels).toEqual([
       '涨停看板',
       '短线右侧',
-      '政策解读',
-      '五日观察',
-      '长期价投',
+      '消息面',
       '外围市场',
       '特别关注',
-      '交易复盘',
-      '规则目录',
       '配置'
     ])
     expect(labels).not.toContain('错杀估值')
@@ -25,15 +21,22 @@ describe('page navigation meta', () => {
     expect(pathToPage['']).toBe('limitUp')
     expect(pathToPage['limit-up']).toBe('limitUp')
     expect(pathToPage['short-term']).toBe('shortTerm')
+    expect(labels).not.toContain('长期价投')
     expect(pageMeta[pathToPage['']].title).toBe('涨停看板')
     expect(pathToPage.policy).toBe('policy')
-    expect(pathToPage['potential-leader']).toBe('potentialLeader')
-    expect(pathToPage['five-day']).toBe('potentialLeader')
-    expect(pathToPage['first-board-alert']).toBe('potentialLeader')
     expect(pathToPage.overseas).toBe('overseas')
     expect(pathToPage.mispricing).toBeUndefined()
     expect(pathToPage.tech).toBeUndefined()
     expect(pathToPage.cycle).toBeUndefined()
     expect(pathToPage.signals).toBeUndefined()
+  })
+
+  it('removes metadata and path aliases for the retired modules', () => {
+    for (const key of ['hotspots', 'potentialLeader', 'tradeReview', 'rules']) {
+      expect(pageMeta).not.toHaveProperty(key)
+    }
+    for (const path of ['hotspots', 'market', 'potential-leader', 'five-day', 'first-board-alert', 'trade-review', 'rules']) {
+      expect(pathToPage[path]).toBeUndefined()
+    }
   })
 })

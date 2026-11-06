@@ -1,7 +1,6 @@
 package com.aistock.research.shortterm.schedule;
 
 import com.aistock.research.shortterm.ShortTermService;
-import com.aistock.research.shortterm.ShortTermUpperShadowService;
 import com.aistock.research.shortterm.ShortTermUpperShadowScan;
 import com.aistock.research.shortterm.ShortTermReport;
 import com.aistock.research.shortterm.ShortTermScanRequest;
@@ -10,11 +9,18 @@ import com.aistock.research.shortterm.ShortTermTechnicalReviewCoverage;
 import com.aistock.research.shortterm.ShortTermMarketRegime;
 import com.aistock.research.trading.TradingClockService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.support.CronExpression;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
@@ -31,37 +37,69 @@ class ShortTermDailyScanServiceTest {
     private final ShortTermDailySnapshotStore store = mock(ShortTermDailySnapshotStore.class);
     private final ShortTermScanResultCache resultCache = mock(ShortTermScanResultCache.class);
     private final ShortTermService scanner = mock(ShortTermService.class);
-    private final ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
     private ShortTermDailyScanService service(String time) {
-        return new ShortTermDailyScanService(store, scanner, shadow,
+        return new ShortTermDailyScanService(store, scanner,
                 new TradingClockService(Clock.fixed(Instant.parse(time), ZoneId.of("Asia/Shanghai"))), resultCache);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"2026-10-01T00:00:00Z", "2026-10-17T14:00:00Z"})
+    void periodicScansAlsoRunOnOfficialHolidaysAndWeekends(String time) {
+        prepareCompletedSources(0, 0, false);
+        service(time).scanAtTwo();
+        assertThat(savedResult().status()).isEqualTo("READY");
+    }
+
     @Test
-    void skipsOfficialHolidaysAndDoesNotClaimAScan() {
-        service("2026-10-01T06:00:00Z").scanAtTwo();
-        verifyNoInteractions(store, scanner, shadow);
+    void scheduleCoversEveryEvenHourIncludingMidnightAndWeekends() throws Exception {
+        var scheduled = ShortTermDailyScanService.class.getMethod("scanAtTwo").getAnnotation(Scheduled.class);
+        assertThat(scheduled.zone()).isEqualTo("Asia/Shanghai");
+        var properties = new YamlPropertiesFactoryBean();
+        properties.setResources(new ClassPathResource("application.yml"));
+        String expression = properties.getObject().getProperty("research.short-term.daily-scan.cron");
+        assertThat(scheduled.cron()).contains(":" + expression + "}");
+        var cron = CronExpression.parse(expression);
+        var next = LocalDateTime.of(2026, 10, 17, 0, 0).minusSeconds(1);
+        for (int hour = 0; hour < 24; hour += 2) {
+            next = cron.next(next);
+            assertThat(next).isEqualTo(LocalDateTime.of(2026, 10, 17, hour, 0));
+        }
+    }
+
+    @Test
+    void persistsTheBeijingSlotSeparatelyFromItsActualStartTime() {
+        prepareCompletedSources(0, 0, false);
+        service("2026-11-04T17:59:04Z").scanAtTwo();
+        var result = savedResult();
+        assertThat(result.tradeDate()).isEqualTo(LocalDate.of(2026, 11, 5));
+        assertThat(result.scheduledAt()).isEqualTo(Instant.parse("2026-11-04T16:00:00Z"));
+        assertThat(result.startedAt()).isEqualTo(Instant.parse("2026-11-04T17:59:04Z"));
+        assertThat(result.finishedAt()).isEqualTo(result.startedAt());
+        assertThat(result.message()).doesNotContain("14:00");
     }
 
     @Test
     void duplicateDailyTriggerDoesNotStartAnotherMarketScan() {
         when(store.claim(any())).thenReturn(false);
         service("2026-10-15T06:00:00Z").scanAtTwo();
-        verifyNoInteractions(scanner, shadow);
+        verifyNoInteractions(scanner);
     }
 
     @Test
     void loadingTheSavedResultDoesNotTriggerMarketRequests() {
         when(store.latest()).thenReturn(Optional.empty());
-        assertThat(service("2026-10-15T06:00:00Z").latest().status()).isEqualTo("NOT_STARTED");
-        verifyNoInteractions(scanner, shadow);
+        var result = service("2026-10-15T08:00:00Z").latest();
+        assertThat(result.status()).isEqualTo("NOT_STARTED");
+        assertThat(result.scheduledAt()).isEqualTo(Instant.parse("2026-10-15T08:00:00Z"));
+        assertThat(result.message()).doesNotContain("14:00");
+        verifyNoInteractions(scanner);
     }
 
     @Test
     void retryBeforeTheScheduledWindowDoesNotClaimOrScan() {
         assertThatThrownBy(() -> service("2026-10-15T05:59:00Z").retryToday())
                 .isInstanceOf(IllegalArgumentException.class);
-        verifyNoInteractions(store, scanner, shadow);
+        verifyNoInteractions(store, scanner);
     }
 
     @Test
@@ -69,13 +107,12 @@ class ShortTermDailyScanServiceTest {
         when(store.claimRetry(any())).thenReturn(false);
         when(store.latest()).thenReturn(Optional.empty());
         assertThat(service("2026-10-15T06:10:00Z").retryToday().status()).isEqualTo("NOT_STARTED");
-        verifyNoInteractions(scanner, shadow);
+        verifyNoInteractions(scanner);
     }
 
     @Test
     void anAcceptedRetryReturnsRunningAndSavesItsActualStartTime() {
         when(store.claimRetry(any())).thenReturn(true);
-        when(shadow.scan()).thenThrow(new IllegalStateException("source failed"));
         when(scanner.report(any(com.aistock.research.shortterm.ShortTermScanRequest.class)))
                 .thenThrow(new IllegalStateException("source failed"));
         var result = service("2026-10-15T06:10:00Z").retryToday();
@@ -90,14 +127,14 @@ class ShortTermDailyScanServiceTest {
     @Test
     void failuresArePersistedInsteadOfBeingPresentedAsAnEmptySuccessfulScan() {
         when(store.claim(any())).thenReturn(true);
-        when(shadow.scan()).thenThrow(new IllegalStateException("行情断开"));
         when(scanner.report(any(com.aistock.research.shortterm.ShortTermScanRequest.class)))
                 .thenThrow(new IllegalStateException("扫描失败"));
         service("2026-10-15T06:00:00Z").scanAtTwo();
         var captor = org.mockito.ArgumentCaptor.forClass(ShortTermDailySnapshot.class);
         verify(store, timeout(2000)).finishAndPublish(captor.capture(), eq(resultCache));
         assertThat(captor.getValue().status()).isEqualTo("FAILED");
-        assertThat(captor.getValue().dataGaps()).hasSize(2);
+        assertThat(captor.getValue().dataGaps()).containsExactly("右侧候选未完成：扫描失败");
+        assertThat(captor.getValue().upperShadow()).isNull();
     }
 
     @Test
@@ -134,7 +171,7 @@ class ShortTermDailyScanServiceTest {
 
     @Test
     void cronReturnsWhileItsFullScanRemainsActiveBeyondThirtyMinutes() throws Exception {
-        prepareCompletedSources(0, 0, false);
+        var report = prepareCompletedSources(0, 0, false);
         var current = new AtomicReference<>(Instant.parse("2026-10-15T06:00:00Z"));
         Clock advancingClock = new Clock() {
             @Override public ZoneId getZone() { return ZoneId.of("Asia/Shanghai"); }
@@ -146,12 +183,12 @@ class ShortTermDailyScanServiceTest {
         when(store.latest()).thenAnswer(call -> Optional.ofNullable(running.get()));
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
-        when(shadow.scan()).thenAnswer(call -> {
+        when(scanner.report(any(ShortTermScanRequest.class))).thenAnswer(call -> {
             entered.countDown();
             if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("test worker not released");
-            return readyUpper();
+            return report;
         });
-        var service = new ShortTermDailyScanService(store, scanner, shadow, new TradingClockService(advancingClock), resultCache);
+        var service = new ShortTermDailyScanService(store, scanner, new TradingClockService(advancingClock), resultCache);
         Thread worker = new Thread(service::scanAtTwo);
         worker.start();
         try {
@@ -176,17 +213,49 @@ class ShortTermDailyScanServiceTest {
                 Instant.parse("2026-10-15T06:00:00Z"), null, "RUNNING", "running", null, null, List.of());
         when(store.latest()).thenReturn(Optional.of(running));
         assertThat(service("2026-10-15T06:31:00Z").latest().status()).isEqualTo("INTERRUPTED");
-        verifyNoInteractions(scanner, shadow);
+        verifyNoInteractions(scanner);
     }
 
     @Test
-    void dailyCompletionHandsBothBranchesToTheTransactionalPublicationStore() {
+    void activeAutomaticWorkIsNotReplacedByTheNextSlotEvenAcrossMidnight() throws Exception {
+        var report = prepareCompletedSources(0, 0, false);
+        var current = new AtomicReference<>(Instant.parse("2026-10-15T14:00:00Z"));
+        Clock advancingClock = new Clock() {
+            @Override public ZoneId getZone() { return ZoneId.of("Asia/Shanghai"); }
+            @Override public Clock withZone(ZoneId zone) { return this; }
+            @Override public Instant instant() { return current.get(); }
+        };
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        when(scanner.report(any(ShortTermScanRequest.class))).thenAnswer(call -> {
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("test worker not released");
+            return report;
+        });
+        var service = new ShortTermDailyScanService(store, scanner, new TradingClockService(advancingClock), resultCache);
+        service.scanAtTwo();
+        try {
+            assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
+            current.set(Instant.parse("2026-10-15T16:00:00Z"));
+            service.scanAtTwo();
+            verify(store, times(1)).claim(any());
+            verify(scanner, times(1)).report(any(ShortTermScanRequest.class));
+        } finally {
+            release.countDown();
+        }
+        var result = savedResult();
+        assertThat(result.scheduledAt()).isEqualTo(Instant.parse("2026-10-15T14:00:00Z"));
+        assertThat(result.finishedAt()).isEqualTo(Instant.parse("2026-10-15T16:00:00Z"));
+    }
+
+    @Test
+    void dailyCompletionPublishesOnlyTheRightSideResult() {
         prepareCompletedSources(0, 0, false);
         service("2026-10-15T06:00:00Z").scanAtTwo();
         var completed = savedResult();
         assertThat(completed.status()).isEqualTo("READY");
         assertThat(completed.report()).isNotNull();
-        assertThat(completed.upperShadow()).isNotNull();
+        assertThat(completed.upperShadow()).isNull();
         assertThat(completed.runId()).isNotBlank();
         verify(store).finishAndPublish(completed, resultCache);
         verifyNoInteractions(resultCache);
@@ -199,7 +268,7 @@ class ShortTermDailyScanServiceTest {
         when(resultCache.latest()).thenReturn(Optional.of(cached));
         var api = new ShortTermDailyScanController(service("2026-10-15T06:05:00Z"));
         assertThat(api.resultCache()).isSameAs(cached);
-        verifyNoInteractions(store, scanner, shadow);
+        verifyNoInteractions(store, scanner);
     }
 
     @Test
@@ -208,13 +277,12 @@ class ShortTermDailyScanServiceTest {
         var api = new ShortTermDailyScanController(service("2026-10-15T06:05:00Z"));
         assertThat(api.resultCache().status()).isEqualTo("NOT_STARTED");
         assertThat(api.resultCache().runId()).isNull();
-        verifyNoInteractions(store, scanner, shadow);
+        verifyNoInteractions(store, scanner);
     }
 
     private ShortTermReport prepareCompletedSources(int requested, int sufficient, boolean riskOff) {
         when(store.claim(any())).thenReturn(true);
         when(store.finishAndPublish(any(), eq(resultCache))).thenReturn(true);
-        when(shadow.scan()).thenReturn(readyUpper());
         ShortTermReport report = mock(ShortTermReport.class);
         when(report.coverage()).thenReturn(new ShortTermCoverageSnapshot(6000, 6000, 0, BigDecimal.ONE, true, "fixture", Instant.parse("2026-10-15T06:00:00Z")));
         when(report.technicalReviewCoverage()).thenReturn(ShortTermTechnicalReviewCoverage.of(requested, requested, sufficient));

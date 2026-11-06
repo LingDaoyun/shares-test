@@ -18,7 +18,6 @@ export function OvernightTradePlanPanel({ plan }: { plan: ShortTermTradePlan | n
         <div className="flex items-center gap-2 text-amber-900">
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
           <h3 className="text-sm font-semibold">隔夜交易纪律：不可执行</h3>
-          <span className="text-xs">{plan.strategyLabel}</span>
         </div>
         <p className="mt-2 text-xs leading-relaxed text-amber-800">
           当前证据未通过执行闸门，本计划不可执行。
@@ -29,6 +28,15 @@ export function OvernightTradePlanPanel({ plan }: { plan: ShortTermTradePlan | n
             <p className="mt-1">{plan.blockedReasons.join('；')}</p>
           </div>
         ) : null}
+      </section>
+    )
+  }
+
+  if (!isMorningOvernightPlan(plan)) {
+    return (
+      <section className="border border-amber-200 bg-amber-50/70 px-3 py-3 text-sm text-amber-800">
+        <div className="font-semibold">隔夜退出规则已更新，请重新扫描</div>
+        <p className="mt-1 text-xs leading-relaxed">旧缓存计划未采用下一交易日早盘退出纪律，请重新扫描后查看新的交易计划。</p>
       </section>
     )
   }
@@ -54,9 +62,7 @@ export function OvernightTradePlanPanel({ plan }: { plan: ShortTermTradePlan | n
         <PlanMetric label="第一目标价" value={target(plan.firstTargetPrice, plan.firstTargetPercent)} />
         <PlanMetric label="第二目标价" value={target(plan.secondTargetPrice, plan.secondTargetPercent)} />
         <PlanMetric label="硬止损价" value={target(plan.hardStopPrice, plan.hardStopPercent)} />
-        <PlanMetric label="T+1 正常退出" value={`${plan.normalExitDate} ${shortTime(plan.normalExitTime)}`} />
-        <PlanMetric label="T+2 最晚退出" value={`${plan.absoluteExitDate} ${shortTime(plan.absoluteExitTime)}`} />
-        <PlanMetric label="T+2 仓位上限" value={formatRatioPercent(plan.maxT2PositionRatio)} />
+        <PlanMetric label="次日早盘退出截止" value={`${plan.normalExitDate} ${shortTime(plan.normalExitTime)}`} />
       </dl>
 
       <div className="mt-3 grid border-t border-emerald-200 md:grid-cols-3">
@@ -76,7 +82,6 @@ export function OvernightTradePlanPanel({ plan }: { plan: ShortTermTradePlan | n
 
       <div className="mt-3 border-t border-emerald-200 pt-2 text-xs leading-relaxed text-ink-600">
         <p>{plan.trailingStopRule}</p>
-        {plan.t2ExtensionConditions.length ? <p className="mt-1">延长条件：{plan.t2ExtensionConditions.join('；')}</p> : null}
         {plan.riskWarnings.length ? <p className="mt-1 text-amber-800">{plan.riskWarnings.join('；')}</p> : null}
       </div>
       {plan.analysisBasis?.length ? (
@@ -89,6 +94,26 @@ export function OvernightTradePlanPanel({ plan }: { plan: ShortTermTradePlan | n
       ) : null}
     </section>
   )
+}
+
+export function isMorningOvernightPlan(plan: ShortTermTradePlan | null): boolean {
+  if (!plan) return false
+  const normalTime = morningSeconds(plan.normalExitTime)
+  return typeof plan.normalExitDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(plan.normalExitDate)
+    && plan.normalExitDate === plan.absoluteExitDate
+    && normalTime !== null && normalTime === morningSeconds(plan.absoluteExitTime)
+    && plan.maxT2PositionRatio === 0
+    && Array.isArray(plan.t2ExtensionConditions) && plan.t2ExtensionConditions.length === 0
+}
+
+function morningSeconds(value: string) {
+  if (typeof value !== 'string') return null
+  const match = /^(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/.exec(value)
+  if (!match) return null
+  const hours = Number(match[1]), minutes = Number(match[2]), seconds = Number(match[3] ?? 0)
+  if (hours > 23 || minutes > 59 || seconds >= 60) return null
+  const total = hours * 3600 + minutes * 60 + seconds
+  return total >= 9.5 * 3600 && total <= 11.5 * 3600 ? total : null
 }
 
 function PlanMetric({ label, value }: { label: string; value: string }) {

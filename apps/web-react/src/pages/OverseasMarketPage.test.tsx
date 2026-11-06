@@ -104,16 +104,11 @@ describe('OverseasMarketPage', () => {
   })
 })
 
-/** 只统计某个市场卡片内的行业名顺序（领涨/领跌摘要里也会出现行业名，需排除）。 */
+/** 通过行业列表的语义标签检查实际显示顺序。 */
 function industryNamesWithin(container: HTMLElement, marketLabel: string): string[] {
-  const cards = [...container.querySelectorAll('section.card')]
-  const marketCard = cards.find((card) => card.textContent?.includes(marketLabel))
-  if (!marketCard) return []
-  const knownIndustries = ['信息技术', '能源', '银行', '半导体']
-  const bars = [...marketCard.querySelectorAll<HTMLElement>('.grid.grid-cols-\\[minmax\\(0\\,7rem\\)_1fr_4\\.2rem\\]')]
-  return bars
-    .map((bar) => knownIndustries.find((name) => bar.textContent?.includes(name)))
-    .filter((name): name is string => Boolean(name))
+  const list = container.querySelector(`[aria-label="${marketLabel}行业涨跌"]`)
+  return [...(list?.querySelectorAll<HTMLElement>('[title]') ?? [])]
+    .map((item) => item.title)
 }
 
 function availableSnapshot(): OverseasMarketBoardSnapshot {

@@ -116,6 +116,8 @@ public class ShortTermFinalResultGate {
                     "QUOTE_UNIVERSE_INCOMPLETE",
                     "全市场原始行情抓取不完整（" + coverage.rawFetchedCount()
                             + "/" + coverage.rawExpectedCount() + "）"
+                            + (coverage.source() == null || coverage.source().isBlank()
+                            ? "" : "；来源：" + coverage.source())
             ));
         }
         if (!coverage.executionReliable()) {

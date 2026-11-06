@@ -22,10 +22,10 @@ class ShortTermAutomationSettingsTest {
         OvernightRuleSet rules = settings.overnightRules();
         assertThat(rules.entryStart()).isEqualTo(LocalTime.of(14, 45));
         assertThat(rules.entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);
-        assertThat(rules.normalExitTime()).isEqualTo(LocalTime.of(14, 50));
-        assertThat(rules.maxHoldingTradingDays()).isEqualTo(2);
+        assertThat(rules.normalExitTime()).isEqualTo(LocalTime.of(10, 0));
+        assertThat(rules.maxHoldingTradingDays()).isEqualTo(1);
         assertThat(rules.maxPositionRatio()).isEqualByComparingTo("0.3333");
-        assertThat(rules.maxT2PositionRatio()).isEqualByComparingTo("0.50");
+        assertThat(rules.maxT2PositionRatio()).isEqualByComparingTo("0");
         assertThat(rules.firstTargetFloor()).isEqualByComparingTo("2.5");
         assertThat(rules.firstTargetCap()).isEqualByComparingTo("4.0");
         assertThat(rules.secondTargetFloor()).isEqualByComparingTo("4.5");
@@ -66,7 +66,7 @@ class ShortTermAutomationSettingsTest {
         assertThat(settings.freshness()).isEqualTo(Duration.ofSeconds(180));
         assertThat(settings.overnightRules().entryStart()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_START);
         assertThat(settings.overnightRules().entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);
-        assertThat(settings.overnightRules().maxHoldingTradingDays()).isEqualTo(2);
+        assertThat(settings.overnightRules().maxHoldingTradingDays()).isEqualTo(1);
         assertThat(settings.overnightRules().maxPositionRatio())
                 .isEqualByComparingTo(new BigDecimal("0.3333"));
     }
@@ -92,5 +92,31 @@ class ShortTermAutomationSettingsTest {
 
         assertThat(settings.overnightRules().entryStart()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_START);
         assertThat(settings.overnightRules().entryEnd()).isEqualTo(TradingClockService.SHORT_TERM_ENTRY_END);
+    }
+
+    @Test
+    void oldHoldingOverridesCannotRestoreT2() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("research.short-term.overnight.normal-exit-time", "14:50")
+                .withProperty("research.short-term.overnight.max-holding-trading-days", "2")
+                .withProperty("research.short-term.overnight.max-t2-position-ratio", "0.50");
+        OvernightRuleSet rules = new ShortTermAutomationSettings(environment).overnightRules();
+        assertThat(rules.normalExitTime()).isEqualTo(LocalTime.of(10, 0));
+        assertThat(rules.maxHoldingTradingDays()).isEqualTo(1);
+        assertThat(rules.maxT2PositionRatio()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void acceptsOnlyMorningExitOverrides() {
+        MockEnvironment environment = new MockEnvironment();
+        ShortTermAutomationSettings settings = new ShortTermAutomationSettings(environment);
+        for (String accepted : new String[] { "09:30", "10:00", "10:30", "11:30" }) {
+            environment.setProperty("research.short-term.overnight.normal-exit-time", accepted);
+            assertThat(settings.overnightRules().normalExitTime()).isEqualTo(LocalTime.parse(accepted));
+        }
+        for (String rejected : new String[] { "09:29", "11:30:01", "13:00", "14:50", "bad-time" }) {
+            environment.setProperty("research.short-term.overnight.normal-exit-time", rejected);
+            assertThat(settings.overnightRules().normalExitTime()).isEqualTo(LocalTime.of(10, 0));
+        }
     }
 }

@@ -18,6 +18,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.stream.IntStream;
 
@@ -732,14 +734,14 @@ class EastMoneyClientTest {
     }
 
     @Test
-    void shouldPreferTencentFinanceProxyForDailyKlineRequests() {
+    void shouldPreferOriginalTencentDailyKlineUrlAndKeepFinanceProxyAsFallback() {
         String url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
                 + "?param=sz300700,day,2026-09-02,2026-09-02,500,qfq";
 
         assertThat(client.remoteCandidateUrls(url)).containsExactly(
+                url,
                 "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get"
-                        + "?param=sz300700,day,2026-09-02,2026-09-02,500,qfq",
-                url);
+                        + "?param=sz300700,day,2026-09-02,2026-09-02,500,qfq");
     }
 
     @Test
@@ -761,7 +763,7 @@ class EastMoneyClientTest {
     @Test
     void onlyTheCurrentLastSliceUsesAnOpenEnd() {
         LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
-        LocalDate begin = today.minusYears(1).minusDays(3);
+        LocalDate begin = today.minusDays(500);
         LocalDate firstEnd = begin.plusYears(1).minusDays(1);
         List<String> urls = new ArrayList<>();
         EastMoneyClient history = tencentDailyClient(url -> {
@@ -840,10 +842,18 @@ class EastMoneyClientTest {
         return new EastMoneyClient(null, objectMapper, properties()) {
             @Override
             String fetchBodyWithCurl(String url, Exception failure, String referer) {
-                if (!url.contains("/fqkline/get")) return "{\"data\":{\"klines\":[]}}";
-                urls.add(url);
-                return response.apply(url);
+                if (url.contains("/fqkline/get")) {
+                    urls.add(url);
+                    return response.apply(url);
+                }
+                if (url.contains("/api/qt/stock/kline/get")) return "{\"data\":{\"klines\":[]}}";
+                if (url.contains("CN_MarketData.getKLineData")) return "null";
+                if (url.endsWith("/qfq.js")) return "var sh600893qfq={\"total\":0,\"data\":[]};";
+                throw new AssertionError("Unexpected provider URL: " + url);
             }
+
+            @Override
+            public List<EastMoneyQuote> fetchTencentQuotes(List<String> symbols, int limit) { return List.of(); }
         };
     }
 
@@ -1048,6 +1058,341 @@ class EastMoneyClientTest {
         assertThat(snapshot.fetchedCount()).isEqualTo(1);
         assertThat(snapshot.missingCount()).isEqualTo(1);
         assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void snapshotRecoversOneMissingFullMarketPageAfterLaterPagesFinish() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 2 && attempt <= 2) throw new IllegalStateException("temporary page failure");
+            return page <= 3 ? recoveryPage(3, "60000" + page) : recoveryPage(0);
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(requests).containsExactly(1, 2, 2, 3, 2);
+        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.expectedCount()).isEqualTo(3);
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol)
+                .containsExactly("600001", "600003", "600002");
+    }
+
+    @Test
+    void snapshotRecoversMissingHundredRowsBeforeRequestingAnInvalidPageAfterTheEnd() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 26 && attempt <= 2) throw new IllegalStateException("temporary page failure");
+            if (page > 60) throw new IllegalStateException("东方财富行情 JSON 结构异常：{\"rc\":102,\"data\":null}");
+            int from = (page - 1) * 100;
+            return recoveryPage(5925, IntStream.range(from, Math.min(from + 100, 5925))
+                    .mapToObj(index -> String.format("%06d", 600000 + index)).toArray(String[]::new));
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.expectedCount()).isEqualTo(5925);
+        assertThat(snapshot.fetchedCount()).isEqualTo(5925);
+        assertThat(requests).doesNotContain(61).endsWith(60, 26);
+        assertThat(requests.stream().filter(page -> page == 26)).hasSize(3);
+    }
+
+    @Test
+    void snapshotUsesTheActualPageCapacityWhenRecoveringBeforeAnInvalidTerminalPage() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 2 && attempt <= 2) throw new IllegalStateException("temporary page failure");
+            if (page > 5) throw new IllegalStateException("invalid page after end");
+            int from = (page - 1) * 50;
+            return recoveryPage(225, IntStream.range(from, Math.min(from + 50, 225))
+                    .mapToObj(index -> String.format("%06d", 600000 + index)).toArray(String[]::new));
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.fetchedCount()).isEqualTo(225);
+        assertThat(requests).containsExactly(1, 2, 2, 3, 4, 5, 2);
+    }
+
+    @Test
+    void snapshotRecoversWhenTheLastPlannedPageIsTheMaximumAllowedPage() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 80 && attempt <= 2) throw new IllegalStateException("temporary page failure");
+            return recoveryPage(160, String.format("%06d", 600000 + page));
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(snapshot.complete()).isTrue();
+        assertThat(snapshot.fetchedCount()).isEqualTo(160);
+        assertThat(requests).endsWith(160, 80);
+    }
+
+    @Test
+    void snapshotRetriesAMissingPageOnlyOnceAfterTheNormalPass() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 2) throw new IllegalStateException("persistent page failure");
+            return page <= 3 ? recoveryPage(3, "60000" + page) : recoveryPage(0);
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(requests).containsExactly(1, 2, 2, 3, 2);
+        assertThat(snapshot.complete()).isFalse();
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.missingCount()).isEqualTo(1);
+    }
+
+    @Test
+    void snapshotStopsAtASecondFailedPageWithoutStartingDeferredRecovery() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 2 || page == 4) throw new IllegalStateException("provider unavailable");
+            return recoveryPage(4, "60000" + page);
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(requests).containsExactly(1, 2, 2, 3, 4, 4);
+        assertThat(snapshot.complete()).isFalse();
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.expectedCount()).isEqualTo(4);
+    }
+
+    @Test
+    void snapshotDoesNotSkipAnUnknownFirstPage() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            throw new IllegalStateException("first page unavailable");
+        });
+
+        assertThatThrownBy(() -> snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("first page unavailable");
+        assertThat(requests).containsExactly(1, 1);
+    }
+
+    @Test
+    void snapshotDoesNotExtendAFiniteSampleAfterAPageFailure() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 2) throw new IllegalStateException("page unavailable");
+            return recoveryPage(3, "600001");
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(2);
+
+        assertThat(requests).containsExactly(1, 2, 2);
+        assertThat(snapshot.requestedCount()).isEqualTo(2);
+        assertThat(snapshot.expectedCount()).isEqualTo(3);
+        assertThat(snapshot.fetchedCount()).isEqualTo(1);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void snapshotRejectsChangedOrMissingTotalOnTheRecoveredPage() {
+        for (int recoveredTotal : List.of(0, 4)) {
+            List<Integer> requests = new ArrayList<>();
+            EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+                if (page == 2 && attempt <= 2) throw new IllegalStateException("page unavailable");
+                if (page == 2) return recoveryPage(recoveredTotal, "600002");
+                return page <= 3 ? recoveryPage(3, "60000" + page) : recoveryPage(0);
+            });
+
+            AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+            assertThat(requests).containsExactly(1, 2, 2, 3, 2);
+            assertThat(snapshot.expectedCount()).isZero();
+            assertThat(snapshot.complete()).isFalse();
+        }
+    }
+
+    @Test
+    void snapshotDoesNotRecoverAfterLaterPagesInvalidateTheReportedTotal() {
+        for (int laterTotal : List.of(0, 4)) {
+            List<Integer> requests = new ArrayList<>();
+            EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+                if (page == 2) throw new IllegalStateException("page unavailable");
+                if (page == 1) return recoveryPage(3, "600001");
+                if (page == 3) return recoveryPage(laterTotal, "600003");
+                return recoveryPage(0);
+            });
+
+            AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+            assertThat(requests).containsExactly(1, 2, 2, 3, 4);
+            assertThat(snapshot.expectedCount()).isZero();
+            assertThat(snapshot.complete()).isFalse();
+        }
+    }
+
+    @Test
+    void recoveredPageCannotRestoreAConflictingSecurityIdentity() {
+        List<Integer> requests = new ArrayList<>();
+        LocalDate day = LocalDate.parse("2026-07-10");
+        Instant at = Instant.parse("2026-07-10T07:00:00Z");
+        EastMoneyQuote first = snapshotQuote("600001", "10", "10", "0", "100", day, at, at);
+        EastMoneyQuote conflict = snapshotQuote("600001", "11", "10", "10", "100", day, at, at);
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 1) return new AshareQuotePage(3, List.of(first, conflict,
+                    SnapshotStubClient.quote("600002", "工业", "东方财富实时全市场")));
+            if (page == 2 && attempt <= 2) throw new IllegalStateException("page unavailable");
+            if (page == 2) return new AshareQuotePage(3, List.of(first));
+            return page == 3 ? recoveryPage(3, "600003") : recoveryPage(0);
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(requests).containsExactly(1, 2, 2, 3, 4, 2);
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("600002", "600003");
+        assertThat(snapshot.complete()).isFalse();
+        assertThat(snapshot.missingCount()).isEqualTo(1);
+    }
+
+    @Test
+    void snapshotCannotHideExtraIdentitiesByTruncatingToTheReportedTotal() {
+        AshareQuoteSnapshot snapshot = quotePages(2, List.of(recoveryPage(2, "600001", "600002", "600003").quotes()))
+                .fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(snapshot.expectedCount()).isEqualTo(2);
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void anExtraIdentityCannotReplaceAConflictingIdentityToMakeCoverageComplete() {
+        LocalDate day = LocalDate.parse("2026-07-10");
+        Instant at = Instant.parse("2026-07-10T07:00:00Z");
+        EastMoneyQuote first = snapshotQuote("600001", "10", "10", "0", "100", day, at, at);
+        EastMoneyQuote conflict = snapshotQuote("600001", "11", "10", "10", "100", day, at, at);
+        AshareQuoteSnapshot snapshot = quotePages(2, List.of(List.of(first, conflict,
+                        SnapshotStubClient.quote("600002", "工业", "东方财富实时全市场"),
+                        SnapshotStubClient.quote("600003", "工业", "东方财富实时全市场"))))
+                .fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(snapshot.expectedCount()).isEqualTo(2);
+        assertThat(snapshot.fetchedCount()).isEqualTo(2);
+        assertThat(snapshot.quotes()).extracting(EastMoneyQuote::symbol).containsExactly("600002", "600003");
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void snapshotChecksTheMissingPageEvenWhenLaterRowsAlreadyReachTheReportedTotal() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 1) return recoveryPage(3, "600001");
+            if (page == 2 && attempt <= 2) throw new IllegalStateException("page unavailable");
+            if (page == 2) return recoveryPage(3, "600004");
+            return recoveryPage(3, "600002", "600003");
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(requests).containsExactly(1, 2, 2, 3, 2);
+        assertThat(snapshot.fetchedCount()).isEqualTo(3);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void emptyRecoveryResponseDoesNotCountAsARecoveredPage() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 1) return recoveryPage(3, "600001");
+            if (page == 2 && attempt <= 2) throw new IllegalStateException("page unavailable");
+            if (page == 2) return recoveryPage(0);
+            return recoveryPage(3, "600002", "600003");
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(requests).containsExactly(1, 2, 2, 3, 2);
+        assertThat(snapshot.fetchedCount()).isEqualTo(3);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void snapshotDoesNotRecoverAfterExhaustingThePageLimit() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 2) throw new IllegalStateException("page unavailable");
+            return recoveryPage(1000, String.format("%06d", 600000 + page));
+        });
+
+        AshareQuoteSnapshot snapshot = snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE);
+
+        assertThat(requests).hasSize(161);
+        assertThat(requests.stream().filter(page -> page == 2)).hasSize(2);
+        assertThat(requests).endsWith(160);
+        assertThat(snapshot.complete()).isFalse();
+    }
+
+    @Test
+    void snapshotPropagatesCancellationWithoutRetryOrFallback() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            throw new CancellationException("scan cancelled");
+        });
+
+        assertThatThrownBy(() -> snapshotClient.fetchAshareQuoteSnapshot(Integer.MAX_VALUE))
+                .isInstanceOf(CancellationException.class);
+        assertThat(requests).containsExactly(1);
+    }
+
+    @Test
+    void snapshotPropagatesAnInterruptedFailureWithoutRetryOrDeferredRecovery() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 1) return recoveryPage(3, "600001");
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted transport");
+        });
+
+        try {
+            assertThatThrownBy(() -> snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE))
+                    .isInstanceOf(CancellationException.class);
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+            assertThat(requests).containsExactly(1, 2);
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void snapshotPropagatesCancellationFromDeferredRecovery() {
+        List<Integer> requests = new ArrayList<>();
+        EastMoneyClient snapshotClient = scriptedQuotePages(requests, (page, attempt) -> {
+            if (page == 2 && attempt <= 2) throw new IllegalStateException("page unavailable");
+            if (page == 2) throw new CancellationException("scan cancelled");
+            return page <= 3 ? recoveryPage(3, "60000" + page) : recoveryPage(0);
+        });
+
+        assertThatThrownBy(() -> snapshotClient.fetchEastMoneyQuoteSnapshot(Integer.MAX_VALUE))
+                .isInstanceOf(CancellationException.class);
+        assertThat(requests).containsExactly(1, 2, 2, 3, 2);
+    }
+
+    private EastMoneyClient scriptedQuotePages(List<Integer> requests,
+            BiFunction<Integer, Integer, AshareQuotePage> response) {
+        Map<Integer, Integer> attempts = new java.util.HashMap<>();
+        return new EastMoneyClient(null, objectMapper, null) {
+            @Override
+            AshareQuotePage fetchAshareQuotePage(int pageNumber, int pageSize) {
+                requests.add(pageNumber);
+                return response.apply(pageNumber, attempts.merge(pageNumber, 1, Integer::sum));
+            }
+
+            @Override
+            String fetchBodyWithCurl(String url, Exception failure, String referer) {
+                throw new AssertionError("Scripted quote tests must not access a fallback network source");
+            }
+        };
+    }
+
+    private AshareQuotePage recoveryPage(int total, String... symbols) {
+        return new AshareQuotePage(total, Arrays.stream(symbols)
+                .map(symbol -> SnapshotStubClient.quote(symbol, "工业", "东方财富实时全市场")).toList());
     }
 
     private LiveDataProperties properties() {

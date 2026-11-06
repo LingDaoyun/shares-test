@@ -7,13 +7,17 @@ import type { ShortTermLimitUpStock } from '../../types'
 import type { ShortTermCatchUpCandidate, ShortTermCatchUpSnapshot, ShortTermRelatedBoard } from '../../types/shortTermCatchUp'
 import { Button } from '../ui/Button'
 import { Loader } from '../ui/Loader'
+import { StockKlineButton } from './StockKlineButton'
 
-export function LeaderCatchUpPanel({ industry, tradeDate, sealedStocks }: {
+export function LeaderCatchUpPanel({ industry, tradeDate, sealedStocks, initialLeaderSymbol = '', onLeaderSymbolChange, restoreAnchorFocus = false }: {
   industry: string
   tradeDate: string
   sealedStocks: ShortTermLimitUpStock[]
+  initialLeaderSymbol?: string
+  onLeaderSymbolChange?: (symbol: string) => void
+  restoreAnchorFocus?: boolean
 }) {
-  const [leaderSymbol, setLeaderSymbol] = useState('')
+  const [leaderSymbol, setLeaderSymbol] = useState(initialLeaderSymbol)
   const [boardCode, setBoardCode] = useState('')
   const [relatedBoards, setRelatedBoards] = useState<ShortTermRelatedBoard[]>([])
   const [snapshot, setSnapshot] = useState<ShortTermCatchUpSnapshot | null>(null)
@@ -64,8 +68,10 @@ export function LeaderCatchUpPanel({ industry, tradeDate, sealedStocks }: {
         <label className="flex min-w-[190px] flex-1 flex-col gap-1 text-xs text-ink-600">
           已封板锚点
           <select className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-brand-200"
+            autoFocus={restoreAnchorFocus}
             aria-label="已封板锚点" value={leaderSymbol} onChange={event => {
               setLeaderSymbol(event.target.value); setBoardCode(''); setRelatedBoards([]); setSnapshot(null); setError(null); setLoading(false)
+              onLeaderSymbolChange?.(event.target.value)
             }}>
             <option value="">{sealedStocks.length ? '请选择封板锚点' : '当前行业无可选封板锚点'}</option>
             {sealedStocks.map(stock => <option key={stock.symbol} value={stock.symbol}>{stock.name} · {stock.symbol}</option>)}
@@ -123,7 +129,7 @@ function CatchUpSnapshotView({ snapshot, samples }: { snapshot: ShortTermCatchUp
       <EvidenceLine label="数据缺口" values={snapshot.dataGaps} />
       {(snapshot.status === 'READY' || snapshot.status === 'DATA_GAP') && snapshot.boardCode && (snapshot.status === 'READY' || snapshot.candidates.length > 0) ? <>
         <p className="text-xs text-ink-600">未涨停上涨候选 · {snapshot.eligibleCandidateCount} 家，展示 {snapshot.displayedCount} 家{snapshot.truncatedCount > 0 ? `，另 ${snapshot.truncatedCount} 家未展示` : ''}；按中位优先排列。</p>
-        {snapshot.candidates.length ? <CandidateTable candidates={snapshot.candidates} percentileAvailable={percentileAvailable} />
+        {snapshot.candidates.length ? <CandidateTable candidates={snapshot.candidates} percentileAvailable={percentileAvailable} tradeDate={snapshot.tradeDate} />
           : <p className="py-2 text-ink-500">该共同板块暂无符合条件的未涨停上涨候选。</p>}
       </> : null}
       {snapshot.status === 'UNAVAILABLE' || snapshot.status === 'DATA_GAP' ? <p className="text-amber-800">{snapshot.candidates.length ? '当前部分证据待补；仅展示可核对的价格观察，请结合上方缺口判断。' : '当前证据不足，无法形成可信的关联观察。'}</p> : null}
@@ -149,11 +155,15 @@ function SnapshotComparison({ samples }: { samples: CatchUpLocalSnapshot[] }) {
   </p>
 }
 
-function CandidateTable({ candidates, percentileAvailable }: { candidates: ShortTermCatchUpCandidate[]; percentileAvailable: boolean }) {
+function CandidateTable({ candidates, percentileAvailable, tradeDate }: {
+  candidates: ShortTermCatchUpCandidate[]
+  percentileAvailable: boolean
+  tradeDate: string
+}) {
   return <div className="overflow-x-auto rounded-xl border border-line-soft">
     <table className="w-full min-w-[850px] text-left text-xs" aria-label="共同板块中位优先观察候选">
       <thead className="bg-line-soft/70 text-ink-500"><tr>
-        {['名称 / 代码', '现价 / 当日涨幅', '成交额 / 换手', '前五日收益', '收益分位', '与锚点收益差', '行情时间'].map(label => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{label}</th>)}
+        {['名称 / 代码', '现价 / 当日涨幅', '成交额 / 换手', '前五日收益', '收益分位', '与锚点收益差', '行情时间', '日线'].map(label => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{label}</th>)}
       </tr></thead>
       <tbody>{candidates.map(row => {
         const percentile = percentileAvailable && row.historyStatus === 'VALID' ? row.returnPercentile : null
@@ -167,8 +177,9 @@ function CandidateTable({ candidates, percentileAvailable }: { candidates: Short
             <td className="px-3 py-2 tabular">{percentile === null ? '未知' : formatPercent(percentile)}</td>
             <td className="px-3 py-2 tabular">{row.returnGapToLeader === null ? '未知' : `${row.returnGapToLeader > 0 ? '+' : ''}${row.returnGapToLeader.toFixed(2)} 个百分点`}</td>
             <td className="whitespace-nowrap px-3 py-2 text-[11px] tabular">{formatDateTime(row.marketTimestamp)}</td>
+            <td className="whitespace-nowrap px-3 py-2"><StockKlineButton symbol={row.symbol} name={row.name} tradeDate={tradeDate} /></td>
           </tr>
-          <tr><td colSpan={7} className="px-3 pb-2"><details className="text-[11px] text-ink-500"><summary className="cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-200">{row.name}的证据、反证与缺口</summary>
+          <tr><td colSpan={8} className="px-3 pb-2"><details className="text-[11px] text-ink-500"><summary className="cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-200">{row.name}的证据、反证与缺口</summary>
             <EvidenceLine label="已知证据" values={row.evidence} /><EvidenceLine label="反证 / 限制" values={row.contraryEvidence} /><EvidenceLine label="数据缺口" values={row.dataGaps} />
             {!row.evidence.length && !row.contraryEvidence.length && !row.dataGaps.length ? <p>未提供额外证据。</p> : null}
           </details></td></tr>

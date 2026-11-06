@@ -208,7 +208,7 @@ export function startShortTermScanJob(params: ShortTermParams = {}) {
 }
 
 export function fetchShortTermScanJob(jobId: string) {
-  return http.get<ShortTermScanJobStatus>(`/short-term/scan-jobs/${jobId}`).then((res) => res.data)
+  return http.get<ShortTermScanJobStatus>(`/short-term/scan-jobs/${jobId}`, { timeout: 10000 }).then((res) => res.data)
 }
 
 export function fetchShortTermLimitUpBoard(date?: string) {

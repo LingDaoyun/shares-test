@@ -92,6 +92,20 @@ describe('LeaderCatchUpPanel', () => {
     expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(0)
   })
 
+  it('accepts an explicitly selected row anchor and reports later dropdown changes without choosing a board', async () => {
+    const onLeaderSymbolChange = vi.fn()
+    await act(async () => {
+      root.render(<LeaderCatchUpPanel industry="半导体" tradeDate="2026-10-15" sealedStocks={[anchor]}
+        initialLeaderSymbol={anchor.symbol} onLeaderSymbolChange={onLeaderSymbolChange} />)
+    })
+    expect(fetchShortTermCatchUp).toHaveBeenLastCalledWith('半导体', '2026-10-15', anchor.symbol, undefined)
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="供应商共同板块"]')?.value).toBe('')
+    await choose('已封板锚点', '')
+    expect(onLeaderSymbolChange).toHaveBeenLastCalledWith('')
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="供应商共同板块"]')?.disabled).toBe(true)
+    expect(host.textContent).not.toContain('中位观察样本')
+  })
+
   it('does not format an unknown percentile as zero or label a history-shortage candidate as middle', async () => {
     const data = snapshot({ status: 'DATA_GAP', historyValidCount: 3, historyCoveragePercent: 30, historyDates: [], dataGaps: ['连续历史不足'] })
     data.candidates = data.candidates.map(row => ({ ...row, return5: null, returnPercentile: null, returnGapToLeader: null, historyStatus: 'UNKNOWN', middle: false }))

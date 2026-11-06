@@ -53,11 +53,11 @@ describe('Saved 14:00 short-term observation', () => {
     return host
   }
 
-  it('automatically publishes current-day shape results even when the right-side report is absent', async () => {
+  it('ignores current-day legacy shape results when the right-side report is absent', async () => {
     const saved = savedShape()
     vi.mocked(fetchShortTermResultCache).mockResolvedValue(saved)
     const host = await renderPanel()
-    expect(useShortTermScanStore.getState().upperShadow).toEqual(saved.upperShadow)
+    expect(useShortTermScanStore.getState().upperShadow).toBeNull()
     expect(useShortTermScanStore.getState().report).toBeNull()
     expect(host.querySelector('table')).toBeNull()
     expect(host.textContent).not.toContain('形态股票')
@@ -67,7 +67,19 @@ describe('Saved 14:00 short-term observation', () => {
     expect(host.textContent).not.toContain('横盘长上影观察')
   })
 
-  it('only loads historical shapes explicitly and replaces a different-day right-side result atomically', async () => {
+  it('does not display gaps from the retired upper-shadow branch in historical caches', async () => {
+    const saved = savedShape('2020-01-02')
+    saved.upperShadow!.dataGaps = ['横盘长上影日线不足']
+    vi.mocked(fetchShortTermResultCache).mockResolvedValue(saved)
+    const host = await renderPanel()
+    // A stale in-memory branch must not reintroduce its gaps either.
+    act(() => useShortTermScanStore.setState({ upperShadow: saved.upperShadow }))
+    expect(host.querySelector('details')?.textContent).toContain('右侧报告数据不足')
+    expect(host.querySelector('summary')?.textContent).toContain('数据缺口 1 项')
+    expect(host.textContent).not.toContain('横盘长上影日线不足')
+  })
+
+  it('protects a manual report from an older historical cache until an explicit load', async () => {
     const manualReport = { generatedAt: '2026-07-23T06:00:00Z', tradeCaptureTokens: { '600002': 'manual-token' } } as unknown as ShortTermReport
     useShortTermScanStore.setState({ report: manualReport })
     const saved = savedShape('2020-01-02')
@@ -79,10 +91,10 @@ describe('Saved 14:00 short-term observation', () => {
     expect(load.disabled).toBe(false)
     await act(async () => { load.click() })
     expect(useShortTermScanStore.getState().report).toBeNull()
-    expect(useShortTermScanStore.getState().upperShadow).toEqual(saved.upperShadow)
+    expect(useShortTermScanStore.getState().upperShadow).toBeNull()
   })
 
-  it.each(['loading', 'error', 'report'] as const)('does not inject either cached branch while preserving manual %s ownership', async (owner) => {
+  it.each(['loading', 'error', 'report'] as const)('does not inject cached results while preserving manual %s ownership', async (owner) => {
     const manualReport = { tradeCaptureTokens: {} } as ShortTermReport
     useShortTermScanStore.setState({ loading: owner === 'loading', error: owner === 'error' ? '手动扫描失败' : '', report: owner === 'report' ? manualReport : null })
     const saved = savedShape()
@@ -97,6 +109,7 @@ describe('Saved 14:00 short-term observation', () => {
 
   it('does not let the next saved-result poll replace a completed manual no-trade outcome', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-23T07:00:00Z'))
     const saved = savedShape()
     saved.report = { tradeCaptureTokens: { '600001': 'saved-token' } } as unknown as ShortTermReport
     vi.mocked(fetchShortTermResultCache).mockResolvedValue(saved)
@@ -116,16 +129,30 @@ describe('Saved 14:00 short-term observation', () => {
     expect(useShortTermScanStore.getState().upperShadow).toBeNull()
   })
 
-  it('strips saved trade tokens when loading a historical report explicitly', async () => {
+  it('loads the latest historical cache on entry and refresh without triggering a scan', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-14T06:00:00Z'))
     const saved = savedShape('2020-01-02')
     saved.report = { tradeCaptureTokens: { '600001': 'historical-token' } } as unknown as ShortTermReport
     vi.mocked(fetchShortTermResultCache).mockResolvedValue(saved)
     const host = await renderPanel()
-    expect(useShortTermScanStore.getState().report).toBeNull()
-    const load = Array.from(host.querySelectorAll('button')).find(button => button.textContent === '加载已保存结果')!
-    await act(async () => { load.click() })
     expect(useShortTermScanStore.getState().report?.tradeCaptureTokens).toEqual({})
-    expect(useShortTermScanStore.getState().upperShadow).toEqual(saved.upperShadow)
+    expect(useShortTermScanStore.getState().upperShadow).toBeNull()
+    expect(useShortTermScanStore.getState().resultMetadata?.tradeDate).toBe('2020-01-02')
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('历史结果 · 2020-01-02')
+    expect(host.textContent).not.toContain('主动加载后查看')
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000) })
+    expect(fetchShortTermResultCache).toHaveBeenCalledTimes(2)
+    unmounts.pop()!()
+    resetShortTermScanStoreForTest()
+    await renderPanel()
+    expect(fetchShortTermResultCache).toHaveBeenCalledTimes(3)
+    expect(useShortTermScanStore.getState().upperShadow).toBeNull()
+    expect(useShortTermScanStore.getState().report?.tradeCaptureTokens).toEqual({})
+    expect(startShortTermScanJob).not.toHaveBeenCalled()
+    expect(fetchShortTermScanJob).not.toHaveBeenCalled()
+    expect(retryDailyShortTermSnapshot).not.toHaveBeenCalled()
   })
 
   it('shows the applied manual bundle time and gaps instead of the older daily task status', async () => {
@@ -178,7 +205,7 @@ describe('Saved 14:00 short-term observation', () => {
     const load = Array.from(host.querySelectorAll('button')).find(button => button.textContent === '加载已保存结果')!
     await act(async () => { load.click() })
     expect(useShortTermScanStore.getState().resultMetadata?.runId).toBe('preserved-result')
-    expect(useShortTermScanStore.getState().upperShadow).toEqual(saved.upperShadow)
+    expect(useShortTermScanStore.getState().upperShadow).toBeNull()
     expect(host.textContent).toContain('缓存读取超时；保留当前结果。')
   })
   it('loads saved results and labels an incomplete scan instead of implying zero candidates', async () => {

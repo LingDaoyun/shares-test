@@ -1,4 +1,5 @@
 import { ArrowLeft } from 'lucide-react'
+import { useState } from 'react'
 import { Button } from '../ui/Button'
 import { Tag } from '../ui/Badge'
 import { DetailOverlay } from '../ui/DetailOverlay'
@@ -19,6 +20,12 @@ export function LimitUpIndustryOverlay({ selection, onClose }: {
   onClose: () => void
 }) {
   const sealed = selection.limitUpStocks
+  const [leaderSymbol, setLeaderSymbol] = useState('')
+  const [restoreAnchorFocus, setRestoreAnchorFocus] = useState(false)
+  const selectLeader = (symbol: string) => {
+    setRestoreAnchorFocus(true)
+    setLeaderSymbol(symbol)
+  }
 
   return (
     <DetailOverlay
@@ -35,15 +42,22 @@ export function LimitUpIndustryOverlay({ selection, onClose }: {
         <section className="flex flex-col gap-2">
           <h3 className="text-sm font-semibold text-ink-900">已涨停 · {sealed.length} 家</h3>
           <p className="text-xs text-ink-500">全部涨停股票，按连板高度及首次封板时间排列。</p>
-          <StockTable stocks={sealed} tradeDate={selection.tradeDate} />
+          <StockTable stocks={sealed} tradeDate={selection.tradeDate} leaderSymbol={leaderSymbol} onSelectLeader={selectLeader} />
         </section>
-        <LeaderCatchUpPanel key={`${selection.tradeDate}:${selection.industry}`} industry={selection.industry} tradeDate={selection.tradeDate} sealedStocks={sealed} />
+        <LeaderCatchUpPanel key={`${selection.tradeDate}:${selection.industry}:${leaderSymbol}`}
+          industry={selection.industry} tradeDate={selection.tradeDate} sealedStocks={sealed}
+          initialLeaderSymbol={leaderSymbol} onLeaderSymbolChange={selectLeader} restoreAnchorFocus={restoreAnchorFocus} />
       </div>
     </DetailOverlay>
   )
 }
 
-function StockTable({ stocks, tradeDate }: { stocks: ShortTermLimitUpStock[]; tradeDate: string }) {
+function StockTable({ stocks, tradeDate, leaderSymbol, onSelectLeader }: {
+  stocks: ShortTermLimitUpStock[]
+  tradeDate: string
+  leaderSymbol: string
+  onSelectLeader: (symbol: string) => void
+}) {
   if (!stocks.length) return <p className="py-3 text-xs text-ink-500">该行业暂无涨停股票。</p>
   return (
     <div className="overflow-x-auto rounded-xl border border-line-soft">
@@ -73,7 +87,14 @@ function StockTable({ stocks, tradeDate }: { stocks: ShortTermLimitUpStock[]; tr
               <td className="whitespace-nowrap px-3 py-2 tabular">{stock.sealBreakCount > 0 ? `${stock.sealBreakCount} 次` : '—'}</td>
               <td className="whitespace-nowrap px-3 py-2 tabular">{formatAmount(stock.sealFunds)}</td>
               <td className="whitespace-nowrap px-3 py-2">
-                <StockKlineButton symbol={stock.symbol} name={stock.name} tradeDate={tradeDate} />
+                <div className="flex items-center gap-1">
+                  <StockKlineButton symbol={stock.symbol} name={stock.name} tradeDate={tradeDate} />
+                  <Button type="button" variant="ghost" className="px-2 py-1 text-xs"
+                    aria-label={`设${stock.name}为观察锚点`} aria-pressed={leaderSymbol === stock.symbol}
+                    onClick={() => onSelectLeader(stock.symbol)}>
+                    {leaderSymbol === stock.symbol ? '已选锚点' : '设为观察锚点'}
+                  </Button>
+                </div>
               </td>
             </tr>
           ))}

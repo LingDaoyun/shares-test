@@ -47,7 +47,6 @@ class ShortTermScanJobServiceTest {
         context.registerBean(TradingClockService.class, () -> mock(TradingClockService.class));
         context.registerBean(ShortTermFinalResultGate.class, () -> mock(ShortTermFinalResultGate.class));
         context.registerBean(ShortTermObservationService.class, () -> mock(ShortTermObservationService.class));
-        context.registerBean(ShortTermUpperShadowService.class, () -> mock(ShortTermUpperShadowService.class));
         context.registerBean(ShortTermScanResultCache.class, () -> mock(ShortTermScanResultCache.class));
         context.register(ShortTermScanJobService.class);
 
@@ -91,6 +90,7 @@ class ShortTermScanJobServiceTest {
 
             assertThat(running.await(2, TimeUnit.SECONDS)).isTrue();
             assertThat(started.status()).isEqualTo("RUNNING");
+            assertThat(started.message()).isEqualTo("短线右侧扫描中");
             assertThat(started.resultStatus()).isEqualTo(
                     com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.RUNNING);
             release.countDown();
@@ -99,7 +99,7 @@ class ShortTermScanJobServiceTest {
             assertThat(finished.status()).isEqualTo("SUCCEEDED");
             assertThat(finished.resultStatus()).isEqualTo(
                     com.aistock.research.shortterm.schedule.ShortTermSnapshotStatus.DATA_BLOCKED);
-            assertThat(finished.strategyVersion()).isEqualTo("short-term-research-v7-market-context");
+            assertThat(finished.strategyVersion()).isEqualTo("short-term-research-v8-intraday-overnight");
             assertThat(finished.report()).isSameAs(report);
             assertThat(finished.message()).contains("不可执行");
             verify(shortTermService).report(eq(request));
@@ -213,22 +213,19 @@ class ShortTermScanJobServiceTest {
     }
 
     @Test
-    void cachesBothResultsFromTheSameManualJob() throws Exception {
+    void cachesRightSideResultWithoutRunningTheRemovedShapeScan() throws Exception {
         ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
         ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
         ShortTermReport report = sampleReport();
-        ShortTermUpperShadowScan upper = upper("READY", List.of());
         when(scanner.report(any())).thenReturn(report);
-        when(shadow.scan()).thenReturn(upper);
         when(cache.save(any())).thenReturn(true);
-        ShortTermScanJobService service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.NO_TRADE,
+        ShortTermScanJobService service = cachedService(scanner, cache, ShortTermSnapshotStatus.NO_TRADE,
                 Duration.ofMinutes(5));
         try {
             ShortTermScanJobStatus finished = awaitFinished(service, service.start(null).jobId());
             assertThat(finished.status()).isEqualTo("SUCCEEDED");
             assertThat(finished.report()).isSameAs(report);
-            assertThat(finished.upperShadow()).isSameAs(upper);
+            assertThat(finished.upperShadow()).isNull();
             assertThat(finished.dataGaps()).isEmpty();
             ArgumentCaptor<ShortTermDailySnapshot> saved = ArgumentCaptor.forClass(ShortTermDailySnapshot.class);
             verify(cache).save(saved.capture());
@@ -236,49 +233,41 @@ class ShortTermScanJobServiceTest {
             assertThat(saved.getValue().scheduledAt()).isNull();
             assertThat(saved.getValue().startedAt()).isEqualTo(finished.startedAt());
             assertThat(saved.getValue().report()).isSameAs(report);
-            assertThat(saved.getValue().upperShadow()).isSameAs(upper);
+            assertThat(saved.getValue().upperShadow()).isNull();
             assertThat(saved.getValue().status()).isEqualTo("READY");
-            var order = inOrder(shadow, scanner, cache);
-            order.verify(shadow).scan();
+            assertThat(finished.message()).doesNotContain("横盘", "长上影", "联合", "两类");
+            assertThat(saved.getValue().message()).isEqualTo("手动扫描结果已保存。");
+            var order = inOrder(scanner, cache);
             order.verify(scanner).report(ShortTermScanRequest.empty());
             order.verify(cache).save(any());
         } finally { service.shutdown(); }
     }
 
     @Test
-    void preservesThisRunsShapeWhenRightSideFails() throws Exception {
+    void doesNotReplaceCacheWhenRightSideScanFails() throws Exception {
         ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
         ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
-        ShortTermUpperShadowScan upper = upper("READY", List.of());
         when(scanner.report(any())).thenThrow(new IllegalStateException("右侧来源失败"));
-        when(shadow.scan()).thenReturn(upper);
-        ShortTermScanJobService service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.NO_TRADE,
+        ShortTermScanJobService service = cachedService(scanner, cache, ShortTermSnapshotStatus.NO_TRADE,
                 Duration.ofMinutes(5));
         try {
             ShortTermScanJobStatus finished = awaitFinished(service, service.start(null).jobId());
-            assertThat(finished.status()).isEqualTo("SUCCEEDED");
+            assertThat(finished.status()).isEqualTo("FAILED");
             assertThat(finished.resultStatus()).isEqualTo(ShortTermSnapshotStatus.FAILED);
             assertThat(finished.report()).isNull();
-            assertThat(finished.upperShadow()).isSameAs(upper);
+            assertThat(finished.upperShadow()).isNull();
             assertThat(finished.dataGaps()).anyMatch(gap -> gap.contains("右侧来源失败"));
-            ArgumentCaptor<ShortTermDailySnapshot> saved = ArgumentCaptor.forClass(ShortTermDailySnapshot.class);
-            verify(cache).save(saved.capture());
-            assertThat(saved.getValue().status()).isEqualTo("PARTIAL");
-            assertThat(saved.getValue().report()).isNull();
-            assertThat(saved.getValue().upperShadow()).isSameAs(upper);
+            verify(cache, never()).save(any());
         } finally { service.shutdown(); }
     }
 
     @Test
     void keepsBlockedRightReportOnlyInJobDiagnostics() throws Exception {
         ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
         ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
         ShortTermReport report = sampleReport();
         when(scanner.report(any())).thenReturn(report);
-        when(shadow.scan()).thenReturn(upper("PARTIAL", List.of("日线缺口")));
-        ShortTermScanJobService service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.DATA_BLOCKED,
+        ShortTermScanJobService service = cachedService(scanner, cache, ShortTermSnapshotStatus.DATA_BLOCKED,
                 Duration.ofMinutes(5));
         try {
             ShortTermScanJobStatus finished = awaitFinished(service, service.start(null).jobId());
@@ -288,19 +277,45 @@ class ShortTermScanJobServiceTest {
             verify(cache).save(saved.capture());
             assertThat(saved.getValue().report()).isNull();
             assertThat(saved.getValue().status()).isEqualTo("PARTIAL");
-            assertThat(saved.getValue().dataGaps()).contains("日线缺口");
+            assertThat(saved.getValue().dataGaps()).contains("右侧DATA_BLOCKED", "覆盖不足");
         } finally { service.shutdown(); }
     }
 
     @Test
-    void cachesZeroCandidateRightReportWithoutBorrowingAnOlderShape() throws Exception {
+    void savesLatestDataBlockedOutcomeWithoutAnIneligibleReport() throws Exception {
         ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
         ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
         ShortTermReport report = sampleReport();
         when(scanner.report(any())).thenReturn(report);
-        when(shadow.scan()).thenThrow(new IllegalStateException("形态来源失败"));
-        ShortTermScanJobService service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.NO_TRADE,
+        when(cache.save(any())).thenReturn(true);
+        ShortTermScanJobService service = cachedService(scanner, cache, ShortTermSnapshotStatus.DATA_BLOCKED,
+                Duration.ofMinutes(5));
+        try {
+            ShortTermScanJobStatus finished = awaitFinished(service, service.start(null).jobId());
+            assertThat(finished.status()).isEqualTo("SUCCEEDED");
+            assertThat(finished.resultStatus()).isEqualTo(ShortTermSnapshotStatus.DATA_BLOCKED);
+            assertThat(finished.report()).isSameAs(report);
+            ArgumentCaptor<ShortTermDailySnapshot> saved = ArgumentCaptor.forClass(ShortTermDailySnapshot.class);
+            verify(cache).save(saved.capture());
+            assertThat(saved.getValue().runId()).isEqualTo(finished.jobId());
+            assertThat(saved.getValue().startedAt()).isEqualTo(finished.startedAt());
+            assertThat(saved.getValue().finishedAt()).isEqualTo(finished.finishedAt());
+            assertThat(saved.getValue().status()).isEqualTo("PARTIAL");
+            assertThat(saved.getValue().report()).isNull();
+            assertThat(saved.getValue().upperShadow()).isNull();
+            assertThat(saved.getValue().message()).contains("右侧DATA_BLOCKED");
+            assertThat(saved.getValue().dataGaps()).containsExactly("右侧DATA_BLOCKED", "覆盖不足");
+            verify(cache, never()).latest();
+        } finally { service.shutdown(); }
+    }
+
+    @Test
+    void cachesACompleteZeroCandidateRightReport() throws Exception {
+        ShortTermService scanner = mock(ShortTermService.class);
+        ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
+        ShortTermReport report = sampleReport();
+        when(scanner.report(any())).thenReturn(report);
+        ShortTermScanJobService service = cachedService(scanner, cache, ShortTermSnapshotStatus.NO_TRADE,
                 Duration.ofMinutes(5));
         try {
             ShortTermScanJobStatus finished = awaitFinished(service, service.start(null).jobId());
@@ -310,38 +325,19 @@ class ShortTermScanJobServiceTest {
             verify(cache).save(saved.capture());
             assertThat(saved.getValue().report()).isSameAs(report);
             assertThat(saved.getValue().upperShadow()).isNull();
-            assertThat(saved.getValue().status()).isEqualTo("PARTIAL");
-            assertThat(saved.getValue().dataGaps()).anyMatch(gap -> gap.contains("形态来源失败"));
+            assertThat(saved.getValue().status()).isEqualTo("READY");
+            assertThat(saved.getValue().dataGaps()).isEmpty();
             verify(cache, never()).latest();
-        } finally { service.shutdown(); }
-    }
-
-    @Test
-    void doesNotReplaceCacheWhenBothBranchesFail() throws Exception {
-        ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
-        ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
-        when(scanner.report(any())).thenThrow(new IllegalStateException("右侧来源失败"));
-        when(shadow.scan()).thenThrow(new IllegalStateException("形态来源失败"));
-        ShortTermScanJobService service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.NO_TRADE,
-                Duration.ofMinutes(5));
-        try {
-            ShortTermScanJobStatus finished = awaitFinished(service, service.start(null).jobId());
-            assertThat(finished.status()).isEqualTo("FAILED");
-            assertThat(finished.dataGaps()).hasSize(2);
-            verify(cache, never()).save(any());
         } finally { service.shutdown(); }
     }
 
     @Test
     void doesNotPublishLateResultsAfterTimeoutEvenWhenProviderIgnoresInterruption() throws Exception {
         ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
         ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
         CountDownLatch running = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CountDownLatch returned = new CountDownLatch(1);
-        when(shadow.scan()).thenReturn(upper("READY", List.of()));
         when(scanner.report(any())).thenAnswer(invocation -> {
             running.countDown();
             boolean released = false;
@@ -352,7 +348,7 @@ class ShortTermScanJobServiceTest {
             returned.countDown();
             return sampleReport();
         });
-        ShortTermScanJobService service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.NO_TRADE,
+        ShortTermScanJobService service = cachedService(scanner, cache, ShortTermSnapshotStatus.NO_TRADE,
                 Duration.ofMillis(80));
         try {
             String jobId = service.start(null).jobId();
@@ -371,47 +367,12 @@ class ShortTermScanJobServiceTest {
     }
 
     @Test
-    void doesNotStartTheRightSideBranchAfterTheShapeBranchHasTimedOut() throws Exception {
-        var scanner = mock(ShortTermService.class);
-        var shadow = mock(ShortTermUpperShadowService.class);
-        var cache = mock(ShortTermScanResultCache.class);
-        var running = new CountDownLatch(1);
-        var release = new CountDownLatch(1);
-        when(shadow.scan()).thenAnswer(invocation -> {
-            running.countDown();
-            boolean released = false;
-            while (!released) {
-                try { released = release.await(2, TimeUnit.SECONDS); }
-                catch (InterruptedException ignored) { /* Simulate a provider that finishes after cancellation. */ }
-            }
-            return upper("READY", List.of());
-        });
-        when(scanner.report(any())).thenReturn(sampleReport());
-        var service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.NO_TRADE, Duration.ofMillis(100));
-        try {
-            String jobId = service.start(null).jobId();
-            assertThat(running.await(2, TimeUnit.SECONDS)).isTrue();
-            assertThat(awaitFinished(service, jobId).status()).isEqualTo("FAILED");
-            release.countDown();
-            service.shutdown();
-            Field workers = ShortTermScanJobService.class.getDeclaredField("executorService");
-            workers.setAccessible(true);
-            assertThat(((java.util.concurrent.ExecutorService) workers.get(service))
-                    .awaitTermination(2, TimeUnit.SECONDS)).isTrue();
-            verify(scanner, never()).report(any());
-            verify(cache, never()).save(any());
-        } finally { release.countDown(); service.shutdown(); }
-    }
-
-    @Test
-    void failsTheJobWhenCombinedResultCannotBeSaved() throws Exception {
+    void failsTheJobWhenResultCannotBeSaved() throws Exception {
         ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
         ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
         when(scanner.report(any())).thenReturn(sampleReport());
-        when(shadow.scan()).thenReturn(upper("READY", List.of()));
         when(cache.save(any())).thenThrow(new IllegalStateException("缓存写入失败"));
-        ShortTermScanJobService service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.NO_TRADE,
+        ShortTermScanJobService service = cachedService(scanner, cache, ShortTermSnapshotStatus.NO_TRADE,
                 Duration.ofMinutes(5));
         try {
             ShortTermScanJobStatus finished = awaitFinished(service, service.start(null).jobId());
@@ -423,11 +384,9 @@ class ShortTermScanJobServiceTest {
     @Test
     void marksActualRightSideQuoteAndTechnicalGapsAsPartial() throws Exception {
         ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
         ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
         when(scanner.report(any())).thenReturn(reportWithGaps(3, false));
-        when(shadow.scan()).thenReturn(upper("READY", List.of()));
-        ShortTermScanJobService service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.NO_TRADE,
+        ShortTermScanJobService service = cachedService(scanner, cache, ShortTermSnapshotStatus.NO_TRADE,
                 Duration.ofMinutes(5));
         try {
             ShortTermScanJobStatus finished = awaitFinished(service, service.start(null).jobId());
@@ -442,11 +401,9 @@ class ShortTermScanJobServiceTest {
     @Test
     void treatsIntentionalMarketRiskStopAsACompleteZeroCandidateResult() throws Exception {
         ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
         ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
         when(scanner.report(any())).thenReturn(reportWithGaps(0, true));
-        when(shadow.scan()).thenReturn(upper("READY", List.of()));
-        ShortTermScanJobService service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.NO_TRADE,
+        ShortTermScanJobService service = cachedService(scanner, cache, ShortTermSnapshotStatus.NO_TRADE,
                 Duration.ofMinutes(5));
         try {
             ShortTermScanJobStatus finished = awaitFinished(service, service.start(null).jobId());
@@ -461,12 +418,10 @@ class ShortTermScanJobServiceTest {
     @Test
     void retainsCachePreviewWarningWithThePersistedReport() throws Exception {
         ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
         ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
         ShortTermReport report = sampleReport();
         when(scanner.report(any())).thenReturn(report);
-        when(shadow.scan()).thenReturn(upper("READY", List.of()));
-        ShortTermScanJobService service = combinedService(scanner, shadow, cache, ShortTermSnapshotStatus.CACHE_PREVIEW,
+        ShortTermScanJobService service = cachedService(scanner, cache, ShortTermSnapshotStatus.CACHE_PREVIEW,
                 Duration.ofMinutes(5));
         try {
             awaitFinished(service, service.start(null).jobId());
@@ -482,14 +437,12 @@ class ShortTermScanJobServiceTest {
     @Test
     void permitsTimeoutAndStatusReadsWhileHistoryArchivalIsBlocked() throws Exception {
         ShortTermService scanner = mock(ShortTermService.class);
-        ShortTermUpperShadowService shadow = mock(ShortTermUpperShadowService.class);
         ShortTermScanResultCache cache = mock(ShortTermScanResultCache.class);
         ResearchHistoryService history = mock(ResearchHistoryService.class);
         TradingClockService tradingClock = mock(TradingClockService.class);
         ShortTermFinalResultGate gate = mock(ShortTermFinalResultGate.class);
         when(tradingClock.currentMarketDate()).thenReturn(LocalDate.parse("2026-07-23"));
         when(scanner.report(any())).thenReturn(sampleReport());
-        when(shadow.scan()).thenReturn(upper("READY", List.of()));
         when(gate.evaluateManual(any(), any())).thenReturn(new ShortTermFinalResultGate.Result(
                 ShortTermSnapshotStatus.NO_TRADE, "无合格候选", List.of()));
         CountDownLatch archiving = new CountDownLatch(1);
@@ -504,7 +457,7 @@ class ShortTermScanJobServiceTest {
             return null;
         }).when(history).recordShortTermReport(any());
         ShortTermScanJobService service = new ShortTermScanJobService(scanner, history, tradingClock, gate,
-                null, shadow, cache, Clock.fixed(Instant.parse("2026-07-23T06:52:00Z"), ZoneOffset.UTC),
+                null, cache, Clock.fixed(Instant.parse("2026-07-23T06:52:00Z"), ZoneOffset.UTC),
                 Duration.ofMillis(100));
         var reader = java.util.concurrent.Executors.newSingleThreadExecutor();
         try {
@@ -546,7 +499,7 @@ class ShortTermScanJobServiceTest {
                 ShortTermTechnicalReviewCoverage.of(5, 4, 3), report.crossSectionContext(), regime);
     }
 
-    private ShortTermScanJobService combinedService(ShortTermService scanner, ShortTermUpperShadowService shadow,
+    private ShortTermScanJobService cachedService(ShortTermService scanner,
                                                    ShortTermScanResultCache cache, ShortTermSnapshotStatus result,
                                                    Duration scanTimeout) {
         Instant now = Instant.parse("2026-07-23T06:52:00Z");
@@ -555,13 +508,8 @@ class ShortTermScanJobServiceTest {
         ShortTermFinalResultGate gate = mock(ShortTermFinalResultGate.class);
         when(gate.evaluateManual(any(), any())).thenReturn(new ShortTermFinalResultGate.Result(
                 result, "右侧" + result, result == ShortTermSnapshotStatus.DATA_BLOCKED ? List.of("覆盖不足") : List.of()));
-        return new ShortTermScanJobService(scanner, null, tradingClock, gate, null, shadow, cache,
+        return new ShortTermScanJobService(scanner, null, tradingClock, gate, null, cache,
                 Clock.fixed(now, ZoneOffset.UTC), scanTimeout);
-    }
-
-    private ShortTermUpperShadowScan upper(String status, List<String> gaps) {
-        return new ShortTermUpperShadowScan(LocalDate.parse("2026-07-23"), Instant.parse("2026-07-23T06:51:00Z"),
-                status, "测试行情", 10, 10, 0, 0, 0, 0, List.of(), gaps, "测试形态规则");
     }
 
     private ShortTermScanJobStatus awaitFinished(ShortTermScanJobService service, String jobId) throws InterruptedException {

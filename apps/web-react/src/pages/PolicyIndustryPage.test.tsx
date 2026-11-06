@@ -3,11 +3,13 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fetchPolicyDaily, fetchPolicyReviewHistory, refreshPolicyDaily, reviewPolicyTheme } from '../api/client'
+import { fetchFinancialNews } from '../api/news'
 import { useAppStore } from '../store/appStore'
 import { PolicyIndustryPage } from './PolicyIndustryPage'
 import type { PolicyAiReview, PolicyDailySnapshot, PolicyTheme } from '../types'
 
 vi.mock('../api/client', () => ({ fetchPolicyDaily: vi.fn(), fetchPolicyReviewHistory: vi.fn(), refreshPolicyDaily: vi.fn(), reviewPolicyTheme: vi.fn() }))
+vi.mock('../api/news', () => ({ fetchFinancialNews: vi.fn(), refreshFinancialNews: vi.fn(), analyzeFinancialNews: vi.fn() }))
 const theme: PolicyTheme = {
   themeCode: 'DIGITAL_INFRA', name: '数字经济与算力', policyLevel: '政策线索', timeHorizon: '2–12周观察', strengthScore: 60,
   chainSegments: ['算力设备'], risks: ['订单需要验证'], signals: [{ source: '政府网', summary: '推进算力设施建设方案', signalType: '标题关键词匹配', confidence: 60, url: 'https://www.gov.cn/policy-test', publishedAt: '2026-10-17' }],
@@ -29,6 +31,7 @@ describe('daily policy research board', () => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     vi.clearAllMocks()
     localStorage.clear()
+    vi.mocked(fetchFinancialNews).mockResolvedValue({ status: 'IDLE', startedAt: null, completedAt: null, items: [], sources: [], analyses: {}, dataGaps: [] })
     vi.mocked(fetchPolicyDaily).mockResolvedValue(daily)
     vi.mocked(fetchPolicyReviewHistory).mockResolvedValue([review])
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { callback(0); return 1 })
@@ -37,7 +40,7 @@ describe('daily policy research board', () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   })
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT })
-  async function render() { await act(async () => { root.render(<PolicyIndustryPage />) }) }
+  async function render() { await act(async () => { root.render(<PolicyIndustryPage />) }); await click('行业解读') }
   it('shows source authority prominently and keeps a local repost distinct from its claimed origin', async () => {
     const signals = [{ ...theme.signals[0], source: '工信部规划解读', url: 'https://www.miit.gov.cn/article',
       sourceInfo: { publisher: '工业和信息化部', authorityTier: 'CENTRAL_DEPARTMENT', authorityLabel: '中央部门官网', authorityRank: 95, siteHost: 'www.miit.gov.cn', attributedSource: '电子信息司' } },
@@ -74,7 +77,7 @@ describe('daily policy research board', () => {
     await act(async () => { title!.click() })
   }
 
-  it('shows industry cards first and opens collection controls on demand without launching paid analysis', async () => {
+  it('shows industry cards in the industry tab and opens collection controls without launching paid analysis', async () => {
     await render()
     expect(host.textContent).not.toContain('每日产业情报')
     expect(host.textContent).not.toContain('每天08:30')

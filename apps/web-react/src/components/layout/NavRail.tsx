@@ -1,25 +1,20 @@
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Activity, BarChart3, ClipboardList, Globe2, LayoutDashboard, ListChecks, Newspaper, Search, Settings2, Star, type LucideIcon } from 'lucide-react'
+import { Activity, Globe2, LayoutDashboard, Newspaper, Settings2, Star, type LucideIcon } from 'lucide-react'
 import { useAppStore } from '../../store/appStore'
 import { navItems, pathToPage, type PageKey } from './pageMeta'
 
 const pageIcons: Record<PageKey, LucideIcon> = {
   limitUp: LayoutDashboard,
   shortTerm: Activity,
-  potentialLeader: Search,
-  market: BarChart3,
   overseas: Globe2,
   policy: Newspaper,
   watchlist: Star,
-  tradeReview: ClipboardList,
-  rules: ListChecks,
   settings: Settings2
 }
 
 export function NavRail() {
   const location = useLocation()
   const navigate = useNavigate()
-  const rules = useAppStore((s) => s.rules)
   const runtimeConfig = useAppStore((s) => s.runtimeConfig)
 
   const key = location.pathname.replace(/^\/+|\/+$/g, '').trim()
@@ -27,27 +22,19 @@ export function NavRail() {
 
   const pagePath: Record<PageKey, string> = {
     limitUp: 'limit-up',
-    market: 'market',
     shortTerm: 'short-term',
-    potentialLeader: 'potential-leader',
     overseas: 'overseas',
     policy: 'policy',
     watchlist: 'watchlist',
-    tradeReview: 'trade-review',
-    rules: 'rules',
     settings: 'settings'
   }
 
   const counts: Record<PageKey, string> = {
     limitUp: '首页',
-    market: '长投',
     shortTerm: '盘中',
-    potentialLeader: '5交易日',
     overseas: '美日韩',
-    policy: '产业',
+    policy: '新闻·政策',
     watchlist: '自选',
-    tradeReview: '复盘',
-    rules: `${rules.length} 条`,
     settings: runtimeConfig ? '已加载' : '未读取'
   }
 

@@ -76,6 +76,13 @@ public class ShortTermLimitUpBoardService {
         return snapshot;
     }
 
+    /** 题材详情只读取现有的新鲜快照，不为交集统计触发整张情绪看板取数。 */
+    public ShortTermLimitUpBoardSnapshot cachedSnapshot(LocalDate date) {
+        if (date == null) return null;
+        CachedSnapshot cached = cache.get(date);
+        return cached != null && Instant.now().isBefore(cached.expiresAt()) ? cached.snapshot() : null;
+    }
+
     public ShortTermLimitUpIndustrySnapshot industrySnapshot(String industry, LocalDate date) {
         if (industry == null || industry.isBlank()) throw new IllegalArgumentException("行业名称不能为空");
         String industryName = industry.trim();

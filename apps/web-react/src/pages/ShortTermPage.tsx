@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CandlestickChart, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import type { ShortTermParams } from '../api/client'
-import type { UpperShadowCandidate } from '../api/dailyShortTerm'
 import { fetchShortTermValidationSummaries } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -11,9 +10,8 @@ import { DetailOverlay, resolveDetailSelection } from '../components/ui/DetailOv
 import { Loader } from '../components/ui/Loader'
 import { DailyShortTermPanel } from '../components/shortterm/DailyShortTermPanel'
 import { ShortTermMarketConstraint, ShortTermMarketEnvironmentPanel } from '../components/shortterm/ShortTermMarketEnvironmentPanel'
-import { UpperShadowCandidateDetail, UpperShadowCandidateRow } from '../components/shortterm/UpperShadowCandidateView'
 import { IndustryLeaderOverlay, type IndustryLeaderSelection } from '../components/shortterm/IndustryLeaderOverlay'
-import { OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
+import { isMorningOvernightPlan, OvernightTradePlanPanel } from '../components/shortterm/OvernightTradePlanPanel'
 import { CompositeScoreBadge, MomentumQualityTags, RightSideSignalTag } from '../components/shortterm/ShortTermCandidateIndicators'
 import {
   hasClosedShortTermScoreSnapshot,
@@ -22,8 +20,6 @@ import {
 import type { ShortTermValidationViewState } from '../components/shortterm/ShortTermSignalEvidencePanel'
 import { CandidateExecutionTag, ResearchScoreTag, researchSetupFilters, ShortTermResearchPanel } from '../components/shortterm/ShortTermResearchPanel'
 import type { ResearchSetupFilter } from '../components/shortterm/ShortTermResearchPanel'
-import { BuyEntryButton } from '../components/tradefeedback/BuyEntryButton'
-import { TradeReviewButton } from '../components/tradefeedback/TradeReviewButton'
 import { WatchButton } from '../components/watchlist/WatchButton'
 import { V2StrategyBundlePanel } from '../components/recommendation/V2StrategyBundlePanel'
 import { changeClass, formatAmount, formatDateTime, formatNumber, formatPercent, formatPerSharePrice, formatRatioPercent, formatSignedPercent } from '../lib/format'
@@ -75,68 +71,39 @@ const actionTone: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'n
 
 export function ShortTermPage() {
   const [draft, setDraft] = useState<DraftParams>(DEFAULT_DRAFT)
+  const [thresholdsOpen, setThresholdsOpen] = useState(false)
   const [viewPreferences, setViewPreferences] = useState<ShortTermViewPreferences>(() => loadShortTermViewPreferences())
   const report = useShortTermScanStore((state) => state.report)
-  const savedUpperShadow = useShortTermScanStore((state) => state.upperShadow)
+  const resultMetadata = useShortTermScanStore((state) => state.resultMetadata)
   const loading = useShortTermScanStore((state) => state.loading)
   const error = useShortTermScanStore((state) => state.error)
   const scanMessage = useShortTermScanStore((state) => state.scanMessage)
   const activeJobId = useShortTermScanStore((state) => state.activeJobId)
   const runManualScan = useShortTermScanStore((state) => state.runManualScan)
-  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  const [selection, setSelection] = useState<string | null>(null)
   const [setupFilter, setSetupFilter] = useState<ResearchSetupFilter>('ALL')
   const [leaderSelection, setLeaderSelection] = useState<IndustryLeaderSelection | null>(null)
   const [validationSummaries, setValidationSummaries] = useState<ShortTermValidationSummary[]>([])
   const [validationState, setValidationState] = useState<ShortTermValidationViewState>('IDLE')
   const validationRequests = useRef(new Map<string, Promise<ShortTermValidationSummary[]>>())
 
-  const upperShadow = savedUpperShadow && (!report || savedUpperShadow.tradeDate === formatDateTime(
-    report.dataCutoffAt ?? report.generatedAt
-  ).slice(0, 10)) ? savedUpperShadow : null
-  const candidates = useMemo(() => {
-    const merged = new Map<string, { symbol: string; name: string; industry: string; rightSide: ShortTermCandidate | null; shadow: UpperShadowCandidate | null }>()
-    // The server applies execution gates before ranking. Preserve its order and saved ranks.
-    for (const candidate of report?.candidates ?? []) {
-      if (!merged.has(candidate.symbol)) merged.set(candidate.symbol, {
-        symbol: candidate.symbol, name: candidate.name, industry: candidate.industry || '', rightSide: candidate, shadow: null
-      })
-    }
-    for (const shadow of upperShadow?.candidates ?? []) {
-      const existing = merged.get(shadow.symbol)
-      if (existing) {
-        existing.shadow = shadow
-        existing.industry ||= shadow.industry || ''
-      } else {
-        merged.set(shadow.symbol, { symbol: shadow.symbol, name: shadow.name, industry: shadow.industry || '', rightSide: null, shadow })
-      }
-    }
-    return [...merged.values()]
-  }, [report, upperShadow])
-
-  const hasResearch = candidates.some((candidate) => candidate.rightSide?.signalProfile?.research)
-  const hasUnclassified = candidates.some((candidate) => !candidate.rightSide?.signalProfile?.research)
-  const visibleCandidates = candidates.filter((candidate) => {
-    const research = candidate.rightSide?.signalProfile?.research
+  const hasLoadedResults = Boolean(resultMetadata || report)
+  const rightCandidates = report?.candidates ?? []
+  const hasResearch = rightCandidates.some((candidate) => candidate.signalProfile?.research)
+  const hasUnclassified = rightCandidates.some((candidate) => !candidate.signalProfile?.research)
+  const visibleRightCandidates = rightCandidates.filter((candidate) => {
+    const research = candidate.signalProfile?.research
     return setupFilter === 'ALL' || !research || research.setupType === setupFilter
   })
+  const selected = resolveDetailSelection(rightCandidates, selection, candidate => candidate.symbol)
 
   useEffect(() => {
     setSetupFilter('ALL')
   }, [report])
 
   useEffect(() => {
-    if (selectedSymbol && !candidates.some((candidate) => candidate.symbol === selectedSymbol)) {
-      setSelectedSymbol(null)
-    }
-  }, [candidates, selectedSymbol])
-
-  const selected = useMemo(() => {
-    return resolveDetailSelection(
-      candidates,
-      selectedSymbol,
-      (candidate) => candidate.symbol
-    )
-  }, [candidates, selectedSymbol])
+    if (selection && !selected) setSelection(null)
+  }, [selection, selected])
 
   useEffect(() => {
     saveShortTermViewPreferences(viewPreferences)
@@ -184,38 +151,33 @@ export function ShortTermPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Card
-        title={
-          <span className="inline-flex items-center gap-2">
-            <SlidersHorizontal className="h-4 w-4 text-brand-500" />
-            右侧启动阈值
-          </span>
-        }
-        extra={
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="primary"
-              icon={<RefreshCw className="h-4 w-4" />}
-              loading={loading}
-              onClick={() => {
-                setSelectedSymbol(null)
-                void runManualScan(toApiParams({ ...draft }))
-              }}
-            >
-              重新扫描
-            </Button>
-            <Button
-              variant="secondary"
-              disabled={loading}
-              onClick={() => {
-                setSelectedSymbol(null)
-                void runManualScan(toApiParams({ ...draft }))
-              }}
-            >
-              应用阈值
-            </Button>
-          </div>
-        }
+      <div className="flex items-center justify-end gap-2" aria-label="扫描操作">
+        <Button
+          variant="primary"
+          icon={<RefreshCw className="h-4 w-4" />}
+          loading={loading}
+          onClick={() => {
+            setSelection(null)
+            void runManualScan(toApiParams({ ...draft }))
+          }}
+        >
+          重新扫描
+        </Button>
+        <Button
+          variant="ghost"
+          className="!px-2.5"
+          aria-label="右侧启动阈值"
+          title="右侧启动阈值"
+          aria-haspopup="dialog"
+          onClick={() => setThresholdsOpen(true)}
+          icon={<SlidersHorizontal className="h-4 w-4" />}
+        />
+      </div>
+
+      <DetailOverlay
+        open={thresholdsOpen}
+        title="右侧启动阈值"
+        onClose={() => setThresholdsOpen(false)}
       >
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
           <NumberField label="候选数量（0=全部）" value={draft.limit} min={0} max={12} onChange={(value) => setDraft({ ...draft, limit: value })} />
@@ -264,8 +226,17 @@ export function ShortTermPage() {
             {' '}
             低流动性、长期横盘、急拉和离均线过远仍受约束。
           </p>
+          <Button
+            variant="primary"
+            disabled={loading}
+            onClick={() => {
+              setThresholdsOpen(false)
+            }}
+          >
+            保存阈值
+          </Button>
         </div>
-      </Card>
+      </DetailOverlay>
 
       {error && <Card className="border-red-200 bg-red-50 text-sm text-red-700">{error}</Card>}
       {loading && !report ? (
@@ -305,9 +276,15 @@ export function ShortTermPage() {
         </>
       ) : null}
 
-        <Card title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />短线候选</span>}
-          extra={<span className="text-xs text-ink-500">{visibleCandidates.length === candidates.length ? candidates.length : `${visibleCandidates.length} / ${candidates.length}`} 只</span>} flush>
+      <div hidden>
+        <Card flush>
           <DailyShortTermPanel />
+        </Card>
+      </div>
+
+      <div hidden={!hasLoadedResults}>
+        <Card className="min-w-0" title={<span className="inline-flex items-center gap-2"><CandlestickChart className="h-4 w-4 text-brand-500" />右侧启动</span>}
+          extra={<span className="text-xs text-ink-500">{visibleRightCandidates.length === rightCandidates.length ? rightCandidates.length : `${visibleRightCandidates.length} / ${rightCandidates.length}`} 只</span>} flush>
           {!viewPreferences.marketSentimentVisible && report?.marketRegime?.maxAction === 'NO_TRADE' ? (
             <div className="px-5 py-3"><ShortTermMarketConstraint regime={report.marketRegime} /></div>
           ) : null}
@@ -326,49 +303,41 @@ export function ShortTermPage() {
                   </button>
                 ))}
               </div>
-              {setupFilter !== 'ALL' && hasUnclassified ? <p className="mt-2 text-xs text-ink-400">历史候选及未分类长上影观察继续保留展示。</p> : null}
+              {setupFilter !== 'ALL' && hasUnclassified ? <p className="mt-2 text-xs text-ink-400">历史及未分类右侧候选继续保留展示。</p> : null}
             </div>
           ) : null}
-          <div aria-label="短线候选列表" className="divide-y divide-line-soft">
-            {visibleCandidates.length ? visibleCandidates.map((candidate) => candidate.rightSide ? (
+          <div aria-label="右侧启动候选列表" className="divide-y divide-line-soft">
+            {visibleRightCandidates.length ? visibleRightCandidates.map((candidate) => (
               <CandidateRow
                 key={candidate.symbol}
-                candidate={candidate.rightSide}
-                industry={candidate.industry}
-                hasUpperShadow={candidate.shadow !== null}
+                candidate={candidate}
+                industry={candidate.industry || ''}
                 selected={selected?.symbol === candidate.symbol}
-                onSelect={() => setSelectedSymbol(candidate.symbol)}
+                onSelect={() => setSelection(candidate.symbol)}
                 marketRegimeLabel={report?.marketRegime?.label}
               />
-            ) : candidate.shadow ? (
-              <UpperShadowCandidateRow
-                key={candidate.symbol}
-                candidate={candidate.shadow}
-                selected={selected?.symbol === candidate.symbol}
-                onSelect={() => setSelectedSymbol(candidate.symbol)}
-              />
-            ) : null) : (
-              <p className="p-5 text-sm text-ink-500">{setupFilter !== 'ALL' ? '当前形态暂无候选' : upperShadow?.status === 'DATA_BLOCKED'
-                ? '暂无可展示候选，形态扫描数据不足。'
-                : upperShadow?.status === 'PARTIAL' ? '已检查范围暂无候选，其余数据缺口尚未判断。'
-                  : report || upperShadow ? '暂无候选' : '尚无已加载候选'}</p>
+            )) : (
+              <p className="p-5 text-sm text-ink-500">{setupFilter !== 'ALL' ? '当前形态暂无右侧启动候选'
+                : report ? '暂无右侧启动候选'
+                  : resultMetadata?.status === 'PARTIAL' ? '本次未发布右侧候选，扫描数据未完整就绪。'
+                    : resultMetadata ? '暂无右侧启动候选' : '尚无已加载的右侧启动结果'}</p>
             )}
           </div>
         </Card>
 
+      </div>
+
       <DetailOverlay
         open={selected !== null}
         title={selected ? `${selected.name} ${selected.symbol}` : '短线候选详情'}
-        subtitle={selected ? `${selected.rightSide?.market ?? 'A股'} · ${selected.industry || '行业待补'} · ${selected.rightSide ? `排名 #${selected.rightSide.rank}` : '横盘长上影观察'}` : undefined}
-        onClose={() => setSelectedSymbol(null)}
+        subtitle={selected ? `${selected.market ?? 'A股'} · ${selected.industry || '行业待补'} · 排名 #${selected.rank}` : undefined}
+        onClose={() => setSelection(null)}
       >
         <div className="flex flex-col gap-5">
-          {selected?.shadow && upperShadow ? <UpperShadowCandidateDetail candidate={selected.shadow} scan={upperShadow} /> : null}
-          {selected?.rightSide && report ? (
+          {selected && report ? (
             <CandidateDetail
-              candidate={selected.rightSide}
+              candidate={selected}
               weightProfile={report.weightProfile}
-              generatedAt={report.generatedAt}
               tradeCaptureToken={report.tradeCaptureTokens?.[selected.symbol] ?? null}
               marketRegime={report.marketRegime}
               validationSummaries={validationSummaries}
@@ -593,17 +562,27 @@ function FundDirectionList({
   )
 }
 
+function adviceForOvernightPlan(candidate: ShortTermCandidate): TradingAdvice {
+  if ((candidate.todayAdvice.action === 'ADD' || candidate.todayAdvice.action === 'LIGHT_TRIAL')
+    && (!isMorningOvernightPlan(candidate.tradePlan)
+      || (candidate.signalProfile?.research?.setupType === 'TREND_PULLBACK'
+        && candidate.tailSignal?.intradayPullback?.status !== 'CONFIRMED'))) {
+    return { ...candidate.todayAdvice, action: 'WAIT', actionLabel: '待重新扫描',
+      summary: '当前结果缺少新的隔夜退出计划或分时回踩证据，请重新扫描。',
+      reasons: ['旧规则买入建议不能替代当前规则确认'], riskControls: [] }
+  }
+  return candidate.todayAdvice
+}
+
 function CandidateRow({
   candidate,
   industry,
-  hasUpperShadow,
   selected,
   onSelect,
   marketRegimeLabel
 }: {
   candidate: ShortTermCandidate
   industry: string
-  hasUpperShadow: boolean
   selected: boolean
   onSelect: () => void
   marketRegimeLabel: string | undefined
@@ -613,11 +592,12 @@ function CandidateRow({
   const scoreSnapshotClosed = hasClosedShortTermScoreSnapshot(candidate)
   const rankingScore = scoreSnapshotClosed ? candidate.score.rankingScore : null
   const research = candidate.signalProfile?.research
+  const advice = adviceForOvernightPlan(candidate)
   return (
     <button
       type="button"
       onClick={onSelect}
-      className={`grid w-full grid-cols-1 gap-3 px-5 py-4 text-left transition hover:bg-brand-50/70 md:grid-cols-[minmax(0,1.2fr)_1fr_auto] ${selected ? 'bg-brand-50' : 'bg-white'}`}
+      className={`grid w-full grid-cols-1 gap-3 px-5 py-4 text-left transition hover:bg-brand-50/70 ${selected ? 'bg-brand-50' : 'bg-white'}`}
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
@@ -625,7 +605,6 @@ function CandidateRow({
           <h3 className="truncate text-base font-semibold text-ink-900">{candidate.name}</h3>
           <span className="font-mono text-xs text-ink-400">{candidate.symbol}</span>
           <Tag tone="brand">右侧候选</Tag>
-          {hasUpperShadow ? <Tag tone="warning">横盘长上影</Tag> : null}
           <Tag tone="sky">{candidate.phaseLabel}</Tag>
           {supportReversal?.state === 'CONFIRMED' ? (
             <Tag tone="success">{supportReversal.stateLabel}</Tag>
@@ -676,11 +655,11 @@ function CandidateRow({
           <Metric label="换手率" value={`${formatNumber(candidate.technical.momentumQuality?.turnoverRatePercent)}%`} compact />
       </div>
 
-      <div className="flex items-center justify-between gap-3 md:flex-col md:items-end md:justify-center">
+      <div className="flex flex-wrap items-center gap-3">
         {research ? <ResearchScoreTag research={research} /> : <CompositeScoreBadge value={rankingScore} />}
         <CandidateExecutionTag candidate={candidate} />
         {!research ? <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag> : null}
-        <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
+        <Tag tone={adviceTone(advice.action)}>建议：{advice.actionLabel}</Tag>
         <Tag tone={tailTone(candidate.tailSignal.status)}>{candidate.tailSignal.statusLabel}</Tag>
       </div>
     </button>
@@ -694,7 +673,6 @@ function legacyWeightLabel(label: string, weight: number | null | undefined) {
 function CandidateDetail({
   candidate,
   weightProfile,
-  generatedAt,
   tradeCaptureToken,
   marketRegime,
   validationSummaries,
@@ -702,7 +680,6 @@ function CandidateDetail({
 }: {
   candidate: ShortTermCandidate
   weightProfile: ShortTermWeightProfile
-  generatedAt: string
   tradeCaptureToken: string | null
   marketRegime: ShortTermReport['marketRegime']
   validationSummaries: ShortTermValidationSummary[]
@@ -711,31 +688,18 @@ function CandidateDetail({
   const scoreSnapshotClosed = hasClosedShortTermScoreSnapshot(candidate)
   const rankingScore = scoreSnapshotClosed ? candidate.score.rankingScore : null
   const research = candidate.signalProfile?.research
+  const advice = adviceForOvernightPlan(candidate)
   return (
     <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-soft pb-4">
           <div className="flex flex-wrap items-center gap-2">
             {research ? <ResearchScoreTag research={research} /> : <ScoreBadge value={rankingScore} />}
             <CandidateExecutionTag candidate={candidate} />
-            <Tag tone={adviceTone(candidate.todayAdvice.action)}>建议：{candidate.todayAdvice.actionLabel}</Tag>
+            <Tag tone={adviceTone(advice.action)}>建议：{advice.actionLabel}</Tag>
             {!research ? <Tag tone={actionTone[candidate.action] ?? 'neutral'}>{candidate.actionLabel}</Tag> : null}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <BuyEntryButton
-              symbol={candidate.symbol}
-              companyName={candidate.name}
-              latestPrice={candidate.latestPrice}
-              recommendedAt={candidate.quoteFreshness.marketTimestamp}
-              attestationToken={tradeCaptureToken}
-            />
             <WatchButton symbol={candidate.symbol} />
-            <TradeReviewButton
-              symbol={candidate.symbol}
-              sourceModule="SHORT_TERM"
-              ruleVersion={research?.ruleVersion ?? 'short-term-right-side-v4-transparent-ranking'}
-              recommendedAt={generatedAt}
-              attestationToken={tradeCaptureToken}
-            />
           </div>
         </div>
 
@@ -869,7 +833,7 @@ function CandidateDetail({
 
         <TailSignalPanel signal={candidate.tailSignal} />
 
-        <TodayAdvicePanel advice={candidate.todayAdvice} />
+        <TodayAdvicePanel advice={advice} />
         <V2StrategyBundlePanel
           symbol={candidate.symbol}
           companyName={candidate.name}
@@ -987,14 +951,31 @@ function TailSignalPanel({ signal }: { signal: ShortTermTailSignal }) {
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2">
         <Metric label="最新价" value={formatPerSharePrice(signal.latestPrice)} compact />
-        <Metric label="收盘确认价" value={formatPerSharePrice(signal.tailStartPrice)} compact />
-        <Metric label="14:57后涨跌" value={<span className={changeClass(signal.changeFromTailConfirmPercent)}>{formatSignedPercent(signal.changeFromTailConfirmPercent)}</span>} compact />
+        <Metric label="尾盘起始价" value={formatPerSharePrice(signal.tailStartPrice)} compact />
+        <Metric label="14:45—14:49涨跌" value={<span className={changeClass(signal.changeFromActionableTailPercent)}>{formatSignedPercent(signal.changeFromActionableTailPercent)}</span>} compact />
         <Metric label="高点回落" value={formatPercent(signal.drawdownFromTailHighPercent)} compact />
         <Metric label="相对均价线" value={<span className={changeClass(signal.closeVsAveragePricePercent)}>{formatSignedPercent(signal.closeVsAveragePricePercent)}</span>} compact />
         <Metric label="尾盘成交占比" value={formatPercent(signal.tailAmountRatioPercent)} compact />
         <Metric label="尾盘成交额" value={formatAmount(signal.tailAmount)} compact />
         <Metric label="尾盘分" value={formatNumber(signal.score)} compact />
       </div>
+      {signal.intradayPullback ? (
+        <div aria-label="分时回踩证据" className="mt-3 border-t border-line-soft pt-3">
+          <div className="flex items-center gap-2 text-xs font-semibold">
+            <span>下午10分钟回踩</span>
+            <Tag tone={signal.intradayPullback.status === 'CONFIRMED' ? 'success' : 'warning'}>{signal.intradayPullback.statusLabel}</Tag>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <Metric label="回踩K线结束" value={signal.intradayPullback.pullbackMinute?.slice(11, 16) ?? '待确认'} compact />
+            <Metric label="突破K线结束" value={signal.intradayPullback.breakoutMinute?.slice(11, 16) ?? '待确认'} compact />
+            <Metric label="平台上沿" value={formatPerSharePrice(signal.intradayPullback.platformHigh)} compact />
+            <Metric label="回踩低点" value={formatPerSharePrice(signal.intradayPullback.pullbackLow)} compact />
+            <Metric label="回踩量/平台均量" value={signal.intradayPullback.pullbackVolumeRatio == null ? '待确认' : `${signal.intradayPullback.pullbackVolumeRatio.toFixed(2)}×`} compact />
+            <Metric label="突破量/前3根均量" value={signal.intradayPullback.breakoutVolumeRatio == null ? '待确认' : `${signal.intradayPullback.breakoutVolumeRatio.toFixed(2)}×`} compact />
+          </div>
+          {signal.intradayPullback.dataGaps.length ? <p className="mt-2 text-xs text-amber-700">{signal.intradayPullback.dataGaps.join('；')}</p> : null}
+        </div>
+      ) : null}
       <div className="mt-3 grid grid-cols-1 gap-3">
         <ListBlock title="尾盘依据" items={signal.reasons} tone="brand" />
         <ListBlock title="执行纪律" items={signal.riskControls} tone="warning" />

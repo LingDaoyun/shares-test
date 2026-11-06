@@ -18,8 +18,11 @@ public class ShortTermDailySnapshotStore {
     public boolean claim(ShortTermDailySnapshot snapshot) {
         return jdbc.update("""
                 INSERT INTO short_term_daily_snapshot(trade_date,status,started_at,payload_json)
-                VALUES (?,'RUNNING',?,?) ON CONFLICT(trade_date) DO NOTHING
-                """, snapshot.tradeDate(), Timestamp.from(snapshot.startedAt()), serialize(snapshot)) == 1;
+                VALUES (?,'RUNNING',?,?) ON CONFLICT(trade_date) DO UPDATE
+                SET status='RUNNING',started_at=EXCLUDED.started_at,finished_at=NULL,payload_json=EXCLUDED.payload_json
+                WHERE short_term_daily_snapshot.started_at < ?
+                """, snapshot.tradeDate(), Timestamp.from(snapshot.startedAt()), serialize(snapshot),
+                Timestamp.from(snapshot.scheduledAt())) == 1;
     }
     public boolean claimRetry(ShortTermDailySnapshot snapshot) {
         return jdbc.update("""

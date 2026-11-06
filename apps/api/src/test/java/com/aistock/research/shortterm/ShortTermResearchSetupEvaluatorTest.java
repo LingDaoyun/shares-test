@@ -34,12 +34,32 @@ class ShortTermResearchSetupEvaluatorTest {
     }
 
     @Test
-    void identifiesLowVolumeRetreatAndRecoveryInAnEstablishedTrend() {
-        List<EastMoneyKLine> rows = pullback();
+    void identifiesFiveDayConsolidationOnlyAsAnIntradayPullbackCandidate() {
+        List<EastMoneyKLine> rows = intradayPullbackBackground();
         ShortTermResearchSetup result = evaluate(rows, quote(rows, true), strength());
         assertThat(result.setupType()).isEqualTo("TREND_PULLBACK");
-        assertThat(result.confirmed()).isTrue();
+        assertThat(result.setupLabel()).isEqualTo("分时回踩");
+        assertThat(result.confirmed()).isFalse();
+        assertThat(result.executionEvidenceReady()).isTrue();
+        assertThat(result.evidence()).anyMatch(value -> value.contains("10分钟"));
         assertThat(evaluator.qualifiesWithoutGoldenCross(rows, quote(rows, true), null, null, null)).isTrue();
+    }
+
+    @Test
+    void decliningDailyLowsDoNotSubstituteForAfternoonPullbackEvidence() {
+        List<EastMoneyKLine> rows = pullback();
+        assertThat(evaluate(rows, quote(rows, true), strength()).setupType()).isNotEqualTo("TREND_PULLBACK");
+    }
+
+    @Test
+    void unfinishedTodayCannotCreateTheFiveDayConsolidationBackground() {
+        List<EastMoneyKLine> rows = intradayPullbackBackground();
+        EastMoneyQuote quote = quote(rows, false);
+        ShortTermResearchSetup original = evaluate(rows, quote, strength());
+        rows.set(rows.size() - 1, row(69, bd("999"), bd("1"), bd("9999999")));
+        assertThat(evaluate(rows, quote, strength())).isEqualTo(original);
+        assertThat(original.setupType()).isEqualTo("TREND_PULLBACK");
+        assertThat(original.confirmed()).isFalse();
     }
 
     @Test
@@ -305,6 +325,19 @@ class ShortTermResearchSetupEvaluatorTest {
         rows.add(row(68, bd("13.68"), bd("0.10"), bd("60000")));
         rows.add(new EastMoneyKLine("600001", date(69), bd("13.72"), bd("13.92"),
                 bd("13.97"), bd("13.65"), bd("130000"), bd("180960000")));
+        return rows;
+    }
+
+    private List<EastMoneyKLine> intradayPullbackBackground() {
+        List<EastMoneyKLine> rows = new ArrayList<>();
+        for (int i = 0; i < 64; i++) {
+            rows.add(row(i, bd("10").add(bd("0.03").multiply(BigDecimal.valueOf(i))),
+                    bd("0.25"), bd("100000")));
+        }
+        for (int i = 64; i < 70; i++) {
+            rows.add(row(i, bd("11.92").add(bd("0.01").multiply(BigDecimal.valueOf(i - 64))),
+                    bd("0.10"), bd("110000")));
+        }
         return rows;
     }
 

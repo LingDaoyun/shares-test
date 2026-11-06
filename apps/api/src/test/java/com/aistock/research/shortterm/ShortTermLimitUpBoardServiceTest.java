@@ -17,10 +17,28 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class ShortTermLimitUpBoardServiceTest {
 
     private static final LocalDate TRADE_DATE = LocalDate.parse("2026-08-21");
+
+    @Test
+    void themeLookupOnlyReadsAnExistingSnapshotWithoutSourceRequests() {
+        EastMoneyClient client = mock(EastMoneyClient.class);
+        ShortTermLimitUpBoardService boardService = new ShortTermLimitUpBoardService(client);
+        assertThat(boardService.cachedSnapshot(TRADE_DATE)).isNull();
+        assertThat(boardService.cachedSnapshot(null)).isNull();
+        verifyNoInteractions(client);
+        when(client.fetchLimitUpPool(TRADE_DATE))
+                .thenReturn(List.of(entry("600001", "甲股", "半导体", 1, "09:30:00")));
+        ShortTermLimitUpBoardSnapshot snapshot = boardService.snapshot(TRADE_DATE);
+        clearInvocations(client);
+        assertThat(boardService.cachedSnapshot(TRADE_DATE)).isSameAs(snapshot);
+        assertThat(boardService.cachedSnapshot(TRADE_DATE.minusDays(1))).isNull();
+        verifyNoInteractions(client);
+    }
 
     @Test
     void intradayCumulativeVolumeNeverComparesWithPreviousFullDay() {

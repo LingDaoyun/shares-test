@@ -56,7 +56,7 @@ class ShortTermTradePlanServiceTest {
     }
 
     @Test
-    void createsClampedT1T2Plan() {
+    void createsClampedT1MorningPlanWithoutT2Extension() {
         ShortTermTradePlan plan = service.create(
                 LocalDate.of(2026, 7, 23),
                 bd("10.00"),
@@ -66,7 +66,7 @@ class ShortTermTradePlanServiceTest {
                 rules()
         );
 
-        assertThat(plan.strategyLabel()).isEqualTo("隔夜超短波段");
+        assertThat(plan.strategyLabel()).isEqualTo("隔夜早盘退出");
         assertThat(plan.status()).isEqualTo("ACTIONABLE");
         assertThat(plan.firstTargetPercent()).isEqualByComparingTo("2.70");
         assertThat(plan.firstTargetPrice()).isEqualByComparingTo("10.27");
@@ -76,19 +76,18 @@ class ShortTermTradePlanServiceTest {
         assertThat(plan.hardStopPrice()).isEqualByComparingTo("9.72");
         assertThat(plan.firstReductionRatio()).isEqualByComparingTo("0.50");
         assertThat(plan.maxPositionRatio()).isEqualByComparingTo("0.3333");
-        assertThat(plan.maxT2PositionRatio()).isEqualByComparingTo("0.50");
+        assertThat(plan.maxT2PositionRatio()).isEqualByComparingTo("0");
         assertThat(plan.normalExitDate()).isEqualTo(LocalDate.of(2026, 7, 24));
-        assertThat(plan.normalExitTime()).isEqualTo(LocalTime.of(14, 50));
-        assertThat(plan.absoluteExitDate()).isEqualTo(LocalDate.of(2026, 7, 27));
-        assertThat(plan.absoluteExitTime()).isEqualTo(LocalTime.of(14, 50));
+        assertThat(plan.normalExitTime()).isEqualTo(LocalTime.of(10, 0));
+        assertThat(plan.absoluteExitDate()).isEqualTo(plan.normalExitDate());
+        assertThat(plan.absoluteExitTime()).isEqualTo(plan.normalExitTime());
         assertThat(plan.openScenarios()).extracting(ShortTermOpenScenario::code)
                 .containsExactly("HIGH_OPEN", "FLAT_OPEN", "LOW_OPEN");
-        assertThat(plan.t2ExtensionConditions()).containsExactly(
-                "T+1 收益为正",
-                "T+1 收盘价高于 MA5",
-                "T+1 收盘价高于信号日收盘价",
-                "行情新鲜度和风险闸门均未失败"
-        );
+        assertThat(plan.t2ExtensionConditions()).isEmpty();
+        assertThat(plan.openScenarios()).allSatisfy(scenario ->
+                assertThat(scenario.action()).contains("10:00", "退出"));
+        assertThat(plan.openScenarios().get(0).action()).contains("至少一半", "移动止损");
+        assertThat(plan.openScenarios().get(1).action()).contains("未冲高");
         assertThat(plan.riskWarnings()).anySatisfy(warning ->
                 assertThat(warning).contains("T+1", "当日无法卖出"));
         assertThat(plan.openScenarios().get(2).action()).contains("次一交易日");
@@ -248,7 +247,7 @@ class ShortTermTradePlanServiceTest {
     }
 
     @Test
-    void keepsAbsoluteDeadlineAtT2EvenWhenHoldingConfigurationIsLonger() {
+    void legacyHoldingConfigurationCannotRestoreT2OrAfternoonExit() {
         OvernightRuleSet base = rules();
         OvernightRuleSet longerHolding = new OvernightRuleSet(
                 base.entryStart(),
@@ -275,8 +274,50 @@ class ShortTermTradePlanServiceTest {
                 longerHolding
         );
 
-        assertThat(plan.absoluteExitDate()).isEqualTo(LocalDate.of(2026, 7, 27));
-        assertThat(plan.absoluteExitTime()).isEqualTo(LocalTime.of(14, 50));
+        assertThat(plan.absoluteExitDate()).isEqualTo(LocalDate.of(2026, 7, 24));
+        assertThat(plan.absoluteExitTime()).isEqualTo(LocalTime.of(10, 0));
+        assertThat(plan.maxT2PositionRatio()).isEqualByComparingTo("0");
+        assertThat(plan.t2ExtensionConditions()).isEmpty();
+    }
+
+    @Test
+    void resolvesNextTradingMorningAcrossWeekendsAndVerifiedHolidays() {
+        for (LocalDate[] dates : List.of(
+                new LocalDate[] { LocalDate.of(2026, 7, 24), LocalDate.of(2026, 7, 27) },
+                new LocalDate[] { LocalDate.of(2026, 9, 30), LocalDate.of(2026, 10, 8) })) {
+            ShortTermTradePlan plan = service.create(dates[0], bd("10"), bd("9.9"), bd("10.02"),
+                    technicalWithAtrAndSupport("3", "9.72"), rules());
+            assertThat(plan.status()).isEqualTo("ACTIONABLE");
+            assertThat(plan.normalExitDate()).isEqualTo(dates[1]);
+            assertThat(plan.absoluteExitDate()).isEqualTo(dates[1]);
+        }
+    }
+
+    @Test
+    void blocksWhenNextTradingDayIsOutsideVerifiedCalendar() {
+        for (LocalDate date : new LocalDate[] { null, LocalDate.of(2026, 12, 31), LocalDate.of(2027, 1, 4) }) {
+            ShortTermTradePlan plan = service.create(date, bd("10"), bd("9.9"), bd("10.02"),
+                    technicalWithAtrAndSupport("3", "9.72"), rules());
+            assertThat(plan.status()).isEqualTo("BLOCKED");
+            assertThat(plan.normalExitDate()).isNull();
+            assertThat(plan.absoluteExitDate()).isNull();
+            assertThat(plan.blockedReasons()).anyMatch(reason -> reason.contains("交易日历"));
+        }
+    }
+
+    @Test
+    void usesConfiguredMorningDeadlineInEveryOpenScenario() {
+        OvernightRuleSet base = rules();
+        OvernightRuleSet morning = new OvernightRuleSet(base.entryStart(), base.entryEnd(), LocalTime.of(10, 30),
+                base.maxHoldingTradingDays(), base.maxPositionRatio(), base.maxT2PositionRatio(),
+                base.firstTargetFloor(), base.firstTargetCap(), base.secondTargetFloor(), base.secondTargetCap(),
+                base.stopFloor(), base.stopCap(), base.trailingDrawdownPercent());
+        ShortTermTradePlan plan = service.create(LocalDate.of(2026, 7, 23), bd("10"), bd("9.9"), bd("10.02"),
+                technicalWithAtrAndSupport("3", "9.72"), morning);
+        assertThat(plan.normalExitTime()).isEqualTo(LocalTime.of(10, 30));
+        assertThat(plan.absoluteExitTime()).isEqualTo(LocalTime.of(10, 30));
+        assertThat(plan.openScenarios()).allSatisfy(scenario ->
+                assertThat(scenario.action()).contains("10:30").doesNotContain("14:50", "延长"));
     }
 
     private ShortTermTechnicalSnapshot technicalWithAtrAndSupport(String atr14Percent, String support) {

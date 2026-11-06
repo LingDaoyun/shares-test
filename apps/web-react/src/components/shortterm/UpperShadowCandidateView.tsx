@@ -9,7 +9,7 @@ export function UpperShadowCandidateRow({ candidate, selected, onSelect }: {
 }) {
   return (
     <button type="button" onClick={onSelect}
-      className={`grid w-full grid-cols-1 gap-3 px-5 py-4 text-left transition hover:bg-brand-50/70 md:grid-cols-[minmax(0,1.2fr)_1fr_auto] ${selected ? 'bg-brand-50' : 'bg-white'}`}>
+      className={`grid w-full grid-cols-1 gap-3 px-5 py-4 text-left transition hover:bg-brand-50/70 ${selected ? 'bg-brand-50' : 'bg-white'}`}>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="truncate text-base font-semibold text-ink-900">{candidate.name}</h3>
@@ -20,13 +20,13 @@ export function UpperShadowCandidateRow({ candidate, selected, onSelect }: {
         <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-ink-500">{candidate.evidence.join('；')}</p>
         <p className="mt-2 text-xs text-ink-400">行情 {formatDateTime(candidate.marketTimestamp)}</p>
       </div>
-      <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 text-sm">
         <ShapeMetric label="每股" value={formatPerSharePrice(candidate.latestPrice)} />
         <ShapeMetric label="涨跌幅" value={formatSignedPercent(candidate.changePercent)} className={changeClass(candidate.changePercent)} />
         <ShapeMetric label="20日箱体振幅" value={`${formatNumber(candidate.boxRangePercent)}%`} />
         <ShapeMetric label="上影占比" value={`${formatNumber(candidate.upperShadowRatioPercent)}%`} />
       </div>
-      <div className="flex items-center md:justify-end"><Tag tone="neutral">形态观察</Tag></div>
+      <div className="flex items-center"><Tag tone="neutral">形态观察</Tag></div>
     </button>
   )
 }

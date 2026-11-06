@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ShortTermTradePlan } from '../../types'
-import { OvernightTradePlanPanel } from './OvernightTradePlanPanel'
+import { isMorningOvernightPlan, OvernightTradePlanPanel } from './OvernightTradePlanPanel'
 
 const plan: ShortTermTradePlan = {
-  strategyLabel: '隔夜超短波段',
+  strategyLabel: '隔夜早盘退出',
   status: 'ACTIONABLE',
   blockedReasons: [],
   entryWindow: '14:45-14:49',
@@ -13,7 +13,7 @@ const plan: ShortTermTradePlan = {
   entryLow: 10.1,
   entryHigh: 10.3,
   maxPositionRatio: 0.3333,
-  maxT2PositionRatio: 0.5,
+  maxT2PositionRatio: 0,
   firstTargetPercent: 3,
   firstTargetPrice: 10.51,
   firstReductionRatio: 0.5,
@@ -24,10 +24,10 @@ const plan: ShortTermTradePlan = {
   trailingDrawdownPercent: 2,
   trailingStopRule: '高点回撤 2% 触发保护',
   normalExitDate: '2026-07-24',
-  normalExitTime: '14:50:00',
-  absoluteExitDate: '2026-07-27',
-  absoluteExitTime: '14:50:00',
-  t2ExtensionConditions: ['T+1 趋势延续且未触发止损'],
+  normalExitTime: '10:00:00',
+  absoluteExitDate: '2026-07-24',
+  absoluteExitTime: '10:00:00',
+  t2ExtensionConditions: [],
   openScenarios: [
     {
       code: 'GAP_UP',
@@ -56,6 +56,14 @@ const plan: ShortTermTradePlan = {
 }
 
 describe('OvernightTradePlanPanel', () => {
+  it('rejects missing plans and null exit fields from incomplete cache payloads', () => {
+    expect(isMorningOvernightPlan(null)).toBe(false)
+    for (const field of ['normalExitDate', 'absoluteExitDate', 'normalExitTime', 'absoluteExitTime']) {
+      expect(isMorningOvernightPlan({ ...plan, [field]: null } as unknown as ShortTermTradePlan)).toBe(false)
+    }
+    expect(isMorningOvernightPlan(plan)).toBe(true)
+  })
+
   it('renders executable details only for an actionable plan in one definition grid', () => {
     const html = renderToStaticMarkup(<OvernightTradePlanPanel plan={plan} />)
 
@@ -72,7 +80,11 @@ describe('OvernightTradePlanPanel', () => {
     expect(html).toContain('33.33%')
     expect(html).toContain('短线额度最大仓位')
     expect(html).toContain('2026-07-24')
-    expect(html).toContain('2026-07-27')
+    expect(html).toContain('次日早盘退出截止')
+    expect(html).toContain('10:00')
+    expect(html).not.toContain('T+2 最晚退出')
+    expect(html).not.toContain('T+2 仓位上限')
+    expect(html).not.toContain('延长条件')
     expect(html).toContain('高开')
     expect(html).toContain('平开')
     expect(html).toContain('低开')
@@ -126,5 +138,21 @@ describe('OvernightTradePlanPanel', () => {
     const explanation = html.match(/<details\b[^>]*>/)?.[0]
     expect(explanation).toBeDefined()
     expect(explanation).not.toContain('open=')
+  })
+
+  it.each([
+    { normalExitTime: '14:50:00', absoluteExitTime: '14:50:00' },
+    { absoluteExitDate: '2026-07-27' },
+    { maxT2PositionRatio: 0.5 },
+    { t2ExtensionConditions: ['T+1 趋势延续'] },
+    { normalExitTime: '09:29:00', absoluteExitTime: '09:29:00' },
+    { normalExitTime: '11:30:01', absoluteExitTime: '11:30:01' },
+    { normalExitTime: '', absoluteExitTime: '' }
+  ])('asks for a fresh scan instead of showing an obsolete cached plan: %j', (legacy) => {
+    const html = renderToStaticMarkup(<OvernightTradePlanPanel plan={{ ...plan, ...legacy }} />)
+    expect(html).toContain('请重新扫描')
+    expect(html).toContain('旧缓存计划')
+    expect(html).not.toContain('隔夜交易纪律：可执行')
+    expect(html).not.toContain('精确入场区间')
   })
 })

@@ -16,7 +16,6 @@ export function DailyShortTermPanel() {
   const [retrying, setRetrying] = useState(false)
   const manualLoading = useShortTermScanStore(state => state.loading)
   const metadata = useShortTermScanStore(state => state.resultMetadata)
-  const upperShadow = useShortTermScanStore(state => state.upperShadow)
   const applyScanResult = useShortTermScanStore(state => state.applyScanResult)
 
   useEffect(() => {
@@ -35,7 +34,7 @@ export function DailyShortTermPanel() {
         } else errors.push(task.reason instanceof Error ? task.reason.message : '定时任务状态读取失败')
         if (cache.status === 'fulfilled') {
           setCachedResult(cache.value)
-          if (cache.value.tradeDate === marketDate()) applyScanResult(cache.value)
+          applyScanResult(cache.value)
         } else errors.push(cache.reason instanceof Error ? cache.reason.message : '结果缓存读取失败')
         setError(errors.join('；'))
       } catch (reason) {
@@ -49,7 +48,7 @@ export function DailyShortTermPanel() {
   }, [applyScanResult])
 
   const historical = cachedResult !== null && cachedResult.tradeDate !== marketDate()
-  const dataGaps = [...new Set([...(metadata?.dataGaps ?? []), ...(upperShadow?.dataGaps ?? [])])]
+  const dataGaps = [...new Set(metadata?.dataGaps ?? [])]
   return (
     <div aria-label="已保存候选状态" className="flex flex-col gap-2 border-b border-line-soft px-5 py-3 text-xs">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -82,7 +81,7 @@ export function DailyShortTermPanel() {
         </div>
       </div>
       {snapshot && (!metadata || snapshot.status === 'RUNNING') ? <p className="text-ink-500">定时任务：{snapshot.message}</p> : null}
-      {historical ? <p className="text-amber-700">历史缓存 {cachedResult.tradeDate}，主动加载后查看。</p> : null}
+      {historical ? <p className="text-amber-700">历史缓存 {cachedResult.tradeDate}</p> : null}
       {error ? <p className="text-amber-700">结果读取失败：{error}{metadata ? '；保留当前结果。' : ''}</p> : null}
       {dataGaps.length ? <details className="text-amber-700">
         <summary className="cursor-pointer">扫描时数据缺口 {dataGaps.length} 项</summary>

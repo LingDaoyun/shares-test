@@ -27,6 +27,10 @@ server:
   port: 19080
 
 research:
+  news:
+    enabled: true
+    initial-delay-ms: 15000
+    check-delay-ms: 60000
   policy:
     daily:
       enabled: true
@@ -35,7 +39,7 @@ research:
       check-delay-ms: 60000
   short-term:
     daily-scan:
-      cron: "0 0 14 * * MON-FRI"
+      cron: "0 0 */2 * * *"
     scan-job-timeout: PT45M
     validation:
       enabled: true

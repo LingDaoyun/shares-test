@@ -3,9 +3,12 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchShortTermLimitUpBoard, fetchShortTermLimitUpIndustry, fetchShortTermMarketBreadth } from '../../api/client'
+import { fetchShortTermCatchUp, fetchShortTermLimitUpBoard, fetchShortTermLimitUpIndustry, fetchShortTermMarketBreadth } from '../../api/client'
 import { LimitUpBoardPanel } from './LimitUpBoardPanel'
+import { fetchMarketThemes } from '../../api/marketThemes'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpStock } from '../../types'
+
+vi.mock('../../api/marketThemes', () => ({ fetchMarketThemes: vi.fn(), fetchMarketThemeDetail: vi.fn() }))
 
 vi.mock('../../api/client', () => ({
   fetchShortTermLimitUpBoard: vi.fn(), fetchShortTermMarketBreadth: vi.fn(), fetchShortTermLimitUpIndustry: vi.fn(),
@@ -32,6 +35,7 @@ describe('Limit-up industry third-level detail', () => {
   beforeEach(() => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     vi.resetAllMocks()
+    vi.mocked(fetchMarketThemes).mockResolvedValue({ tradeDate: null, fetchedAt: "2026-10-26T07:00:00Z", status: "UNAVAILABLE", source: "东方财富概念板块", totalConceptCount: 0, excludedStructuralCount: 0, validQuoteCount: 0, themes: [], dataGaps: ["题材源暂不可用"] })
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(board)
     vi.mocked(fetchShortTermMarketBreadth).mockResolvedValue(null as never)
     vi.mocked(fetchShortTermLimitUpIndustry).mockResolvedValue({
@@ -50,6 +54,7 @@ describe('Limit-up industry third-level detail', () => {
   })
   async function openBoard() {
     await act(async () => { root.render(<LimitUpBoardPanel />) })
+    await act(async () => { Array.from(host.querySelectorAll("button")).find(button => button.textContent === "行业")?.click() })
   }
   async function openIndustry() {
     await openBoard()
@@ -127,6 +132,38 @@ describe('Limit-up industry third-level detail', () => {
     expect(topDialog().textContent).toContain('已涨停 · 2 家')
     expect(topDialog().textContent).toContain('涨停快照 2026-10-08 15:00:00')
     expect(fetchShortTermLimitUpIndustry).not.toHaveBeenCalled()
+  })
+
+  it('selects a sealed row as the observation anchor while leaving its common board explicit', async () => {
+    vi.mocked(fetchShortTermCatchUp).mockImplementation(async (industry, tradeDate, leaderSymbol) => ({
+      industry, tradeDate, leaderSymbol, leader: sealed, boardCode: null, boardName: null,
+      fetchedAt: board.fetchedAt, marketTimestamp: null, status: 'SELECT_BOARD',
+      relatedBoards: [{ code: 'BK1001', name: '核实板块' }], quoteSource: null,
+      expectedMemberCount: 0, fetchedMemberCount: 0, validQuoteCount: 0, historyValidCount: 0,
+      historyCoveragePercent: null, risingCount: null, sealedCount: null, eligibleCandidateCount: 0,
+      displayedCount: 0, truncatedCount: 0, historyDates: [], nextTradingDate: null,
+      candidates: [], evidence: [], contraryEvidence: [], dataGaps: []
+    }))
+    await openIndustry()
+    expect(fetchShortTermCatchUp).not.toHaveBeenCalled()
+    const anchorButton = topDialog().querySelector<HTMLButtonElement>('button[aria-label="设封板样本为观察锚点"]')!
+    await act(async () => { anchorButton.click() })
+    expect(fetchShortTermCatchUp).toHaveBeenLastCalledWith('半导体', board.tradeDate, sealed.symbol, undefined)
+    expect(topDialog().querySelector<HTMLSelectElement>('select[aria-label="已封板锚点"]')?.value).toBe(sealed.symbol)
+    expect(topDialog().querySelector<HTMLSelectElement>('select[aria-label="供应商共同板块"]')?.value).toBe('')
+    expect(topDialog().querySelector('button[aria-label="查看封板样本分时和日线"]')).not.toBeNull()
+    const anchorSelect = topDialog().querySelector<HTMLSelectElement>('select[aria-label="已封板锚点"]')!
+    await act(async () => {
+      anchorSelect.focus(); anchorSelect.value = ''
+      anchorSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    const currentSelect = topDialog().querySelector<HTMLSelectElement>('select[aria-label="已封板锚点"]')!
+    expect(currentSelect.value).toBe('')
+    expect(document.activeElement).toBe(currentSelect)
+    await act(async () => { currentSelect.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Escape', bubbles: true, cancelable: true
+    })) })
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
 
   it('returns to the existing board without reloading it when the third-level detail closes', async () => {
