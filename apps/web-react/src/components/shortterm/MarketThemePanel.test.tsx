@@ -31,8 +31,8 @@ describe('MarketThemePanel', () => {
     host.remove()
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
   })
-  function render(data: MarketThemeSnapshot | null, loading = false, error: string | null = null, onSelect = vi.fn()) {
-    act(() => root.render(<MarketThemePanel snapshot={data} loading={loading} error={error} onRefresh={vi.fn()} onSelect={onSelect} />))
+  function render(data: MarketThemeSnapshot | null, onSelect = vi.fn()) {
+    act(() => root.render(<MarketThemePanel snapshot={data} onSelect={onSelect} />))
     return onSelect
   }
 
@@ -48,7 +48,9 @@ describe('MarketThemePanel', () => {
     act(() => zero.click())
     expect(onSelect).toHaveBeenCalledWith(theme)
     expect(host.textContent).toContain('2026-10-26')
-    expect(host.textContent).toContain('东方财富概念板块')
+    expect(host.textContent).not.toContain('东方财富概念板块')
+    expect(host.querySelector('h3')).toBeNull()
+    expect(host.textContent).not.toContain('刷新题材')
   })
 
   it('searches beyond the initial 24 themes even if its quote is missing', () => {
@@ -66,15 +68,11 @@ describe('MarketThemePanel', () => {
     expect(host.textContent).toContain('机器人概念')
   })
 
-  it('shows stale and unavailable source status without inventing an empty market', () => {
-    render({ ...snapshot, status: 'STALE', dataGaps: ['源请求失败'] })
-    expect(host.textContent).toContain('保留上次快照')
-    expect(host.textContent).toContain('源请求失败')
-    render(snapshot, false, '请求超时')
-    expect(host.textContent).toContain('更新失败 · 保留上次快照')
-    expect(host.textContent).not.toContain('行情可用')
-    render(null, false, '行情源暂不可用')
-    expect(host.textContent).toContain('行情源暂不可用')
-    expect(host.textContent).not.toContain('今天没有活跃题材')
+  it('leaves no empty status block when theme data is unavailable', () => {
+    render(null)
+    expect(host.textContent).toBe('')
+    render({ ...snapshot, status: 'UNAVAILABLE', themes: [], dataGaps: ['源请求失败'] })
+    expect(host.textContent).toBe('')
+    expect(host.querySelector('section')).toBeNull()
   })
 })

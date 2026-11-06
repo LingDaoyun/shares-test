@@ -34,7 +34,6 @@ const turnoverTone: Record<string, 'success' | 'warning' | 'neutral'> = {
 export function LimitUpBoardPanel() {
   const [view, setView] = useState<'themes' | 'industries'>('themes')
   const [themes, setThemes] = useState<MarketThemeSnapshot | null>(null)
-  const [themesLoading, setThemesLoading] = useState(false)
   const [themesError, setThemesError] = useState<string | null>(null)
   const [themeSelection, setThemeSelection] = useState<{ theme: MarketTheme; tradeDate: string | null } | null>(null)
   const [snapshot, setSnapshot] = useState<ShortTermLimitUpBoardSnapshot | null>(null)
@@ -54,7 +53,6 @@ export function LimitUpBoardPanel() {
   const refreshThemes = useCallback(async () => {
     if (refreshingThemes.current) return
     refreshingThemes.current = true
-    setThemesLoading(true)
     try {
       const value = await fetchMarketThemes()
       if (mounted.current) { setThemes(value); setThemesError(null) }
@@ -62,7 +60,6 @@ export function LimitUpBoardPanel() {
       if (mounted.current) setThemesError(reason instanceof Error ? reason.message : '市场题材获取失败')
     } finally {
       refreshingThemes.current = false
-      if (mounted.current) setThemesLoading(false)
     }
   }, [])
 
@@ -132,26 +129,11 @@ export function LimitUpBoardPanel() {
             观察与隔日反馈
           </Button>
         </div>
-        {view === 'themes' ? (
-          <MarketThemePanel snapshot={themes} loading={themesLoading} error={themesError}
-            onRefresh={() => void refreshThemes()}
+        {view === 'themes' && !themesError && themes?.status !== 'UNAVAILABLE' ? (
+          <MarketThemePanel snapshot={themes}
             onSelect={theme => setThemeSelection({ theme, tradeDate: themes?.tradeDate ?? null })} />
         ) : null}
-        {view === 'industries' || themesError || themes?.status === 'UNAVAILABLE' ? <div className={view === 'themes' ? 'mt-4 border-t border-line-soft pt-4' : undefined}>
-        {view === 'themes' ? <p className="mb-3 text-xs text-ink-600">题材暂不可用，继续展示涨停股票。</p> : null}
-        <div className="mb-3 flex flex-col gap-1 text-xs text-ink-500" aria-live="polite">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p>数据日 {snapshot?.tradeDate ?? '—'} · 快照获取时间 {snapshot ? formatDateTime(snapshot.fetchedAt) : '—'}</p>
-            <Tag tone={error ? 'danger' : loading || breadthLoading ? 'brand' : 'neutral'}>
-              {loading || breadthLoading ? `更新中${error && snapshot ? ' · 旧快照' : ''}`
-                : error ? `更新失败${snapshot ? ' · 旧快照' : ''}` : snapshot ? '已获取' : '待获取'}
-            </Tag>
-          </div>
-          <p className={snapshot?.dataGaps.length ? 'text-amber-700' : 'text-ink-400'}>
-            数据缺口：{snapshot ? snapshot.dataGaps.join('；') || '无已报告缺口' : '待获取'}
-          </p>
-          <p className="text-[11px] text-ink-400">获取时间不代表源行情时间；盘中快照不代表收盘结论。</p>
-        </div>
+        {view === 'industries' || themesError || themes?.status === 'UNAVAILABLE' ? <>
         <BoardSnapshotStatus snapshot={snapshot} loading={loading} error={error} />
         {snapshot?.available ? (
           <LimitUpIndustryCards snapshot={snapshot} onSelectIndustry={(industry) => {
@@ -162,7 +144,7 @@ export function LimitUpBoardPanel() {
         {!loading && (error || !snapshot?.available) ? (
           <Button type="button" variant="ghost" className="mt-3" loading={breadthLoading} onClick={() => void refresh()}>重新加载</Button>
         ) : null}
-        </div> : null}
+        </> : null}
       </Card>
       {themeSelection ? <MarketThemeDetailOverlay
         key={`${themeSelection.tradeDate}:${themeSelection.theme.code}`}

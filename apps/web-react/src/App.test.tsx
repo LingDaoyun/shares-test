@@ -94,7 +94,7 @@ describe('App home routes and navigation', () => {
   function expectHome() {
     expect(host.querySelector('output[aria-label="当前路由"]')?.textContent).toBe('/limit-up')
     expect(host.querySelector('header')).toBeNull()
-    expect(host.querySelector('main')?.textContent).toContain('路由测试的市场题材')
+    expect(host.querySelector('main')?.textContent).toContain('路由测试的涨停快照')
     expect(host.querySelector('section[aria-label="独立短线页面"]')).toBeNull()
     expect(host.querySelector('nav button[aria-current="page"]')?.textContent).toContain('涨停看板')
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalled()
