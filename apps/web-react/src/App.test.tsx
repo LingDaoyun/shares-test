@@ -52,11 +52,6 @@ describe('App home routes and navigation', () => {
     vi.clearAllMocks()
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(board)
     vi.mocked(fetchShortTermMarketBreadth).mockResolvedValue(null as never)
-    vi.mocked(fetchMarketThemes).mockResolvedValue({
-      tradeDate: '2026-10-16', fetchedAt: '2026-10-16T07:00:00Z', status: 'UNAVAILABLE',
-      source: '路由测试的市场题材', totalConceptCount: 0, excludedStructuralCount: 0,
-      validQuoteCount: 0, themes: [], dataGaps: []
-    })
     vi.stubGlobal('ResizeObserver', class {
       observe() {}
       unobserve() {}
@@ -98,7 +93,7 @@ describe('App home routes and navigation', () => {
     expect(host.querySelector('section[aria-label="独立短线页面"]')).toBeNull()
     expect(host.querySelector('nav button[aria-current="page"]')?.textContent).toContain('涨停看板')
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalled()
-    expect(fetchMarketThemes).toHaveBeenCalled()
+    expect(fetchMarketThemes).not.toHaveBeenCalled()
   }
 
   it.each(['/', '/limit-up', '/unknown-page'])('opens the real limit-up home from %s', async path => {
@@ -109,7 +104,7 @@ describe('App home routes and navigation', () => {
   it('keeps the short-term route independent of the home board', async () => {
     await renderRoute('/short-term')
     expect(host.querySelector('output[aria-label="当前路由"]')?.textContent).toBe('/short-term')
-    expect(host.querySelector('header h1')?.textContent).toBe('短线右侧')
+    expect(host.querySelector('header')).toBeNull()
     expect(host.querySelector('section[aria-label="独立短线页面"]')).not.toBeNull()
     expect(host.querySelector('nav button[aria-current="page"]')?.textContent).toContain('短线右侧')
     expect(fetchShortTermLimitUpBoard).not.toHaveBeenCalled()
@@ -124,7 +119,7 @@ describe('App home routes and navigation', () => {
     await renderRoute('/settings')
     const labels = Array.from(host.querySelectorAll<HTMLButtonElement>('nav[aria-label="模块菜单"] button'))
       .map(button => button.getAttribute('aria-label'))
-    expect(labels).toEqual(['涨停看板', '短线右侧', '消息面', '外围市场', '特别关注', '配置'])
+    expect(labels).toEqual(['涨停看板', '批量搜股', '短线右侧', '消息面', '外围市场', '配置'])
   })
 
   it('navigates between the first home item and the existing short-term item', async () => {
@@ -156,5 +151,17 @@ describe('App home routes and navigation', () => {
     await act(async () => { back!.click() })
     await settleRoutes()
     expectHome()
+  })
+
+  it('opens the batch search page from its menu without loading the home board', async () => {
+    await renderRoute('/short-term')
+    const search = host.querySelector<HTMLButtonElement>('nav button[aria-label="批量搜股"]')!
+    await act(async () => { search.click() })
+    await settleRoutes()
+    expect(host.querySelector('output[aria-label="当前路由"]')?.textContent).toBe('/batch-search')
+    expect(host.querySelector('main h1')?.textContent).toBe('批量搜股')
+    expect(host.querySelector('header')).toBeNull()
+    expect(host.querySelector('nav button[aria-current="page"]')?.getAttribute('aria-label')).toBe('批量搜股')
+    expect(fetchShortTermLimitUpBoard).not.toHaveBeenCalled()
   })
 })

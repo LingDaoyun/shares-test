@@ -206,7 +206,7 @@ export function ToastViewport() {
   const resetCenter = () => setOffset(null)
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-50">
+    <div className="pointer-events-none fixed inset-0 z-[60]">
       <div
         ref={stackRef}
         className={

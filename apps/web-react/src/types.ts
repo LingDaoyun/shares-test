@@ -191,6 +191,55 @@ export interface StockDailySnapshot {
   bars: StockDailyBar[]
 }
 
+export interface StockSearchQuote {
+  symbol: string
+  name: string
+  market: string | null
+  industry: string | null
+  latestPrice: number | null
+  changePercent: number | null
+  turnoverRate: number | null
+  totalMarketValue: number | null
+  circulatingMarketValue: number | null
+  amount: number | null
+  tradeDate: string | null
+  marketTimestamp: string | null
+  fetchedAt: string | null
+  sourceName: string | null
+}
+
+export interface StockSearchSnapshot {
+  keyword: string
+  stocks: StockSearchQuote[]
+  matchedCount: number
+  universeCount: number
+  expectedCount: number
+  complete: boolean
+  source: string
+  fetchedAt: string
+  candidateCount?: number
+  unverifiedCount?: number
+}
+
+export interface StockSearchFilters {
+  excludeChiNext?: boolean
+  excludeStar?: boolean
+  excludeBeijing?: boolean
+  excludeSt?: boolean
+  minChangePercent?: number
+  maxChangePercent?: number
+  minMarketCap?: number
+  maxMarketCap?: number
+  minCirculatingMarketCap?: number
+  maxCirculatingMarketCap?: number
+  minTurnoverRate?: number
+  maxTurnoverRate?: number
+  minPrice?: number
+  maxPrice?: number
+  minAmount?: number
+  maxAmount?: number
+}
+
 export interface StockDailyBar extends Omit<LeaderBar, 'volume'> {
   volume: number | null
 }

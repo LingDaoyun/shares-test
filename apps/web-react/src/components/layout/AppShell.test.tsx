@@ -42,10 +42,10 @@ describe('AppShell', () => {
     expect(document.querySelector('[data-testid="nav-rail"]')).not.toBeNull()
   })
 
-  it('keeps the global header on the short-term page', async () => {
+  it('uses the short-term page toolbar without a duplicate global header', async () => {
     await renderShell(root, '/short-term')
 
-    expect(document.querySelector('[data-testid="global-header"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="global-header"]')).toBeNull()
     expect(document.querySelector('[data-testid="nav-rail"]')).not.toBeNull()
   })
 

@@ -41,7 +41,7 @@ export function StockKlineButton({ symbol, name, tradeDate }: {
   </>
 }
 
-function StockChartContent({ symbol, kind, observationDate }: { symbol: string; kind: ChartKind; observationDate: string }) {
+export function StockChartContent({ symbol, kind, observationDate }: { symbol: string; kind: ChartKind; observationDate: string }) {
   const [chart, setChart] = useState<ChartData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

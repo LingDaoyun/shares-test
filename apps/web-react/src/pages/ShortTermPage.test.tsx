@@ -859,7 +859,7 @@ describe('ShortTermPage manual scan flow', () => {
     expect(sentiment.textContent).not.toContain('429')
     expect(host.textContent).not.toContain('涨停看板')
     expect(fetchShortTermMarketBreadth).not.toHaveBeenCalled()
-    expect(host.querySelector('[aria-label="扫描结果时间"]')?.textContent).toContain('行情采集 2026-10-15 14:29:19')
+    expect(host.querySelector('[aria-label="扫描结果时间"]')).toBeNull()
     expect(useShortTermScanStore.getState().report).toBe(report)
     expect(startShortTermScanJob).not.toHaveBeenCalled()
   })
@@ -1071,6 +1071,29 @@ describe('ShortTermPage manual scan flow', () => {
 
     expect(document.body.textContent).toContain('今日资金去向')
     expect(document.body.textContent).toContain('行业资金流暂不可用')
+  })
+
+  it('shows rescan guidance for a legacy industry transport error while preserving other data gaps', async () => {
+    const technicalError = '行业资金流获取失败：curl 请求失败：push2.eastmoney.com，curl: (56) OpenSSL SSL_read: unexpected eof while reading'
+    const coverageGap = '行业资金流覆盖不足，当前覆盖率 50.00%。'
+    const report = reportWithFundDirection()
+    report.marketFundDirection = {
+      ...report.marketFundDirection!,
+      topInflows: [],
+      topOutflows: [],
+      dataGaps: [technicalError, coverageGap]
+    }
+    useShortTermScanStore.setState({ report })
+
+    await renderPage(root)
+    await toggleResultView('展示今日资金去向')
+
+    expect(document.body.textContent).toContain('行业资金数据源暂时不可用，请稍后重新扫描。')
+    expect(document.body.textContent).toContain(coverageGap)
+    expect(document.body.textContent).not.toContain('curl')
+    expect(document.body.textContent).not.toContain('OpenSSL')
+    expect(useShortTermScanStore.getState().report?.marketFundDirection?.dataGaps)
+      .toEqual([technicalError, coverageGap])
   })
 
   it('opens the industry leader popup with top 10 stocks when a fund direction item is clicked', async () => {

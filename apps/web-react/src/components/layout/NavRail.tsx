@@ -1,10 +1,11 @@
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Activity, Globe2, LayoutDashboard, Newspaper, Settings2, Star, type LucideIcon } from 'lucide-react'
+import { Activity, Globe2, LayoutDashboard, Newspaper, Search, Settings2, Star, type LucideIcon } from 'lucide-react'
 import { useAppStore } from '../../store/appStore'
 import { navItems, pathToPage, type PageKey } from './pageMeta'
 
 const pageIcons: Record<PageKey, LucideIcon> = {
   limitUp: LayoutDashboard,
+  batchSearch: Search,
   shortTerm: Activity,
   overseas: Globe2,
   policy: Newspaper,
@@ -22,6 +23,7 @@ export function NavRail() {
 
   const pagePath: Record<PageKey, string> = {
     limitUp: 'limit-up',
+    batchSearch: 'batch-search',
     shortTerm: 'short-term',
     overseas: 'overseas',
     policy: 'policy',
@@ -31,6 +33,7 @@ export function NavRail() {
 
   const counts: Record<PageKey, string> = {
     limitUp: '首页',
+    batchSearch: 'A股',
     shortTerm: '盘中',
     overseas: '美日韩',
     policy: '新闻·政策',

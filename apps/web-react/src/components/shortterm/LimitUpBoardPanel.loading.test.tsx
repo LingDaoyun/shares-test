@@ -47,6 +47,12 @@ const availableBoard: ShortTermLimitUpBoardSnapshot = {
   },
 }
 
+function industryBoard(count: number): ShortTermLimitUpBoardSnapshot {
+  return { ...availableBoard, stocks: Array.from({ length: count }, (_, index) => ({
+    ...availableBoard.stocks[0], symbol: String(600000 + index), industry: `行业${index}`, name: `封板样本${index}`,
+  })) }
+}
+
 describe('LimitUpBoardPanel independent breadth loading', () => {
   let host: HTMLDivElement
   let root: Root
@@ -54,7 +60,6 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
   beforeEach(() => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     vi.resetAllMocks()
-    vi.mocked(fetchMarketThemes).mockResolvedValue({ tradeDate: null, fetchedAt: "2026-10-26T07:00:00Z", status: "UNAVAILABLE", source: "东方财富概念板块", totalConceptCount: 0, excludedStructuralCount: 0, validQuoteCount: 0, themes: [], dataGaps: ["题材源暂不可用"] })
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(board)
     vi.mocked(fetchShortTermMarketBreadth).mockResolvedValue(breadth)
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { callback(0); return 1 })
@@ -69,12 +74,12 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     host.remove()
     vi.useRealTimers()
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
+    expect(fetchMarketThemes).not.toHaveBeenCalled()
     vi.restoreAllMocks()
   })
 
   async function renderPanel() {
     await act(async () => { root.render(<LimitUpBoardPanel />) })
-    await act(async () => { Array.from(host.querySelectorAll("button")).find(button => button.textContent === "行业")?.click() })
   }
 
   async function clickButton(label: string) {
@@ -89,21 +94,113 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     return clickButton('市场情绪与行业分布')
   }
 
-  it('defaults to market themes while keeping the industry snapshot available behind the switch', async () => {
+  function industryCards() {
+    return [...host.querySelectorAll<HTMLButtonElement>('section[aria-label="涨停行业卡片"] button[aria-label$="涨停明细"]')]
+  }
+
+  async function jumpToPage(page: number) {
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')!
+    expect(select).not.toBeNull()
+    await act(async () => { select.value = String(page); select.dispatchEvent(new Event('change', { bubbles: true })) })
+  }
+
+  it('pages thirteen industries as six, six and one without reloading data or shrinking the content frame', async () => {
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(industryBoard(13))
+    await renderPanel()
+    const frame = host.firstElementChild!
+    expect(frame.classList.contains('h-full')).toBe(true)
+    expect(frame.classList.contains('min-h-0')).toBe(true)
+    expect(industryCards()).toHaveLength(6)
+    expect(industryCards()[0].textContent).toContain('封板样本0')
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="上一页"]')!.disabled).toBe(true)
+    const scrollRegion = host.querySelector<HTMLElement>('[role="region"][aria-label="涨停行业滚动区域"]')!
+    expect(scrollRegion.classList.contains('overflow-y-auto')).toBe(true)
+    expect(scrollRegion.tabIndex).toBe(0)
+    expect(scrollRegion.querySelector('[aria-label="涨停行业分页"]')).toBeNull()
+    scrollRegion.scrollTop = 400
+
+    await clickButton('下一页')
+    expect(industryCards()).toHaveLength(6)
+    expect(industryCards()[0].textContent).toContain('封板样本6')
+    expect(scrollRegion.scrollTop).toBe(0)
+    await jumpToPage(3)
+    expect(industryCards()).toHaveLength(1)
+    expect(industryCards()[0].textContent).toContain('封板样本12')
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="下一页"]')!.disabled).toBe(true)
+    expect(host.firstElementChild).toBe(frame)
+    expect(frame.classList.contains('h-full')).toBe(true)
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
+    expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
+    await clickButton('上一页')
+    expect(industryCards()[0].textContent).toContain('封板样本6')
+  })
+
+  it('keeps the current page for same-day refreshes, clamps shrinking results and resets on a new trade date', async () => {
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(industryBoard(13))
+    await renderPanel()
+    await jumpToPage(3)
+    await clickButton('刷新涨停看板')
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')!.value).toBe('3')
+
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(industryBoard(8))
+    await clickButton('刷新涨停看板')
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')!.value).toBe('2')
+    expect(industryCards()).toHaveLength(2)
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(industryBoard(13))
+    await clickButton('刷新涨停看板')
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')!.value).toBe('2')
+
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue({ ...industryBoard(13), tradeDate: '2026-09-14' })
+    await clickButton('刷新涨停看板')
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')!.value).toBe('1')
+    expect(industryCards()[0].textContent).toContain('封板样本0')
+  })
+
+  it('returns to the same industry page and keeps the selected detail snapshot during refresh', async () => {
+    const snapshot = industryBoard(13)
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(snapshot)
+    await renderPanel()
+    await jumpToPage(2)
+    const card = industryCards()[0]
+    await act(async () => { card.focus(); card.click() })
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('行业6 · 涨停明细')
+    expect(dialog.textContent).toContain('封板样本6')
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue({ ...snapshot, stocks: snapshot.stocks.map(stock => ({ ...stock, name: `更新${stock.name}` })) })
+    await clickButton('刷新涨停看板')
+    expect(dialog.textContent).not.toContain('更新封板样本6')
+    expect(industryCards()[0].textContent).toContain('更新封板样本6')
+    const close = dialog.querySelector<HTMLButtonElement>('button[aria-label="关闭详情"]')!
+    await act(async () => { close.click() })
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')!.value).toBe('2')
+    expect(document.activeElement).toBe(card)
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the same full-height frame for loading and an unavailable snapshot', async () => {
+    let resolveBoard!: (value: ShortTermLimitUpBoardSnapshot) => void
+    vi.mocked(fetchShortTermLimitUpBoard).mockReturnValueOnce(new Promise(resolve => { resolveBoard = resolve }))
+    await renderPanel()
+    const frame = host.firstElementChild!
+    expect(frame.classList.contains('h-full')).toBe(true)
+    expect(host.textContent).toContain('正在拉取涨停池数据')
+    await act(async () => { resolveBoard(board) })
+    expect(host.firstElementChild).toBe(frame)
+    expect(frame.classList.contains('h-full')).toBe(true)
+    expect(host.textContent).toContain('当日涨停池为空')
+  })
+
+  it('shows industry cards immediately without market themes or a view switch', async () => {
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
-    vi.mocked(fetchMarketThemes).mockResolvedValue({ tradeDate: '2026-10-26', fetchedAt: '2026-10-26T07:00:00Z',
-      status: 'READY', source: '东方财富概念板块', totalConceptCount: 1, excludedStructuralCount: 0, validQuoteCount: 1,
-      themes: [{ code: 'BK1090', name: '机器人概念', changePercent: 2.5, amount: 1000000000,
-        advancing: 8, declining: 2, unchanged: 0, advancingRatioPercent: 80, marketTimestamp: '2026-10-26T07:00:00Z' }], dataGaps: [] })
-    await act(async () => { root.render(<LimitUpBoardPanel />) })
-    expect(host.textContent).toContain('机器人概念')
-    expect(host.querySelector('section[aria-label="涨停行业卡片"]')).toBeNull()
-    expect(fetchMarketThemes).toHaveBeenCalledTimes(1)
-    await clickButton('行业')
+    await renderPanel()
+    expect(host.querySelector('section[aria-label="涨停行业卡片"]')).not.toBeNull()
     expect(host.querySelector('button[aria-label="查看半导体涨停明细"]')).not.toBeNull()
-    await clickButton('市场题材')
-    expect(host.textContent).toContain('机器人概念')
-    expect(fetchMarketThemes).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('封板样本')
+    expect(host.textContent).not.toContain('市场题材')
+    expect(Array.from(host.querySelectorAll('button')).some(button => button.textContent === '行业')).toBe(false)
+    expect(host.querySelector('[aria-label="看板视角"]')).toBeNull()
+    expect(fetchMarketThemes).not.toHaveBeenCalled()
   })
 
   it('keeps market data hidden until the market sentiment button is opened', async () => {
@@ -130,15 +227,14 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     expect(document.body.textContent).toContain('东方财富行情')
   })
 
-  it('shows and refreshes limit-up stocks in the default view after the theme request fails', async () => {
+  it('shows the board loading state before displaying and refreshing industry cards', async () => {
     let resolveBoard!: (value: ShortTermLimitUpBoardSnapshot) => void
     vi.mocked(fetchShortTermLimitUpBoard).mockReturnValueOnce(new Promise(resolve => { resolveBoard = resolve }))
-    vi.mocked(fetchMarketThemes).mockRejectedValue(new Error('Request failed with status code 500'))
-    await act(async () => { root.render(<LimitUpBoardPanel />) })
+    await renderPanel()
 
-    expect(host.textContent).not.toContain('Request failed with status code 500')
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
     expect(host.textContent).toContain('正在拉取涨停池数据')
+    expect(host.querySelector('section[aria-label="涨停行业卡片"]')).toBeNull()
     await act(async () => { resolveBoard(availableBoard) })
     expect(host.textContent).toContain('封板样本')
     expect(host.querySelector('button[aria-label="查看半导体涨停明细"]')).not.toBeNull()
@@ -150,22 +246,11 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     await clickButton('刷新涨停看板')
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(2)
     expect(host.textContent).toContain('持续更新的封板样本')
-    expect(host.textContent).not.toContain('题材获取失败')
-    expect(host.textContent).not.toContain('题材暂不可用')
+    expect(fetchMarketThemes).not.toHaveBeenCalled()
   })
 
-  it('shows limit-up stocks when the theme source reports an unavailable snapshot', async () => {
-    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
-    await act(async () => { root.render(<LimitUpBoardPanel />) })
-
-    expect(host.textContent).not.toContain('题材源暂不可用')
-    expect(host.textContent).toContain('封板样本')
-    expect(host.querySelector('section[aria-label="涨停行业卡片"]')).not.toBeNull()
-  })
-
-  it('keeps manual and automatic board refresh independent of a pending theme request', async () => {
+  it('refreshes industry cards and market breadth manually and automatically without requesting themes', async () => {
     vi.useFakeTimers()
-    vi.mocked(fetchMarketThemes).mockReturnValue(new Promise(() => {}))
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
     await renderPanel()
     expect(host.textContent).toContain('封板样本')
@@ -178,7 +263,8 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     expect(dialogRefresh.disabled).toBe(false)
     await act(async () => { await vi.advanceTimersByTimeAsync(60000) })
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(3)
-    expect(fetchMarketThemes).toHaveBeenCalledTimes(1)
+    expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(3)
+    expect(fetchMarketThemes).not.toHaveBeenCalled()
   })
 
   it.each(['close button', 'Escape'])('keeps industry cards on the homepage and restores focus after %s', async closeMethod => {

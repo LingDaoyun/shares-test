@@ -128,19 +128,21 @@ class EastMoneyClientTest {
     }
 
     @Test
-    void shouldParseGlobalQuoteWithFlttDecimalFields() {
+    void shouldParseGlobalQuoteWithSourcePrecisionFields() {
         Instant marketTime = Instant.parse("2026-08-21T20:00:00Z");
         JsonNode item = objectMapper.createObjectNode()
                 .put("f12", "DJIA")
                 .put("f13", 100)
                 .put("f14", "道琼斯")
-                .put("f2", 53277.01)
-                .put("f3", 0.98)
-                .put("f4", 517.80)
-                .put("f18", 52759.21)
+                .put("f1", 2)
+                .put("f152", 2)
+                .put("f2", 5327701)
+                .put("f3", 98)
+                .put("f4", 51780)
+                .put("f18", 5275921)
                 .put("f124", marketTime.getEpochSecond());
 
-        EastMoneyGlobalQuote quote = client.readGlobalQuote(item, Instant.parse("2026-08-21T20:05:00Z")).orElseThrow();
+        EastMoneyGlobalQuote quote = client.readGlobalQuote(item).orElseThrow();
 
         assertThat(quote.code()).isEqualTo("DJIA");
         assertThat(quote.name()).isEqualTo("道琼斯");
@@ -153,18 +155,19 @@ class EastMoneyClientTest {
     }
 
     @Test
-    void shouldFallBackToFetchedAtWhenGlobalQuoteTimestampMissing() {
+    void shouldKeepMissingGlobalQuoteTimestampUnknown() {
         JsonNode item = objectMapper.createObjectNode()
                 .put("f12", "XLK")
                 .put("f13", 107)
                 .put("f14", "科技行业精选指数ETF-SPDR")
-                .put("f2", 230.15)
-                .put("f3", 1.5);
+                .put("f1", 3)
+                .put("f152", 2)
+                .put("f2", 230150)
+                .put("f3", 150);
 
-        Instant fetchedAt = Instant.parse("2026-08-21T20:05:00Z");
-        EastMoneyGlobalQuote quote = client.readGlobalQuote(item, fetchedAt).orElseThrow();
+        EastMoneyGlobalQuote quote = client.readGlobalQuote(item).orElseThrow();
 
-        assertThat(quote.quoteTime()).isEqualTo(fetchedAt);
+        assertThat(quote.quoteTime()).isNull();
         assertThat(quote.changeValue()).isNull();
     }
 
@@ -460,11 +463,12 @@ class EastMoneyClientTest {
                     "f12": "BK1201",
                     "f14": "电子",
                     "f62": 25470566400,
-                    "f184": 3.75,
+                    "f184": 375,
                     "f66": 18464870400,
-                    "f69": 2.72,
+                    "f69": 272,
                     "f72": 7005696000,
-                    "f75": 1.03,
+                    "f75": 103,
+                    "f152": 2,
                     "f104": 411,
                     "f105": 102,
                     "f124": 1786083165
@@ -479,11 +483,12 @@ class EastMoneyClientTest {
                     "f12": "BK1036",
                     "f14": "半导体",
                     "f62": 9668880640,
-                    "f184": 2.84,
+                    "f184": 284,
                     "f66": 6056454400,
-                    "f69": 1.78,
+                    "f69": 178,
                     "f72": 3612426240,
-                    "f75": 1.06,
+                    "f75": 106,
+                    "f152": 2,
                     "f104": 171,
                     "f105": 11,
                     "f124": 1786083165

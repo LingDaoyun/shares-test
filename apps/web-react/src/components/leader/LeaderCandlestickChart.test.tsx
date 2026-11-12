@@ -30,5 +30,27 @@ describe('daily chart inspection', () => {
     expect(details.textContent).toContain('成交量（手）0')
     expect(host.querySelectorAll('rect[opacity="0.55"]')).toHaveLength(0)
     expect(svg.innerHTML).not.toMatch(/NaN|Infinity/)
+    expect(svg.classList.contains('min-w-[760px]')).toBe(true)
+    expect(svg.getAttribute('viewBox')).toBe('0 0 920 390')
+  })
+
+  it('fits sixty candles in a compact card with readable endpoint dates and volume', () => {
+    const bars = Array.from({ length: 60 }, (_, index) => ({
+      tradeDate: new Date(Date.UTC(2026, 7, 3 + Math.floor(index / 5) * 7 + index % 5)).toISOString().slice(0, 10),
+      open: 10, high: 12, low: 8, close: index % 2 === 0 ? 11 : 9, volume: 100 + index,
+    }))
+    act(() => root.render(<LeaderCandlestickChart compact bars={bars} />))
+    const svg = host.querySelector('svg')!
+    expect(svg.classList.contains('min-w-[760px]')).toBe(false)
+    expect(Number(svg.getAttribute('viewBox')!.split(' ')[2])).toBeLessThanOrEqual(440)
+    expect(host.querySelectorAll('rect[opacity="0.55"]')).toHaveLength(60)
+    expect(host.querySelectorAll('line[stroke="#DC2626"]')).toHaveLength(30)
+    expect(host.querySelectorAll('line[stroke="#16A34A"]')).toHaveLength(30)
+    const dates = [...svg.querySelectorAll('text')].filter((text) => /^\d{2}-\d{2}$/.test(text.textContent ?? ''))
+    expect(dates.length).toBeLessThanOrEqual(4)
+    expect(dates[0].textContent).toBe(bars[0].tradeDate.slice(5))
+    expect(dates[dates.length - 1].textContent).toBe(bars[bars.length - 1].tradeDate.slice(5))
+    expect(dates[dates.length - 1].getAttribute('text-anchor')).toBe('end')
+    expect(svg.innerHTML).not.toMatch(/NaN|Infinity/)
   })
 })

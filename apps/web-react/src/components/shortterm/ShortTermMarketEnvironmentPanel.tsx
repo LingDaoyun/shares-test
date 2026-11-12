@@ -47,9 +47,6 @@ export function ShortTermMarketEnvironmentPanel({ report }: { report: ShortTermR
               : '量额比较不可用'}
           </p>
         </div>
-        <p className={`text-xs leading-relaxed ${regime?.maxAction === 'NO_TRADE' ? 'font-semibold text-red-700' : 'text-ink-500'}`}>
-          {regime?.explanation || sentiment.explanation}
-        </p>
         <details className="text-xs text-ink-500">
           <summary className="cursor-pointer font-medium text-ink-600">口径与数据缺口</summary>
           <div className="mt-2 space-y-1 leading-relaxed">

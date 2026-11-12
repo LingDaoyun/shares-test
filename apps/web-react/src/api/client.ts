@@ -5,6 +5,8 @@ import type {
   LeaderAiReview,
   LeaderBarSeries,
   StockDailySnapshot,
+  StockSearchSnapshot,
+  StockSearchFilters,
   StockIntradaySnapshot,
   PotentialLeaderCandidate,
   PotentialLeaderPreferences,
@@ -74,8 +76,13 @@ export function fetchStockIntraday(symbol: string) {
     .then((res) => res.data)
 }
 
-export function fetchStockDaily(symbol: string) {
-  return http.get<StockDailySnapshot>(`/short-term/stocks/${encodeURIComponent(symbol)}/daily`)
+export function fetchStockDaily(symbol: string, signal?: AbortSignal) {
+  return http.get<StockDailySnapshot>(`/short-term/stocks/${encodeURIComponent(symbol)}/daily`, { signal })
+    .then((res) => res.data)
+}
+
+export function searchStocks(keyword: string, refresh = false, signal?: AbortSignal, filters: StockSearchFilters = {}) {
+  return http.get<StockSearchSnapshot>('/stocks/search', { params: { keyword, refresh, ...filters }, signal })
     .then((res) => res.data)
 }
 

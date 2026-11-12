@@ -81,7 +81,7 @@ describe('OverseasMarketPage', () => {
     mockedFetchOverseasMarketBoard.mockResolvedValue({
       generatedAt: '2026-08-24T01:00:00Z',
       available: false,
-      unavailableReason: '东方财富全球行情获取失败，外围看板暂不可用：连接超时',
+      unavailableReason: '东方财富全球行情获取失败，外围看板暂不可用：curl 请求失败：push2.eastmoney.com，OpenSSL SSL_read: unexpected eof while reading',
       globalIndices: [],
       markets: [],
       dataGaps: []
@@ -89,17 +89,29 @@ describe('OverseasMarketPage', () => {
     await renderPage()
 
     const text = host.textContent ?? ''
-    expect(text).toContain('外围看板暂不可用')
-    expect(text).toContain('东方财富全球行情获取失败')
+    expect(text).toContain('外围行情数据源暂时不可用，请稍后刷新。')
+    expect(text).not.toContain('curl')
+    expect(text).not.toContain('OpenSSL')
     expect(text).not.toContain('全球指数速览')
+
+    mockedFetchOverseasMarketBoard.mockRejectedValue(new Error('curl 请求失败：OpenSSL SSL_read'))
+    await act(async () => {
+      host.querySelector('button')?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1)
+    expect(host.textContent?.match(/外围行情数据源暂时不可用/g)).toHaveLength(1)
+    expect(host.textContent).not.toContain('curl')
   })
 
   it('surfaces request errors with a retry entry', async () => {
-    mockedFetchOverseasMarketBoard.mockRejectedValue(new Error('网络中断'))
+    mockedFetchOverseasMarketBoard.mockRejectedValue(new Error('curl 请求失败：OpenSSL SSL_read'))
     await renderPage()
 
     const text = host.textContent ?? ''
-    expect(text).toContain('网络中断')
+    expect(text).toContain('外围行情数据源暂时不可用，请稍后刷新。')
+    expect(text).not.toContain('OpenSSL')
     expect(text).toContain('刷新')
   })
 })

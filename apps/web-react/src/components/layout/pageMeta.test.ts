@@ -7,19 +7,21 @@ describe('page navigation meta', () => {
 
     expect(labels).toEqual([
       '涨停看板',
+      '批量搜股',
       '短线右侧',
       '消息面',
       '外围市场',
-      '特别关注',
       '配置'
     ])
     expect(labels).not.toContain('错杀估值')
     expect(labels).not.toContain('热门追踪')
     expect(labels).not.toContain('周期试仓')
     expect(labels).not.toContain('每日信号')
+    expect(labels).not.toContain('特别关注')
     expect(navItems[0]).toEqual({ key: 'limitUp', label: '涨停看板' })
     expect(pathToPage['']).toBe('limitUp')
     expect(pathToPage['limit-up']).toBe('limitUp')
+    expect(pathToPage['batch-search']).toBe('batchSearch')
     expect(pathToPage['short-term']).toBe('shortTerm')
     expect(labels).not.toContain('长期价投')
     expect(pageMeta[pathToPage['']].title).toBe('涨停看板')

@@ -1,17 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BarChart3, ChevronRight, RefreshCw } from 'lucide-react'
+import { BarChart3, ChevronRight, Loader2, RefreshCw } from 'lucide-react'
 import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
-import { fetchMarketThemes } from '../../api/marketThemes'
-import type { MarketTheme, MarketThemeSnapshot } from '../../types/marketThemes'
 import { DetailOverlay, isEscapeClose } from '../ui/DetailOverlay'
 import { Button } from '../ui/Button'
-import { Card } from '../ui/Card'
+import { CardPagination } from '../ui/CardPagination'
 import { Tag } from '../ui/Badge'
 import { CatchUpFollowUpPanel } from './CatchUpFollowUpPanel'
 import { LimitUpIndustryOverlay, type LimitUpIndustrySelection } from './LimitUpIndustryOverlay'
-import { MarketThemePanel } from './MarketThemePanel'
-import { MarketThemeDetailOverlay } from './MarketThemeDetailOverlay'
-import { ThemeRelatedNews } from './ThemeRelatedNews'
 import { formatAmount, formatDateTime, formatPercent, formatSignedPercent } from '../../lib/format'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment, ShortTermMarketBreadth, ShortTermMarketTurnover } from '../../types'
 
@@ -32,10 +27,6 @@ const turnoverTone: Record<string, 'success' | 'warning' | 'neutral'> = {
 }
 
 export function LimitUpBoardPanel() {
-  const [view, setView] = useState<'themes' | 'industries'>('themes')
-  const [themes, setThemes] = useState<MarketThemeSnapshot | null>(null)
-  const [themesError, setThemesError] = useState<string | null>(null)
-  const [themeSelection, setThemeSelection] = useState<{ theme: MarketTheme; tradeDate: string | null } | null>(null)
   const [snapshot, setSnapshot] = useState<ShortTermLimitUpBoardSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -47,21 +38,7 @@ export function LimitUpBoardPanel() {
   const [industrySelection, setIndustrySelection] = useState<LimitUpIndustrySelection | null>(null)
   const mounted = useRef(false)
   const refreshing = useRef(false)
-  const refreshingThemes = useRef(false)
   const refreshTimer = useRef<ReturnType<typeof setTimeout>>()
-
-  const refreshThemes = useCallback(async () => {
-    if (refreshingThemes.current) return
-    refreshingThemes.current = true
-    try {
-      const value = await fetchMarketThemes()
-      if (mounted.current) { setThemes(value); setThemesError(null) }
-    } catch (reason) {
-      if (mounted.current) setThemesError(reason instanceof Error ? reason.message : '市场题材获取失败')
-    } finally {
-      refreshingThemes.current = false
-    }
-  }, [])
 
   const refresh = useCallback(async () => {
     if (refreshing.current) return
@@ -70,8 +47,6 @@ export function LimitUpBoardPanel() {
     setLoading(true)
     setBreadthLoading(true)
     setBreadthError(null)
-    // 题材独立更新，不占用涨停池的刷新锁或轮询周期。
-    void refreshThemes()
     await Promise.all([
       fetchShortTermLimitUpBoard()
         .then(value => {
@@ -89,7 +64,7 @@ export function LimitUpBoardPanel() {
     ])
     refreshing.current = false
     if (mounted.current) refreshTimer.current = setTimeout(() => void refresh(), 60000)
-  }, [refreshThemes])
+  }, [])
 
   useEffect(() => {
     mounted.current = true
@@ -101,56 +76,40 @@ export function LimitUpBoardPanel() {
   }, [refresh])
 
   return (
-    <div onKeyDown={event => {
-      if ((themeSelection || industrySelection || marketOpen || followUpOpen) && isEscapeClose(event.key, event.defaultPrevented)) {
+    <div className="flex h-full min-h-0 flex-col overflow-hidden" onKeyDown={event => {
+      if ((industrySelection || marketOpen || followUpOpen) && isEscapeClose(event.key, event.defaultPrevented)) {
         event.preventDefault()
         event.stopPropagation()
         setIndustrySelection(null)
-        setThemeSelection(null)
         setMarketOpen(false)
         setFollowUpOpen(false)
       }
     }}>
-      <Card>
-        <div className="mb-4 flex flex-wrap justify-end gap-2">
-          <div className="mr-auto flex items-center gap-1" role="group" aria-label="看板视角">
-            <Button type="button" variant={view === 'themes' ? 'primary' : 'ghost'} aria-pressed={view === 'themes'} onClick={() => setView('themes')}>市场题材</Button>
-            <Button type="button" variant={view === 'industries' ? 'primary' : 'ghost'} aria-pressed={view === 'industries'} onClick={() => setView('industries')}>行业</Button>
-          </div>
-          <Button type="button" icon={<RefreshCw aria-hidden="true" className="h-4 w-4" />}
-            loading={loading || breadthLoading} onClick={() => void refresh()}>
-            刷新涨停看板
-          </Button>
-          <Button type="button" icon={<BarChart3 aria-hidden="true" className="h-4 w-4" />}
-            aria-haspopup="dialog" aria-expanded={marketOpen} onClick={() => setMarketOpen(true)}>
-            市场情绪与行业分布
-          </Button>
-          <Button type="button" aria-haspopup="dialog" aria-expanded={followUpOpen} onClick={() => setFollowUpOpen(true)}>
-            观察与隔日反馈
-          </Button>
-        </div>
-        {view === 'themes' && !themesError && themes?.status !== 'UNAVAILABLE' ? (
-          <MarketThemePanel snapshot={themes}
-            onSelect={theme => setThemeSelection({ theme, tradeDate: themes?.tradeDate ?? null })} />
-        ) : null}
-        {view === 'industries' || themesError || themes?.status === 'UNAVAILABLE' ? <>
+      <div className="mb-4 flex shrink-0 flex-wrap justify-end gap-2">
+        <Button type="button" icon={<RefreshCw aria-hidden="true" className="h-4 w-4" />}
+          loading={loading || breadthLoading} onClick={() => void refresh()}>
+          刷新涨停看板
+        </Button>
+        <Button type="button" icon={<BarChart3 aria-hidden="true" className="h-4 w-4" />}
+          aria-haspopup="dialog" aria-expanded={marketOpen} onClick={() => setMarketOpen(true)}>
+          市场情绪与行业分布
+        </Button>
+        <Button type="button" aria-haspopup="dialog" aria-expanded={followUpOpen} onClick={() => setFollowUpOpen(true)}>
+          观察与隔日反馈
+        </Button>
+      </div>
+      <div className={!snapshot && loading && !error ? 'flex min-h-0 flex-1 items-center justify-center' : 'shrink-0'}>
         <BoardSnapshotStatus snapshot={snapshot} loading={loading} error={error} />
-        {snapshot?.available ? (
-          <LimitUpIndustryCards snapshot={snapshot} onSelectIndustry={(industry) => {
-            setIndustrySelection({ industry, tradeDate: snapshot.tradeDate, fetchedAt: snapshot.fetchedAt,
-              limitUpStocks: snapshot.stocks.filter(stock => (stock.industry?.trim() || '未分类') === industry) })
-          }} />
-        ) : null}
-        {!loading && (error || !snapshot?.available) ? (
-          <Button type="button" variant="ghost" className="mt-3" loading={breadthLoading} onClick={() => void refresh()}>重新加载</Button>
-        ) : null}
-        </> : null}
-      </Card>
-      {themeSelection ? <MarketThemeDetailOverlay
-        key={`${themeSelection.tradeDate}:${themeSelection.theme.code}`}
-        selection={themeSelection} onClose={() => setThemeSelection(null)}>
-        {theme => <ThemeRelatedNews theme={theme} />}
-      </MarketThemeDetailOverlay> : null}
+      </div>
+      {!loading && (error || !snapshot?.available) ? (
+        <div className="mb-3 shrink-0"><Button type="button" variant="ghost" loading={breadthLoading} onClick={() => void refresh()}>重新加载</Button></div>
+      ) : null}
+      {snapshot?.available ? (
+        <LimitUpIndustryCards key={snapshot.tradeDate} snapshot={snapshot} onSelectIndustry={(industry) => {
+          setIndustrySelection({ industry, tradeDate: snapshot.tradeDate, fetchedAt: snapshot.fetchedAt,
+            limitUpStocks: snapshot.stocks.filter(stock => (stock.industry?.trim() || '未分类') === industry) })
+        }} />
+      ) : null}
       {marketOpen ? (
         <DetailOverlay open title="市场情绪与行业分布"
           subtitle={snapshot ? `${snapshot.tradeDate} · 快照 ${formatDateTime(snapshot.fetchedAt)}` : undefined}
@@ -199,7 +158,13 @@ function BoardSnapshotStatus({ snapshot, loading, error }: Pick<LimitUpBoardDeta
     </p>
   }
   if (!snapshot) {
-    return <p className="py-6 text-center text-sm text-ink-400">{loading ? '正在拉取涨停池数据…' : '暂无数据，请稍后重试。'}</p>
+    if (loading) return <div role="status" aria-live="polite" className="flex flex-col items-center gap-4 py-6 text-center">
+      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-50">
+        <Loader2 aria-hidden="true" className="h-8 w-8 animate-spin text-brand-500 motion-reduce:animate-none" />
+      </div>
+      <p className="text-sm font-medium text-ink-600">正在拉取涨停池数据…</p>
+    </div>
+    return <p className="py-6 text-center text-sm text-ink-400">暂无数据，请稍后重试。</p>
   }
   if (!snapshot.available) {
     return <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">{snapshot.unavailableReason ?? '涨停池数据不可用'}</p>
@@ -361,9 +326,8 @@ export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
   snapshot: ShortTermLimitUpBoardSnapshot
   onSelectIndustry?: (industry: string) => void
 }) {
-  if (!snapshot.stocks.length) {
-    return <p className="text-xs leading-relaxed text-ink-500">涨停明细暂无数据。</p>
-  }
+  const [page, setPage] = useState(1)
+  const scrollRegion = useRef<HTMLDivElement>(null)
   // The API already sorts stocks by board depth and first seal time; keep that order within each industry.
   const byIndustry = new Map<string, ShortTermLimitUpBoardSnapshot['stocks']>()
   for (const stock of snapshot.stocks) {
@@ -373,16 +337,26 @@ export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
     else byIndustry.set(industry, [stock])
   }
   const industryGroups = [...byIndustry.entries()].sort((a, b) => b[1].length - a[1].length)
+  const pageSize = 6
+  const pageCount = Math.max(1, Math.ceil(industryGroups.length / pageSize))
+  const currentPage = Math.min(page, pageCount)
+  useEffect(() => { setPage(value => Math.min(value, pageCount)) }, [pageCount])
+  useEffect(() => { if (scrollRegion.current) scrollRegion.current.scrollTop = 0 }, [currentPage])
+  if (!snapshot.stocks.length) {
+    return <p className="flex-1 text-xs leading-relaxed text-ink-500">涨停明细暂无数据。</p>
+  }
+  const visibleGroups = industryGroups.slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
   return (
-    <section aria-label="涨停行业卡片" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
+    <section aria-label="涨停行业卡片" className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="flex shrink-0 flex-wrap items-baseline justify-between gap-2">
         <h4 className="text-sm font-semibold text-ink-900">涨停明细 · 行业概览</h4>
         <span className="text-xs text-ink-400">{industryGroups.length} 个行业 · {snapshot.stocks.length} 只涨停</span>
       </div>
-      <p className="text-[11px] text-ink-500">按行业涨停家数排序，每卡预览前 3 只；梯队按连续涨停板数统计，与“几天几板”分开。点击卡片查看完整明细。</p>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {industryGroups.map(([industry, stocks]) => {
+      <p className="shrink-0 text-[11px] text-ink-500">按行业涨停家数排序，每卡预览前 3 只；梯队按连续涨停板数统计，与“几天几板”分开。点击卡片查看完整明细。</p>
+      <div ref={scrollRegion} role="region" aria-label="涨停行业滚动区域" tabIndex={0}
+        className="flex min-h-0 flex-1 flex-wrap content-stretch gap-3 overflow-y-auto overscroll-contain rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-300">
+        {visibleGroups.map(([industry, stocks]) => {
           const knownBoards = stocks.map(stock => stock.consecutiveBoards).filter(isKnownBoardCount)
           const maxBoards = knownBoards.length ? Math.max(...knownBoards) : null
           const firstBoards = knownBoards.filter(count => count === 1).length
@@ -392,7 +366,7 @@ export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
           return (
             <button key={industry} type="button" aria-label={`查看${industry}涨停明细`}
               onClick={() => onSelectIndustry?.(industry)}
-              className="group flex min-w-0 flex-col rounded-xl border border-line-soft bg-white p-3 text-left outline-none transition hover:border-brand-300 hover:bg-brand-50/30 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-brand-300">
+              className="group flex min-w-0 flex-[1_1_22rem] flex-col rounded-xl border border-line-soft bg-white p-3 text-left outline-none transition hover:border-brand-300 hover:bg-brand-50/30 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-brand-300">
               <span className="flex items-center justify-between gap-2">
                 <span className="min-w-0 truncate text-sm font-semibold text-ink-900" title={industry}>{industry}</span>
                 <Tag tone="warning" className="shrink-0">涨停 {stocks.length} 家</Tag>
@@ -434,6 +408,8 @@ export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
           )
         })}
       </div>
+      <CardPagination page={currentPage} pageSize={pageSize} total={industryGroups.length} onPageChange={setPage}
+        ariaLabel="涨停行业分页" unit="个行业" />
     </section>
   )
 }

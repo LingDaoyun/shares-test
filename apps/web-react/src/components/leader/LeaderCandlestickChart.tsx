@@ -5,21 +5,21 @@ import type { StockDailyBar } from '../../types'
 interface LeaderCandlestickChartProps {
   bars: StockDailyBar[]
   interactive?: boolean
+  compact?: boolean
 }
 
-const WIDTH = 920
-const HEIGHT = 390
-const LEFT = 54
-const RIGHT = 18
-const PRICE_TOP = 18
-const PRICE_BOTTOM = 270
-const VOLUME_TOP = 300
-const VOLUME_BOTTOM = 365
-
-export function LeaderCandlestickChart({ bars, interactive = false }: LeaderCandlestickChartProps) {
+export function LeaderCandlestickChart({ bars, interactive = false, compact = false }: LeaderCandlestickChartProps) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   if (!bars.length) return <Empty text="暂无可用日线" />
 
+  const WIDTH = compact ? 360 : 920
+  const HEIGHT = compact ? 224 : 390
+  const LEFT = compact ? 44 : 54
+  const RIGHT = compact ? 14 : 18
+  const PRICE_TOP = compact ? 14 : 18
+  const PRICE_BOTTOM = compact ? 140 : 270
+  const VOLUME_TOP = compact ? 170 : 300
+  const VOLUME_BOTTOM = compact ? 200 : 365
   const low = Math.min(...bars.map((bar) => Number(bar.low)))
   const high = Math.max(...bars.map((bar) => Number(bar.high)))
   const padding = Math.max((high - low) * 0.04, high * 0.005, 0.01)
@@ -75,7 +75,7 @@ export function LeaderCandlestickChart({ bars, interactive = false }: LeaderCand
           onPointerDown={interactive ? selectPoint : undefined}
           onKeyDown={interactive ? selectWithKeyboard : undefined}
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-          className="min-w-[760px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-brand-300"
+          className={`${compact ? '' : 'min-w-[760px] '}w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-brand-300`}
         >
           <rect x="0" y="0" width={WIDTH} height={HEIGHT} fill="white" />
           {priceTicks.map((tick, index) => {
@@ -103,7 +103,7 @@ export function LeaderCandlestickChart({ bars, interactive = false }: LeaderCand
             const bodyTop = Math.min(yPrice(open), yPrice(close))
             const bodyHeight = Math.max(1.5, Math.abs(yPrice(open) - yPrice(close)))
             const volumeTop = yVolume(volume)
-            const labelEvery = Math.max(1, Math.ceil(bars.length / 8))
+            const labelEvery = Math.max(1, Math.ceil(bars.length / (compact ? 3 : 8)))
             return (
               <g key={`${bar.tradeDate}-${index}`}>
                 <line x1={x} x2={x} y1={yPrice(high)} y2={yPrice(low)} stroke={color} strokeWidth="1.2" />
@@ -112,7 +112,7 @@ export function LeaderCandlestickChart({ bars, interactive = false }: LeaderCand
                 {volume > 0 ? <rect x={x - candleWidth / 2} y={volumeTop} width={candleWidth}
                   height={VOLUME_BOTTOM - volumeTop} fill={color} opacity="0.55" /> : null}
                 {(index % labelEvery === 0 && index < bars.length - Math.max(1, labelEvery / 2)) || index === bars.length - 1 ? (
-                  <text x={x} y={HEIGHT - 8} textAnchor="middle" fontSize="10" fill="#77808F">
+                  <text x={x} y={HEIGHT - 8} textAnchor={compact && index === bars.length - 1 ? 'end' : 'middle'} fontSize="10" fill="#77808F">
                     {bar.tradeDate.slice(5)}
                   </text>
                 ) : null}

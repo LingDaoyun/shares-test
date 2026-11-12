@@ -14,7 +14,7 @@ export const Header = forwardRef<HTMLElement>(function Header(_props, ref) {
   const isSettings = page === 'settings'
 
   return (
-    <header ref={ref} className="card flex flex-wrap items-end justify-between gap-4 px-6 py-5">
+    <header ref={ref} className="flex shrink-0 flex-wrap items-end justify-between gap-4 border-b border-line-soft pb-4">
       <div className="min-w-0">
         <div className="eyebrow mb-1">{meta.eyebrow}</div>
         <h1 className="text-2xl font-bold tracking-tight text-ink-900">{meta.title}</h1>

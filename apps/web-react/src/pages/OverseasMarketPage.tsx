@@ -5,21 +5,21 @@ import { Tag } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Loader } from '../components/ui/Loader'
-import { changeClass, extractErrorMessage, formatDateTime, formatNumber, formatSignedPercent } from '../lib/format'
+import { changeClass, formatDateTime, formatNumber, formatSignedPercent } from '../lib/format'
 import type { OverseasIndexQuote, OverseasMarketBoardSnapshot, OverseasMarketSection } from '../types'
 
 export function OverseasMarketPage() {
   const [snapshot, setSnapshot] = useState<OverseasMarketBoardSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
-    setError(null)
+    setError(false)
     try {
       setSnapshot(await fetchOverseasMarketBoard())
-    } catch (caught) {
-      setError(extractErrorMessage(caught))
+    } catch {
+      setError(true)
     } finally {
       setLoading(false)
     }
@@ -51,18 +51,17 @@ export function OverseasMarketPage() {
           </div>
         </div>
 
-        {error ? <p role="alert" className="m-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+        {error || (snapshot && !snapshot.available) ? (
+          <p role="alert" className="m-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-800">
+            外围行情数据源暂时不可用，请稍后刷新。
+          </p>
+        ) : null}
         {loading && !snapshot ? (
           <div className="p-5">
             <Loader text="外围市场行情加载中" />
           </div>
         ) : null}
 
-        {snapshot && !snapshot.available ? (
-          <p className="m-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-800">
-            外围看板暂不可用：{snapshot.unavailableReason ?? '数据源获取失败'}
-          </p>
-        ) : null}
         {snapshot?.available ? <GlobalIndexStrip indices={snapshot.globalIndices} /> : null}
       </section>
 

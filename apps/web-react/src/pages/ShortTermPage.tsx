@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { CandlestickChart, RefreshCw, SlidersHorizontal } from 'lucide-react'
+import { CandlestickChart, Check, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import type { ShortTermParams } from '../api/client'
 import { fetchShortTermValidationSummaries } from '../api/client'
 import { ScoreBadge, Tag } from '../components/ui/Badge'
@@ -78,7 +78,6 @@ export function ShortTermPage() {
   const loading = useShortTermScanStore((state) => state.loading)
   const error = useShortTermScanStore((state) => state.error)
   const scanMessage = useShortTermScanStore((state) => state.scanMessage)
-  const activeJobId = useShortTermScanStore((state) => state.activeJobId)
   const runManualScan = useShortTermScanStore((state) => state.runManualScan)
   const [selection, setSelection] = useState<string | null>(null)
   const [setupFilter, setSetupFilter] = useState<ResearchSetupFilter>('ALL')
@@ -151,28 +150,18 @@ export function ShortTermPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-end gap-2" aria-label="扫描操作">
-        <Button
-          variant="primary"
-          icon={<RefreshCw className="h-4 w-4" />}
-          loading={loading}
-          onClick={() => {
-            setSelection(null)
-            void runManualScan(toApiParams({ ...draft }))
-          }}
-        >
-          重新扫描
-        </Button>
-        <Button
-          variant="ghost"
-          className="!px-2.5"
-          aria-label="右侧启动阈值"
-          title="右侧启动阈值"
-          aria-haspopup="dialog"
-          onClick={() => setThresholdsOpen(true)}
-          icon={<SlidersHorizontal className="h-4 w-4" />}
-        />
-      </div>
+      <ResultViewControls
+        preferences={viewPreferences}
+        onChange={updateViewPreference}
+        hasReport={Boolean(report)}
+        loading={loading}
+        scanMessage={scanMessage}
+        onScan={() => {
+          setSelection(null)
+          void runManualScan(toApiParams({ ...draft }))
+        }}
+        onOpenThresholds={() => setThresholdsOpen(true)}
+      />
 
       <DetailOverlay
         open={thresholdsOpen}
@@ -239,42 +228,28 @@ export function ShortTermPage() {
       </DetailOverlay>
 
       {error && <Card className="border-red-200 bg-red-50 text-sm text-red-700">{error}</Card>}
-      {loading && !report ? (
-        <Card>
-          <Loader text={scanMessage || '短线右侧扫描中'} />
-          {activeJobId ? <p className="mt-3 text-center font-mono text-xs text-ink-400">任务 {activeJobId}</p> : null}
-        </Card>
-      ) : null}
-
-      {report ? (
-        <>
-          <ResultViewControls
-            preferences={viewPreferences}
-            onChange={updateViewPreference}
-            collectedAt={report.coverage?.fetchedAt}
-          />
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3" data-testid="short-term-horizontal-summary">
-            {viewPreferences.marketSentimentVisible ? (
-              <ShortTermMarketEnvironmentPanel report={report} />
-            ) : null}
-            {viewPreferences.hotDirectionsVisible ? (
-              <HotDirectionsCard directions={report.hotDirections} />
-            ) : null}
-            {viewPreferences.fundFlowVisible ? (
-              <MarketFundDirectionCard
-                direction={report.marketFundDirection}
-                onSelectIndustry={(item, flow) => setLeaderSelection({
-                  code: item.code,
-                  name: item.name || item.code || '未知板块',
-                  flow
-                })}
-              />
-            ) : null}
-          </div>
-
-        </>
-      ) : null}
+      <div
+        className="grid auto-rows-[420px] grid-cols-1 gap-4 md:grid-cols-3 [&>.card]:min-h-0 [&>.card]:min-w-0 [&>.card]:overflow-y-auto [&>.card]:overscroll-contain [&>.card]:[scrollbar-gutter:stable]"
+        data-testid="short-term-horizontal-summary"
+        aria-busy={loading}
+      >
+        {viewPreferences.marketSentimentVisible ? (
+          report ? <ShortTermMarketEnvironmentPanel report={report} /> : <SummaryPlaceholder title="扫描时市场情绪" loading={loading} />
+        ) : null}
+        {viewPreferences.hotDirectionsVisible ? (
+          report ? <HotDirectionsCard directions={report.hotDirections} /> : <SummaryPlaceholder title="热门方向" loading={loading} />
+        ) : null}
+        {viewPreferences.fundFlowVisible ? (
+          report ? <MarketFundDirectionCard
+            direction={report.marketFundDirection}
+            onSelectIndustry={(item, flow) => setLeaderSelection({
+              code: item.code,
+              name: item.name || item.code || '未知板块',
+              flow
+            })}
+          /> : <SummaryPlaceholder title="今日资金去向" loading={loading} />
+        ) : null}
+      </div>
 
       <div hidden>
         <Card flush>
@@ -368,46 +343,85 @@ const resultViewOptions: Array<{
 function ResultViewControls({
   preferences,
   onChange,
-  collectedAt
+  hasReport,
+  loading,
+  scanMessage,
+  onScan,
+  onOpenThresholds
 }: {
   preferences: ShortTermViewPreferences
   onChange: (key: keyof ShortTermViewPreferences, checked: boolean) => void
-  collectedAt?: string | null
+  hasReport: boolean
+  loading: boolean
+  scanMessage: string
+  onScan: () => void
+  onOpenThresholds: () => void
 }) {
   const visibleCount = resultViewOptions.filter((option) => preferences[option.key]).length
   return (
-    <Card className="border-brand-100 bg-gradient-to-r from-white via-brand-50/40 to-sky-50/50">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div className="eyebrow mb-1">RESULT VIEW</div>
-          <h3 className="text-base font-semibold text-ink-900">结果视图</h3>
-          <p className="mt-1 text-xs leading-relaxed text-ink-500">
-            已展示 {visibleCount}/{resultViewOptions.length} 个模块，勾选状态会在本机浏览器记住。
+    <Card flush className="border-line bg-white p-3 shadow-none sm:px-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-ink-900">结果视图</h3>
+            <Button
+              variant="ghost"
+              className="h-8 w-8 !p-0"
+              aria-label="右侧启动阈值"
+              title="右侧启动阈值"
+              aria-haspopup="dialog"
+              onClick={onOpenThresholds}
+              icon={<SlidersHorizontal className="h-4 w-4" />}
+            />
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink-400">
+            {hasReport ? '已展示' : '已选择'} {visibleCount}/{resultViewOptions.length} 个模块，勾选状态会在本机浏览器记住。
           </p>
-          <p aria-label="扫描结果时间" className="mt-2 text-xs leading-relaxed text-amber-700">
-            行情采集 {collectedAt ? formatDateTime(collectedAt) : '时间未知'}。下方情绪、资金方向、热门方向及候选为扫描时结果；最新大盘涨跌见上方看板。
-          </p>
+          {!hasReport ? <p aria-label="扫描状态" className="mt-1 text-[11px] leading-relaxed text-ink-500">
+            {loading ? scanMessage || '扫描中，请稍候。' : '暂无扫描结果，请点击重新扫描。'}
+          </p> : null}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid w-full grid-cols-1 gap-2 min-[380px]:grid-cols-2 sm:flex sm:flex-wrap sm:items-center lg:w-auto" aria-label="结果视图与扫描操作">
           {resultViewOptions.map((option) => (
             <label
               key={option.key}
-              className={`group flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm transition ${preferences[option.key] ? 'border-brand-200 bg-white text-ink-900 shadow-sm' : 'border-line-soft bg-white/60 text-ink-500 hover:bg-white'}`}
+              title={option.description}
+              className="relative min-w-0 cursor-pointer"
             >
               <input
                 type="checkbox"
-                className="h-4 w-4 accent-brand-600"
+                className="peer sr-only"
                 checked={preferences[option.key]}
                 onChange={(event) => onChange(option.key, event.target.checked)}
                 aria-label={`展示${option.label}`}
               />
-              <span>
-                <span className="block font-semibold">{option.label}</span>
-                <span className="block text-[11px] text-ink-400">{option.description}</span>
+              <span className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-line bg-white px-2.5 text-xs font-medium text-ink-500 transition-colors hover:border-brand-200 hover:bg-brand-50/50 peer-checked:border-brand-200 peer-checked:bg-brand-50 peer-checked:text-brand-700 peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-brand-300 peer-focus-visible:ring-offset-2">
+                <Check aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${preferences[option.key] ? 'opacity-100' : 'opacity-0'}`} />
+                {option.label}
               </span>
             </label>
           ))}
+          <Button
+            variant="primary"
+            className="h-9 shrink-0 whitespace-nowrap !rounded-md !px-3 !py-0 !text-xs !shadow-none sm:ml-1"
+            icon={<RefreshCw className="h-4 w-4" />}
+            loading={loading}
+            onClick={onScan}
+          >
+            重新扫描
+          </Button>
         </div>
+      </div>
+    </Card>
+  )
+}
+
+function SummaryPlaceholder({ title, loading }: { title: string; loading: boolean }) {
+  return (
+    <Card className="[&>div]:flex [&>div]:h-full [&>div]:flex-col">
+      <h3 className="text-base font-semibold text-ink-900">{title}</h3>
+      <div className="flex flex-1 items-center justify-center">
+        {loading ? <Loader text="扫描中" /> : <p className="text-sm text-ink-400">暂无扫描结果</p>}
       </div>
     </Card>
   )
@@ -426,7 +440,7 @@ function HotDirectionsCard({ directions }: { directions: ShortTermHotDirection[]
             <Tag tone="warning">{directions.length} 组</Tag>
           </div>
           <div className="grid grid-cols-1 gap-2">
-            {directions.slice(0, 5).map((direction) => (
+            {directions.map((direction) => (
               <div key={direction.code} className="rounded-xl border border-amber-100 bg-white/80 px-3 py-2">
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate text-sm font-semibold text-ink-900">{direction.label}</span>
@@ -438,7 +452,7 @@ function HotDirectionsCard({ directions }: { directions: ShortTermHotDirection[]
                   <Tag tone="neutral">{direction.sampleCount} 只</Tag>
                 </div>
                 {direction.leaders.length ? (
-                  <p className="mt-1 truncate text-xs text-ink-400">领涨：{direction.leaders.join('、')}</p>
+                  <p className="mt-1 text-xs text-ink-400">领涨：{direction.leaders.join('、')}</p>
                 ) : null}
               </div>
             ))}
@@ -504,7 +518,9 @@ function MarketFundDirectionCard({
         ) : null}
         {direction?.dataGaps?.length ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
-            {direction.dataGaps.slice(0, 2).join('；')}
+            {direction.dataGaps.map((gap) => gap.startsWith('行业资金流获取失败：')
+              ? '行业资金数据源暂时不可用，请稍后重新扫描。'
+              : gap).join('；')}
           </div>
         ) : null}
       </div>

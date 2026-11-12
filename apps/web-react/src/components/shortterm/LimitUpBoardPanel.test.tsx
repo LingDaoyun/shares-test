@@ -157,7 +157,7 @@ describe('LimitUpIndustryCards', () => {
     )
 
     expect(container.querySelector('table')).toBeNull()
-    const groups = Array.from(container.querySelectorAll('section[aria-label="涨停行业卡片"] button'))
+    const groups = Array.from(container.querySelectorAll('section[aria-label="涨停行业卡片"] button[aria-label$="涨停明细"]'))
     expect(groups).toHaveLength(3)
     const expectedGroups = [
       { industry: '半导体', count: 4, rows: ['芯片高标', '芯片早封', '芯片晚封'] },
@@ -177,7 +177,7 @@ describe('LimitUpIndustryCards', () => {
     expect(container.textContent).not.toContain('芯片缺时')
   })
 
-  it('keeps every industry accessible and preserves first appearance when counts tie', () => {
+  it('shows the first six industries in stable order when counts tie', () => {
     const stocks = Array.from({ length: 9 }, (_, index) => ({
       ...snapshot.stocks[0], symbol: `60000${index}`, industry: `行业${index}`,
     }))
@@ -185,10 +185,11 @@ describe('LimitUpIndustryCards', () => {
     container.innerHTML = renderToStaticMarkup(
       <LimitUpIndustryCards snapshot={{ ...snapshot, stocks }} />
     )
-    const cards = Array.from(container.querySelectorAll('section[aria-label="涨停行业卡片"] button'))
+    const cards = Array.from(container.querySelectorAll('section[aria-label="涨停行业卡片"] button[aria-label$="涨停明细"]'))
     expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(
-      stocks.map(stock => `查看${stock.industry}涨停明细`)
+      stocks.slice(0, 6).map(stock => `查看${stock.industry}涨停明细`)
     )
+    expect(container.querySelector('[aria-label="涨停行业分页"]')).not.toBeNull()
   })
 
   it('counts consecutive-board tiers independently of multi-day statistics and labels unknown values', () => {

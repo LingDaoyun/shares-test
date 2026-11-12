@@ -163,7 +163,7 @@ export function FinancialNewsPanel({ heading, navigation }: { heading?: ReactNod
   const currentTopic = NEWS_TOPICS.find(item => item.id === topic)
   const healthySources = snapshot?.sources.filter(item => item.status === 'READY').length ?? 0
 
-  return <div className="flex min-w-0 flex-col gap-4 lg:h-[calc(100dvh-2rem)] lg:min-h-[36rem]">
+  return <div className="flex min-h-full min-w-0 flex-col gap-4 lg:h-full lg:min-h-0">
     <header className="grid shrink-0 gap-4 border-b border-line-soft pb-4 lg:grid-cols-[12.5rem_minmax(0,1fr)] lg:gap-5">
       <div className="min-w-0">{heading}{navigation ? <div className="mt-3">{navigation}</div> : null}</div>
       <section aria-label="消息筛选与刷新" className="min-w-0">
@@ -182,8 +182,8 @@ export function FinancialNewsPanel({ heading, navigation }: { heading?: ReactNod
         </div>
       </section>
     </header>
-    <div className="grid min-h-0 min-w-0 items-start gap-5 lg:flex-1 lg:grid-cols-[12.5rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:items-stretch">
-    <aside className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
+    <div className="grid h-96 min-h-0 min-w-0 flex-none grid-rows-[auto_minmax(0,1fr)] items-stretch gap-3 lg:h-auto lg:flex-1 lg:grid-cols-[12.5rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:gap-5">
+    <aside className="max-h-40 min-h-0 min-w-0 overflow-y-auto overscroll-contain lg:max-h-none">
       <nav aria-label="主题分类" className="rounded-xl border border-line bg-white p-2">
         <div className="hidden px-3 pb-3 pt-2 text-[11px] font-semibold tracking-widest text-ink-400 lg:block">消息主题</div>
         <div className="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
@@ -217,7 +217,7 @@ export function FinancialNewsPanel({ heading, navigation }: { heading?: ReactNod
       </details>
     </aside>
 
-    <section aria-label="按发布时间浏览消息" className="flex h-[min(40rem,85dvh)] min-h-[30rem] min-w-0 flex-col overflow-hidden rounded-xl border border-line bg-white lg:h-full lg:min-h-0">
+    <section aria-label="按发布时间浏览消息" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-line bg-white">
       {error ? <p role="alert" className="shrink-0 border-b border-line bg-amber-50 px-4 py-3 text-xs text-amber-700 sm:px-6">{error}</p> : null}
       {running ? <p role="status" className="shrink-0 border-b border-line bg-brand-50 px-4 py-3 text-xs text-brand-700 sm:px-6">正在读取各来源，已有消息继续保留，完成后自动更新。</p> : null}
       <div ref={listRef} role="region" aria-label="消息列表滚动区域" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-brand-400">

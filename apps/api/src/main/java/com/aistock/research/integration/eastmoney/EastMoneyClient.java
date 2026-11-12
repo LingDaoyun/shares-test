@@ -51,17 +51,17 @@ public class EastMoneyClient {
     private static final ZoneId CHINA_MARKET_ZONE = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter TENCENT_QUOTE_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final String FUND_FLOW_FIELDS = "f12,f13,f14,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f124";
-    private static final String GLOBAL_QUOTE_FIELDS = "f2,f3,f4,f12,f13,f14,f18,f124";
+    private static final String GLOBAL_QUOTE_FIELDS = "f1,f2,f3,f4,f12,f13,f14,f18,f124,f152";
     private static final String FUND_FLOW_MINUTE_FIELDS = "f51,f52,f53,f54,f55,f56,f57";
     private static final String FUND_FLOW_DAY_FIELDS = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65";
     private static final String EASTMONEY_FUND_FLOW_DAY_URL = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get";
-    private static final String INDUSTRY_FUND_FLOW_FIELDS = "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f104,f105,f124,f152";
+    private static final String INDUSTRY_FUND_FLOW_FIELDS = "f62,f184,f66,f69,f72,f75,f104,f105,f124,f152";
     private static final String BOARD_STOCK_FUND_FLOW_FIELDS = "f12,f14,f2,f3,f62,f184,f66,f72,f124";
     private static final Pattern BOARD_CODE_PATTERN = Pattern.compile("BK\\d+");
     private static final String INDUSTRY_BOARD_FIELDS = "f12,f14";
     static final String A_SHARE_FILTER = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048";
     private static final String INDUSTRY_BOARD_FILTER = "m:90 t:2 f:!50";
-    private static final String INDUSTRY_FUND_FLOW_FILTER = "m:90+t:2+f:!50";
+    private static final String INDUSTRY_FUND_FLOW_FILTER = "m:90+s:4";
     private static final int MAX_QUOTE_PAGE_SIZE = 100;
     private static final int SINA_QUOTE_PAGE_SIZE = 80;
     private static final String SINA_QUOTE_API = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.";
@@ -686,50 +686,52 @@ public class EastMoneyClient {
 
     /**
      * 批量获取全球市场行情。secid 由调用方直接给定（东财体系：100.=全球指数、107.=美交所 ETF），
-     * 不经过只认 A 股的 {@link #secId(String)}；URL 带 fltt=2，价格与涨跌幅直接是小数。
+     * 不经过只认 A 股的 {@link #secId(String)}；官网同源接口返回原始整数，按各行精度还原。
      */
     public List<EastMoneyGlobalQuote> fetchGlobalQuotes(List<String> secids) {
         if (secids == null || secids.isEmpty()) {
             return List.of();
         }
-        Instant fetchedAt = Instant.now();
         List<EastMoneyGlobalQuote> quotes = new ArrayList<>();
         Exception lastException = null;
         for (int start = 0; start < secids.size(); start += 80) {
             int end = Math.min(start + 80, secids.size());
-            String url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
-                    + "?fltt=2&invt=2"
-                    + "&secids=" + String.join(",", secids.subList(start, end))
-                    + "&fields=" + GLOBAL_QUOTE_FIELDS;
+            String filter = secids.subList(start, end).stream().map(secid -> "i:" + secid)
+                    .collect(java.util.stream.Collectors.joining(","));
+            String url = "https://data.eastmoney.com/dataapi/bkzj/getbkzj"
+                    + "?key=" + encodeQueryValue(GLOBAL_QUOTE_FIELDS)
+                    + "&code=" + encodeQueryValue(filter);
             try {
                 for (JsonNode item : diffItems(fetchQuoteRoot(url).path("data").path("diff"))) {
-                    readGlobalQuote(item, fetchedAt).ifPresent(quotes::add);
+                    readGlobalQuote(item).ifPresent(quotes::add);
                 }
             } catch (Exception exception) {
                 lastException = exception;
             }
         }
-        if (quotes.isEmpty() && lastException != null) {
-            throw new IllegalStateException("东方财富全球行情数据获取失败", lastException);
+        if (quotes.isEmpty()) {
+            throw new IllegalStateException("东方财富全球行情未返回有效数据", lastException);
         }
         return quotes;
     }
 
-    java.util.Optional<EastMoneyGlobalQuote> readGlobalQuote(JsonNode item, Instant fetchedAt) {
+    java.util.Optional<EastMoneyGlobalQuote> readGlobalQuote(JsonNode item) {
         String code = text(item, "f12");
         if (code == null || code.isBlank()) {
             return java.util.Optional.empty();
         }
         Instant quoteTime = epochSecond(item, "f124");
+        int priceScale = item.path("f1").asInt(2);
+        int changeScale = item.path("f152").asInt(2);
         return java.util.Optional.of(new EastMoneyGlobalQuote(
                 code,
                 text(item, "f14"),
-                decimal(item, "f2"),
-                decimal(item, "f3"),
-                decimal(item, "f4"),
-                decimal(item, "f18"),
+                scaled(item, "f2", priceScale),
+                scaled(item, "f3", changeScale),
+                scaled(item, "f4", priceScale),
+                scaled(item, "f18", priceScale),
                 integer(item, "f13"),
-                quoteTime != null ? quoteTime : fetchedAt
+                quoteTime
         ));
     }
 
@@ -900,25 +902,26 @@ public class EastMoneyClient {
     public List<EastMoneyIndustryFundFlowSnapshot> fetchIndustryFundFlows() {
         String url = industryFundFlowUrl();
         try {
-            JsonNode diff = fetchQuoteRoot(url).path("data").path("diff");
-            return readIndustryFundFlows(diff, Instant.now(), url);
+            JsonNode data = fetchQuoteRoot(url).path("data");
+            List<EastMoneyIndustryFundFlowSnapshot> snapshots = readIndustryFundFlows(
+                    data.path("diff"), Instant.now(), url);
+            int expectedCount = data.path("total").asInt(0);
+            long uniqueCount = snapshots.stream().map(EastMoneyIndustryFundFlowSnapshot::code).distinct().count();
+            if (expectedCount <= 0 || snapshots.size() != expectedCount || uniqueCount != expectedCount) {
+                throw new IllegalStateException("行业资金流返回范围不完整：预期 " + expectedCount
+                        + " 个行业，实际 " + uniqueCount + " 个");
+            }
+            return snapshots;
         } catch (Exception exception) {
             throw new IllegalStateException("东方财富行业资金流数据获取失败", exception);
         }
     }
 
     String industryFundFlowUrl() {
-        return "https://push2delay.eastmoney.com/api/qt/clist/get"
-                + "?pn=1"
-                + "&pz=500"
-                + "&po=1"
-                + "&np=1"
-                + "&ut=bd1d9ddb04089700cf9c27f6f7426281"
-                + "&fltt=2"
-                + "&invt=2"
-                + "&fid=f62"
-                + "&fs=" + encodeQueryValue(INDUSTRY_FUND_FLOW_FILTER)
-                + "&fields=" + encodeQueryValue(INDUSTRY_FUND_FLOW_FIELDS);
+        // The official bkzj/hy.html chart feed remains available when push2 closes TLS connections.
+        return "https://data.eastmoney.com/dataapi/bkzj/getbkzj"
+                + "?key=" + encodeQueryValue(INDUSTRY_FUND_FLOW_FIELDS)
+                + "&code=" + encodeQueryValue(INDUSTRY_FUND_FLOW_FILTER);
     }
 
     public List<EastMoneyStockFundFlowRank> fetchBoardStockFundFlowRanks(String boardCode, int limit, boolean ascending) {
@@ -2771,15 +2774,17 @@ public class EastMoneyClient {
         Instant marketTimestamp = epochSecond(item, "f124");
         int advancing = integer(item, "f104");
         int declining = integer(item, "f105");
+        // This feed returns raw percentage integers; fltt=2 is not supported.
+        int ratioScale = item.path("f152").asInt(2);
         return Optional.of(new EastMoneyIndustryFundFlowSnapshot(
                 code,
                 name,
                 mainNetInflow,
-                decimal(item, "f184"),
+                scaled(item, "f184", ratioScale),
                 decimal(item, "f66"),
-                decimal(item, "f69"),
+                scaled(item, "f69", ratioScale),
                 decimal(item, "f72"),
-                decimal(item, "f75"),
+                scaled(item, "f75", ratioScale),
                 advancing,
                 declining,
                 Math.max(0, advancing + declining),

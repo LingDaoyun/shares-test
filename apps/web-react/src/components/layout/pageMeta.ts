@@ -1,4 +1,4 @@
-export type PageKey = 'limitUp' | 'shortTerm' | 'overseas' | 'policy' | 'watchlist' | 'settings'
+export type PageKey = 'limitUp' | 'batchSearch' | 'shortTerm' | 'overseas' | 'policy' | 'watchlist' | 'settings'
 
 export interface PageMeta {
   eyebrow: string
@@ -7,6 +7,11 @@ export interface PageMeta {
 }
 
 export const pageMeta: Record<PageKey, PageMeta> = {
+  batchSearch: {
+    eyebrow: 'STOCK SEARCH',
+    title: '批量搜股',
+    description: '按名称或代码搜索 A 股，在同一页对照行情与日 K。'
+  },
   limitUp: {
     eyebrow: 'LIMIT UP',
     title: '涨停看板',
@@ -41,16 +46,17 @@ export const pageMeta: Record<PageKey, PageMeta> = {
 
 export const navItems: { key: PageKey; label: string }[] = [
   { key: 'limitUp', label: '涨停看板' },
+  { key: 'batchSearch', label: '批量搜股' },
   { key: 'shortTerm', label: '短线右侧' },
   { key: 'policy', label: '消息面' },
   { key: 'overseas', label: '外围市场' },
-  { key: 'watchlist', label: '特别关注' },
   { key: 'settings', label: '配置' }
 ]
 
 export const pathToPage: Record<string, PageKey> = {
   '': 'limitUp',
   'limit-up': 'limitUp',
+  'batch-search': 'batchSearch',
   'short-term': 'shortTerm',
   backtest: 'shortTerm',
   overseas: 'overseas',
