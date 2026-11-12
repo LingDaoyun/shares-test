@@ -33,6 +33,7 @@ import type {
   ShortTermLimitUpBoardSnapshot,
   ShortTermLimitUpIndustrySnapshot,
   ShortTermMarketBreadth,
+  ShortTermMarketFundDirection,
   ShortTermValidationBatchRequest,
   ShortTermValidationSummary,
   RuleDefinition,
@@ -245,6 +246,10 @@ export function fetchShortTermCatchUpFollowUp(observations: ShortTermCatchUpFoll
 
 export function fetchShortTermMarketBreadth() {
   return http.get<ShortTermMarketBreadth>('/short-term/market-breadth').then((res) => res.data)
+}
+
+export function fetchShortTermMarketFundDirection() {
+  return http.get<ShortTermMarketFundDirection>('/short-term/market-fund-direction').then((res) => res.data)
 }
 
 export function fetchShortTermIndustryLeaders(

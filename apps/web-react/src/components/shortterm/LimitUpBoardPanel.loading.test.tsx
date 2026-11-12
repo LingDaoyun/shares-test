@@ -3,7 +3,7 @@
 import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
+import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth, fetchShortTermMarketFundDirection } from '../../api/client'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermMarketBreadth } from '../../types'
 import { LimitUpBoardPanel } from './LimitUpBoardPanel'
 import { fetchMarketThemes } from '../../api/marketThemes'
@@ -12,7 +12,8 @@ vi.mock('../../api/marketThemes', () => ({ fetchMarketThemes: vi.fn(), fetchMark
 
 vi.mock('../../api/client', () => ({
   fetchShortTermLimitUpBoard: vi.fn(),
-  fetchShortTermMarketBreadth: vi.fn()
+  fetchShortTermMarketBreadth: vi.fn(),
+  fetchShortTermMarketFundDirection: vi.fn()
 }))
 vi.mock('./CatchUpFollowUpPanel', () => ({
   CatchUpFollowUpPanel: () => <p>观察反馈测试内容</p>,
@@ -62,6 +63,10 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     vi.resetAllMocks()
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(board)
     vi.mocked(fetchShortTermMarketBreadth).mockResolvedValue(breadth)
+    vi.mocked(fetchShortTermMarketFundDirection).mockResolvedValue({
+      topInflows: [], topOutflows: [], coveredIndustryCount: 0, expectedIndustryCount: 0,
+      coverageRatio: null, tradeDate: null, fetchedAt: null, sourceName: '行业资金流未返回', dataGaps: []
+    })
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { callback(0); return 1 })
     vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined)
     host = document.createElement('div')
@@ -209,12 +214,15 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
     expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(fetchShortTermMarketFundDirection).not.toHaveBeenCalled()
     expect(host.textContent).not.toContain('最新可用涨跌数据')
     expect(host.textContent).not.toContain('上涨3123 家')
     const trigger = host.querySelector('button[aria-haspopup="dialog"]')
     expect(trigger?.textContent).toBe('市场情绪与行业分布')
     expect(trigger?.getAttribute('aria-expanded')).toBe('false')
     await openMarketDialog()
+    expect(fetchShortTermMarketFundDirection).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('资金流向看板')
     expect(trigger?.getAttribute('aria-expanded')).toBe('true')
     expect(document.querySelector('[role="dialog"]')).not.toBeNull()
     expect(document.body.textContent).toContain('上涨3123 家')
@@ -300,25 +308,44 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
   })
 
-  it('refreshes the homepage cards and market dialog from the same snapshot', async () => {
+  it.each(['homepage', 'dialog'])('refreshes cards and market data from the %s refresh button', async (location) => {
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
     await renderPanel()
-    await openMarketDialog()
+    if (location === 'dialog') await openMarketDialog()
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue({
       ...availableBoard,
       fetchedAt: '2026-09-11T02:05:00Z',
       stocks: [...availableBoard.stocks, { ...availableBoard.stocks[0], symbol: '600002', name: '新增封板样本' }],
       sentiment: { ...availableBoard.sentiment!, limitUpCount: 2 },
     })
-    await clickButton('刷新')
+    await clickButton(location === 'homepage' ? '刷新涨停看板' : '刷新')
 
     expect(host.querySelector('button[aria-label="查看半导体涨停明细"]')?.textContent).toContain('涨停 2 家')
     expect(host.textContent).toContain('新增封板样本')
+    if (location === 'homepage') {
+      expect(document.querySelector('[role="dialog"]')).toBeNull()
+      await openMarketDialog()
+    }
     const dialog = document.querySelector('[role="dialog"]')!
     expect(dialog.textContent).toContain('共 2 只涨停')
     expect(dialog.textContent).toContain('2026-09-11 10:05:00')
     expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(2)
     expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(2)
+    expect(fetchShortTermMarketFundDirection).toHaveBeenCalledTimes(location === 'dialog' ? 2 : 1)
+  })
+
+  it('keeps the board refresh usable while fund flows are still loading', async () => {
+    vi.mocked(fetchShortTermMarketFundDirection).mockReturnValue(new Promise(() => {}))
+    await renderPanel()
+    await openMarketDialog()
+    expect(document.body.textContent).toContain('资金流向加载中')
+    expect(document.body.textContent).toContain('上涨3123 家')
+
+    await clickButton('刷新')
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(2)
+    expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(2)
+    expect(fetchShortTermMarketFundDirection).toHaveBeenCalledTimes(1)
+    expect(document.body.textContent).toContain('资金流向加载中')
   })
 
   it('refreshes homepage cards without snapshot status copy', async () => {

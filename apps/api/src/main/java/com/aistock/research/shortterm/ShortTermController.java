@@ -77,6 +77,11 @@ public class ShortTermController {
         return shortTermService.industryLeaderSnapshot(code, name, flow, limit == null ? 20 : limit);
     }
 
+    @GetMapping("/market-fund-direction")
+    public ShortTermMarketFundDirection marketFundDirection() {
+        return shortTermService.marketFundDirection();
+    }
+
     @GetMapping("/market-breadth")
     public ShortTermMarketBreadth marketBreadth() {
         return limitUpBoardService.marketBreadth();
