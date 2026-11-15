@@ -109,6 +109,77 @@ describe('LimitUpBoardPanel independent breadth loading', () => {
     await act(async () => { select.value = String(page); select.dispatchEvent(new Event('change', { bubbles: true })) })
   }
 
+  it('toggles first-board stocks by industry and keeps industry details within the filter', async () => {
+    const stock = availableBoard.stocks[0]
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue({ ...availableBoard, stocks: [
+      { ...stock, name: '芯片连板', consecutiveBoards: 3 },
+      { ...stock, symbol: '600002', name: '芯片首板', industry: ' 半导体 ', consecutiveBoards: 1, statDays: 5, statBoards: 3 },
+      { ...stock, symbol: '600003', name: '设备首板', industry: '专用设备', consecutiveBoards: 1 },
+      { ...stock, symbol: '600004', name: '未分类首板', industry: ' ', consecutiveBoards: 1 },
+      { ...stock, symbol: '600005', name: '连板未知', industry: '未知行业', consecutiveBoards: 0, statDays: 1, statBoards: 1 },
+    ] })
+    await renderPanel()
+    const toggle = await clickButton('首板涨停')
+
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect(industryCards().map(card => card.getAttribute('aria-label'))).toEqual([
+      '查看半导体涨停明细', '查看专用设备涨停明细', '查看未分类涨停明细',
+    ])
+    expect(host.textContent).toContain('3 个行业 · 3 只涨停')
+    expect(industryCards()[0].textContent).toContain('芯片首板')
+    expect(industryCards()[0].textContent).toContain('涨停 1 家')
+    expect(host.textContent).not.toContain('芯片连板')
+    expect(host.textContent).not.toContain('连板未知')
+    await act(async () => { industryCards()[0].click() })
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('半导体 · 首板涨停明细')
+    expect(dialog.querySelectorAll('tbody tr')).toHaveLength(1)
+    expect(dialog.textContent).toContain('芯片首板')
+    expect(dialog.textContent).not.toContain('芯片连板')
+    await clickButton('返回涨停看板')
+
+    await clickButton('首板涨停')
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(industryCards()).toHaveLength(4)
+    expect(host.textContent).toContain('芯片连板')
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
+    expect(fetchShortTermMarketBreadth).toHaveBeenCalledTimes(1)
+  })
+
+  it('resets industry pagination when switching scope and retains first-board filtering after refresh', async () => {
+    const snapshot = industryBoard(13)
+    snapshot.stocks = snapshot.stocks.map((stock, index) => ({ ...stock, consecutiveBoards: index >= 6 ? 1 : 2 }))
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(snapshot)
+    await renderPanel()
+    await jumpToPage(3)
+    await clickButton('首板涨停')
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')!.value).toBe('1')
+    expect(industryCards()[0].textContent).toContain('封板样本6')
+    expect(industryCards()).toHaveLength(6)
+    await jumpToPage(2)
+    await clickButton('刷新涨停看板')
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')!.value).toBe('2')
+    expect(industryCards()).toHaveLength(1)
+    expect(industryCards()[0].textContent).toContain('封板样本12')
+    await clickButton('首板涨停')
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')!.value).toBe('1')
+    expect(industryCards()[0].textContent).toContain('封板样本0')
+  })
+
+  it('shows a first-board empty state without losing the full-market snapshot', async () => {
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(availableBoard)
+    await renderPanel()
+    await clickButton('首板涨停')
+    expect(industryCards()).toHaveLength(0)
+    expect(host.textContent).toContain('当前快照暂无首板涨停个股。')
+    await openMarketDialog()
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('共 1 只涨停')
+    await act(async () => { document.querySelector<HTMLButtonElement>('button[aria-label="关闭详情"]')!.click() })
+    await clickButton('首板涨停')
+    expect(industryCards()).toHaveLength(1)
+    expect(host.textContent).toContain('封板样本')
+  })
+
   it('pages thirteen industries as six, six and one without reloading data or shrinking the content frame', async () => {
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(industryBoard(13))
     await renderPanel()

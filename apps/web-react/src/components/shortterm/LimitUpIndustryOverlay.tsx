@@ -13,6 +13,7 @@ export interface LimitUpIndustrySelection {
   tradeDate: string
   fetchedAt: string
   limitUpStocks: ShortTermLimitUpStock[]
+  firstBoardOnly?: boolean
 }
 
 export function LimitUpIndustryOverlay({ selection, onClose }: {
@@ -30,7 +31,7 @@ export function LimitUpIndustryOverlay({ selection, onClose }: {
   return (
     <DetailOverlay
       open
-      title={`${selection.industry} · 涨停明细`}
+      title={`${selection.industry} · ${selection.firstBoardOnly ? '首板涨停明细' : '涨停明细'}`}
       subtitle={`${selection.tradeDate} · 已涨停 ${sealed.length} 家`}
       onClose={onClose}
     >
@@ -41,7 +42,9 @@ export function LimitUpIndustryOverlay({ selection, onClose }: {
         </div>
         <section className="flex flex-col gap-2">
           <h3 className="text-sm font-semibold text-ink-900">已涨停 · {sealed.length} 家</h3>
-          <p className="text-xs text-ink-500">全部涨停股票，按连板高度及首次封板时间排列。</p>
+          <p className="text-xs text-ink-500">{selection.firstBoardOnly
+            ? '仅展示连续涨停板数为 1 的个股，按首次封板时间排列。'
+            : '全部涨停股票，按连板高度及首次封板时间排列。'}</p>
           <StockTable stocks={sealed} tradeDate={selection.tradeDate} leaderSymbol={leaderSymbol} onSelectLeader={selectLeader} />
         </section>
         <LeaderCatchUpPanel key={`${selection.tradeDate}:${selection.industry}:${leaderSymbol}`}

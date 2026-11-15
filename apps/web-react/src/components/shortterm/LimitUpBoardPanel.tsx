@@ -36,6 +36,7 @@ export function LimitUpBoardPanel() {
   const [breadthError, setBreadthError] = useState<string | null>(null)
   const [marketOpen, setMarketOpen] = useState(false)
   const [followUpOpen, setFollowUpOpen] = useState(false)
+  const [firstBoardOnly, setFirstBoardOnly] = useState(false)
   const [fundRefreshKey, setFundRefreshKey] = useState(0)
   const [industrySelection, setIndustrySelection] = useState<LimitUpIndustrySelection | null>(null)
   const mounted = useRef(false)
@@ -78,6 +79,10 @@ export function LimitUpBoardPanel() {
     }
   }, [refresh])
 
+  const visibleSnapshot = snapshot && firstBoardOnly
+    ? { ...snapshot, stocks: snapshot.stocks.filter(stock => stock.consecutiveBoards === 1) }
+    : snapshot
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" onKeyDown={event => {
       if ((industrySelection || marketOpen || followUpOpen) && isEscapeClose(event.key, event.defaultPrevented)) {
@@ -89,6 +94,11 @@ export function LimitUpBoardPanel() {
       }
     }}>
       <div className="mb-4 flex shrink-0 flex-wrap justify-end gap-2">
+        <Button type="button" variant={firstBoardOnly ? 'primary' : 'secondary'} aria-pressed={firstBoardOnly}
+          title="仅查看首板涨停个股，再次点击恢复全部涨停"
+          onClick={() => { setFirstBoardOnly(value => !value); setIndustrySelection(null) }}>
+          首板涨停
+        </Button>
         <Button type="button" icon={<RefreshCw aria-hidden="true" className="h-4 w-4" />}
           loading={loading || breadthLoading} onClick={() => void refresh()}>
           刷新涨停看板
@@ -107,10 +117,11 @@ export function LimitUpBoardPanel() {
       {!loading && (error || !snapshot?.available) ? (
         <div className="mb-3 shrink-0"><Button type="button" variant="ghost" loading={breadthLoading} onClick={() => void refresh()}>重新加载</Button></div>
       ) : null}
-      {snapshot?.available ? (
-        <LimitUpIndustryCards key={snapshot.tradeDate} snapshot={snapshot} onSelectIndustry={(industry) => {
-          setIndustrySelection({ industry, tradeDate: snapshot.tradeDate, fetchedAt: snapshot.fetchedAt,
-            limitUpStocks: snapshot.stocks.filter(stock => (stock.industry?.trim() || '未分类') === industry) })
+      {visibleSnapshot?.available ? (
+        <LimitUpIndustryCards key={`${visibleSnapshot.tradeDate}:${firstBoardOnly}`} snapshot={visibleSnapshot}
+          firstBoardOnly={firstBoardOnly} onSelectIndustry={(industry) => {
+          setIndustrySelection({ industry, tradeDate: visibleSnapshot.tradeDate, fetchedAt: visibleSnapshot.fetchedAt, firstBoardOnly,
+            limitUpStocks: visibleSnapshot.stocks.filter(stock => (stock.industry?.trim() || '未分类') === industry) })
         }} />
       ) : null}
       {marketOpen ? (
@@ -326,9 +337,10 @@ function SealBucket({ label, count, total }: { label: string; count: number; tot
   )
 }
 
-export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
+export function LimitUpIndustryCards({ snapshot, onSelectIndustry, firstBoardOnly = false }: {
   snapshot: ShortTermLimitUpBoardSnapshot
   onSelectIndustry?: (industry: string) => void
+  firstBoardOnly?: boolean
 }) {
   const [page, setPage] = useState(1)
   const scrollRegion = useRef<HTMLDivElement>(null)
@@ -347,14 +359,14 @@ export function LimitUpIndustryCards({ snapshot, onSelectIndustry }: {
   useEffect(() => { setPage(value => Math.min(value, pageCount)) }, [pageCount])
   useEffect(() => { if (scrollRegion.current) scrollRegion.current.scrollTop = 0 }, [currentPage])
   if (!snapshot.stocks.length) {
-    return <p className="flex-1 text-xs leading-relaxed text-ink-500">涨停明细暂无数据。</p>
+    return <p className="flex-1 text-xs leading-relaxed text-ink-500">{firstBoardOnly ? '当前快照暂无首板涨停个股。' : '涨停明细暂无数据。'}</p>
   }
   const visibleGroups = industryGroups.slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
   return (
     <section aria-label="涨停行业卡片" className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-baseline justify-between gap-2">
-        <h4 className="text-sm font-semibold text-ink-900">涨停明细 · 行业概览</h4>
+        <h4 className="text-sm font-semibold text-ink-900">{firstBoardOnly ? '首板涨停' : '涨停明细'} · 行业概览</h4>
         <span className="text-xs text-ink-400">{industryGroups.length} 个行业 · {snapshot.stocks.length} 只涨停</span>
       </div>
       <p className="shrink-0 text-[11px] text-ink-500">按行业涨停家数排序，每卡预览前 3 只；梯队按连续涨停板数统计，与“几天几板”分开。点击卡片查看完整明细。</p>
