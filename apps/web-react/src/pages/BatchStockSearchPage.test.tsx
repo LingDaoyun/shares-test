@@ -50,6 +50,8 @@ describe('batch stock search filters and pages', () => {
     act(() => root.unmount())
     host.remove()
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
   async function render() { await act(async () => { root.render(<BatchStockSearchPage />) }) }
   async function fill(selector: string, value: string) {
@@ -69,6 +71,83 @@ describe('batch stock search filters and pages', () => {
     expect(button, label).toBeDefined()
     await act(async () => { button.click() })
   }
+
+  function mockCardLayout(initial: { columns: number; height: number; cardHeight?: number }) {
+    let layout = { cardHeight: 146.5, ...initial }
+    const callbacks = new Set<() => void>()
+    vi.stubGlobal('ResizeObserver', class {
+      notify: () => void
+      constructor(callback: ResizeObserverCallback) {
+        this.notify = () => callback([], this as unknown as ResizeObserver)
+        callbacks.add(this.notify)
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() { callbacks.delete(this.notify) }
+    })
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { callback(0); return 1 })
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('aria-label') === '股票列表滚动区域' ? layout.height : 0
+    })
+    const originalStyle = window.getComputedStyle.bind(window)
+    vi.spyOn(window, 'getComputedStyle').mockImplementation(element => element.getAttribute('aria-label') === '股票搜索结果'
+      ? { gridTemplateColumns: Array(layout.columns).fill('300px').join(' '), rowGap: '8px' } as CSSStyleDeclaration
+      : originalStyle(element))
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { width: 300, height: this.tagName === 'ARTICLE' ? layout.cardHeight : layout.height } as DOMRect
+    })
+    return async (next: Partial<typeof layout>) => {
+      layout = { ...layout, ...next }
+      await act(async () => { [...callbacks].forEach(callback => callback()) })
+    }
+  }
+
+  it('fills complete viewport rows and adapts pagination on resize without refetching', async () => {
+    const resize = mockCardLayout({ columns: 5, height: 1120 })
+    vi.mocked(searchStocks).mockResolvedValue(snapshot(67))
+    await render()
+    await search()
+    expect(host.querySelectorAll('article')).toHaveLength(35)
+    expect(host.querySelector('[aria-label="股票结果分页"]')?.textContent).toContain('显示 1–35 / 67 只')
+    expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining('每页 12 只'), expect.anything())
+    await click('下一页')
+    expect(host.querySelector('article')?.textContent).toContain('东方35')
+    await resize({ columns: 3, height: 520 })
+    expect(host.querySelectorAll('article')).toHaveLength(9)
+    expect(host.querySelector('article')?.textContent).toContain('东方27')
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')?.value).toBe('4')
+    await act(async () => {
+      const select = host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')!
+      select.value = '8'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(host.querySelectorAll('article')).toHaveLength(4)
+    await resize({ columns: 5, height: 1120 })
+    expect(host.querySelectorAll('article')).toHaveLength(32)
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="跳转页码"]')?.value).toBe('2')
+    expect(host.querySelector('article')?.textContent).toContain('东方35')
+    expect(searchStocks).toHaveBeenCalledTimes(1)
+    expect(fetchStockDaily).not.toHaveBeenCalled()
+    expect(fetchStockIntraday).not.toHaveBeenCalled()
+  })
+
+  it('retains a safe page for hidden or very short viewports and cleans up resize observers', async () => {
+    const resize = mockCardLayout({ columns: 1, height: 0 })
+    vi.mocked(searchStocks).mockResolvedValue(snapshot(25))
+    await render()
+    await search()
+    expect(host.querySelectorAll('article')).toHaveLength(12)
+    await resize({ height: 100 })
+    expect(host.querySelectorAll('article')).toHaveLength(1)
+    await resize({ height: 520 })
+    expect(host.querySelectorAll('article')).toHaveLength(3)
+    await resize({ height: 0 })
+    expect(host.querySelectorAll('article')).toHaveLength(3)
+    await act(async () => { root.render(null) })
+    await resize({ columns: 5, height: 1120 })
+    expect(host.querySelectorAll('article')).toHaveLength(0)
+  })
 
   it('shows twelve compact cards per page and never loads charts while listing or paging', async () => {
     vi.mocked(searchStocks).mockResolvedValue(snapshot(25))

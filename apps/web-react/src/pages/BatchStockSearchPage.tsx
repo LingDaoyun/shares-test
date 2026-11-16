@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronRight, Search, SlidersHorizontal } from 'lucide-react'
 import { searchStocks } from '../api/client'
 import { StockSearchDetail } from '../components/stocksearch/StockSearchDetail'
@@ -10,7 +10,7 @@ import { toast } from '../components/ui/Toast'
 import { changeClass, extractErrorMessage, formatAmount, formatDateTime, formatNumber, formatPercent, formatSignedPercent } from '../lib/format'
 import type { StockSearchFilters, StockSearchQuote, StockSearchSnapshot } from '../types'
 
-const PAGE_SIZE = 12
+const INITIAL_PAGE_SIZE = 12
 const SEARCH_TOAST_KEY = 'batch-stock-search'
 const DEFAULT_FILTERS: StockSearchFilterDraft = { excludeChiNext: true, excludeStar: true, excludeSt: true }
 type SearchQuery = { keyword: string; filters: StockSearchFilters }
@@ -20,13 +20,56 @@ export function BatchStockSearchPage() {
   const [draft, setDraft] = useState<StockSearchFilterDraft>(() => ({ ...DEFAULT_FILTERS }))
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [result, setResult] = useState<StockSearchSnapshot | null>(null)
-  const [page, setPage] = useState(1)
+  const [{ page, pageSize }, setPagination] = useState({ page: 1, pageSize: INITIAL_PAGE_SIZE })
   const [selected, setSelected] = useState<StockSearchQuote | null>(null)
   const [loading, setLoading] = useState(false)
   const request = useRef<AbortController | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const gridRef = useRef<HTMLElement | null>(null)
+  const cardMeasurement = useRef({ width: 0, height: 0 })
+  const setPage = (nextPage: number) => setPagination(current => ({ ...current, page: nextPage }))
   useEffect(() => () => { request.current?.abort(); toast.dismiss(SEARCH_TOAST_KEY) }, [])
-  useEffect(() => { if (listRef.current) listRef.current.scrollTop = 0 }, [page, result])
+  useEffect(() => { if (listRef.current) listRef.current.scrollTop = 0 }, [page, pageSize, result])
+  useLayoutEffect(() => { cardMeasurement.current = { width: 0, height: 0 } }, [result])
+  useLayoutEffect(() => {
+    const viewport = listRef.current
+    const grid = gridRef.current
+    if (!viewport || !grid || !result?.stocks.length) return
+    const cards = Array.from(grid.children)
+    const measure = () => {
+      const style = window.getComputedStyle(grid)
+      const tracks = style.gridTemplateColumns
+      const rects = cards.map(card => card.getBoundingClientRect())
+      const width = rects[0]?.width ?? 0
+      const measuredHeight = Math.max(0, ...rects.map(rect => rect.height))
+      if (!tracks || tracks === 'none' || viewport.clientHeight <= 0 || width <= 0 || measuredHeight <= 0) return
+      // Keep the tallest measured card at this width so paging cannot oscillate as wrapped cards enter/leave.
+      const previous = cardMeasurement.current
+      const cardHeight = Math.abs(previous.width - width) < 0.5 ? Math.max(previous.height, measuredHeight) : measuredHeight
+      cardMeasurement.current = { width, height: cardHeight }
+      const columns = tracks.trim().split(/\s+/).length
+      const gap = Number.parseFloat(style.rowGap) || 0
+      const rows = Math.max(1, Math.floor((viewport.clientHeight + gap) / (cardHeight + gap)))
+      const nextSize = columns * rows
+      setPagination(current => {
+        if (current.pageSize === nextSize) return current
+        const firstIndex = (current.page - 1) * current.pageSize
+        const lastPage = Math.max(1, Math.ceil(result.stocks.length / nextSize))
+        return { pageSize: nextSize, page: Math.min(lastPage, Math.floor(firstIndex / nextSize) + 1) }
+      })
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    let frame = 0
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(measure)
+    })
+    observer.observe(viewport)
+    observer.observe(grid)
+    cards.forEach(card => observer.observe(card))
+    return () => { observer.disconnect(); cancelAnimationFrame(frame) }
+  }, [result, page, pageSize])
 
   async function search(query: SearchQuery) {
     request.current?.abort()
@@ -42,7 +85,7 @@ export function BatchStockSearchPage() {
       if (!controller.signal.aborted) {
         setResult(data)
         const label = data.keyword ? `“${data.keyword}”` : '条件筛选'
-        const summary = `${label} 共 ${data.matchedCount} 只。${describeStockSearchFilters(query.filters)}。更新于 ${formatDateTime(data.fetchedAt)} · 按股票代码排序 · 每页 ${PAGE_SIZE} 只。`
+        const summary = `${label} 共 ${data.matchedCount} 只。${describeStockSearchFilters(query.filters)}。更新于 ${formatDateTime(data.fetchedAt)} · 按股票代码排序。`
         const gaps: string[] = []
         if (!data.complete) gaps.push(`股票清单尚未完整（${data.universeCount} / ${data.expectedCount > 0 ? data.expectedCount : '未知'} 只），可能有遗漏`)
         if ((data.unverifiedCount ?? 0) > 0) gaps.push(`${data.unverifiedCount} 只股票缺少筛选所需指标，暂未纳入结果`)
@@ -68,7 +111,7 @@ export function BatchStockSearchPage() {
     }
   }
 
-  const visibleStocks = result?.stocks.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) ?? []
+  const visibleStocks = result?.stocks.slice((page - 1) * pageSize, page * pageSize) ?? []
   const incomplete = result && (!result.complete || (result.unverifiedCount ?? 0) > 0)
 
   return <div className="flex h-full min-h-0 flex-col gap-4">
@@ -101,11 +144,11 @@ export function BatchStockSearchPage() {
       </div> : null}
       {result ? !result.stocks.length ? <p className="flex h-full items-center justify-center px-4 text-center text-sm text-ink-500">
         {incomplete ? '当前可核实的数据中没有匹配股票，请重新搜索或调整条件。' : '没有找到匹配股票，请调整关键词或筛选条件。'}
-      </p> : <section aria-label="股票搜索结果" className="flex h-full flex-wrap content-stretch gap-3">
+      </p> : <section ref={gridRef} aria-label="股票搜索结果" className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,16rem),1fr))] items-start gap-2">
         {visibleStocks.map(stock => <StockCard key={stock.symbol} stock={stock} onOpen={() => setSelected(stock)} />)}
       </section> : null}
     </div>
-    {result?.stocks.length ? <CardPagination page={page} pageSize={PAGE_SIZE} total={result.stocks.length}
+    {result?.stocks.length ? <CardPagination page={page} pageSize={pageSize} total={result.stocks.length}
       onPageChange={setPage} ariaLabel="股票结果分页" /> : null}
     {advancedOpen ? <AdvancedStockSearchDialog initialValue={draft} onClose={() => setAdvancedOpen(false)}
       onApply={value => { setDraft(value); setAdvancedOpen(false) }} /> : null}
@@ -114,7 +157,7 @@ export function BatchStockSearchPage() {
 }
 
 function StockCard({ stock, onOpen }: { stock: StockSearchQuote; onOpen: () => void }) {
-  return <article aria-label={stock.name + ' ' + stock.symbol} className="group relative flex min-w-0 flex-[1_1_18rem] flex-col rounded-xl border border-line bg-white p-3 transition-colors hover:border-brand-300 hover:bg-brand-50/20 focus-within:border-brand-400">
+  return <article aria-label={stock.name + ' ' + stock.symbol} className="group relative flex min-w-0 flex-col rounded-xl border border-line bg-white p-2.5 transition-colors hover:border-brand-300 hover:bg-brand-50/20 focus-within:border-brand-400">
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0">
         <h3 className="break-words text-sm font-semibold text-ink-900 group-hover:text-brand-700">
@@ -123,14 +166,14 @@ function StockCard({ stock, onOpen }: { stock: StockSearchQuote; onOpen: () => v
             {stock.name}
           </button>
         </h3>
-        <p className="mt-1 text-[11px] text-ink-400"><span className="font-mono">{stock.symbol}</span>{stock.market ? ' · ' + stock.market : ''}</p>
+        <p className="mt-0.5 text-[11px] text-ink-400"><span className="font-mono">{stock.symbol}</span>{stock.market ? ' · ' + stock.market : ''}</p>
       </div>
       <div className={'shrink-0 text-right tabular ' + changeClass(stock.changePercent)}>
-        <p className="text-xl font-semibold leading-6" aria-label="最新价">{formatNumber(stock.latestPrice)}</p>
+        <p className="text-lg font-semibold leading-5" aria-label="最新价">{formatNumber(stock.latestPrice)}</p>
         <p className="text-xs font-semibold" aria-label="涨跌幅">{formatSignedPercent(stock.changePercent)}</p>
       </div>
     </div>
-    <dl className="my-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-line-soft pt-3 text-[11px] tabular">
+    <dl className="my-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-line-soft pt-2 text-[11px] tabular">
       {([
         ['换手率', formatPercent(stock.turnoverRate)], ['总市值', formatAmount(stock.totalMarketValue)],
         ['流通市值', formatAmount(stock.circulatingMarketValue)], ['成交额', formatAmount(stock.amount)]
@@ -138,7 +181,7 @@ function StockCard({ stock, onOpen }: { stock: StockSearchQuote; onOpen: () => v
         <dt className="text-ink-600">{label}</dt><dd className="font-semibold text-ink-900">{value}</dd>
       </div>)}
     </dl>
-    <div className="mt-auto flex items-center justify-between gap-2 border-t border-line-soft pt-2 text-[10px] text-ink-400">
+    <div className="flex items-center justify-between gap-2 border-t border-line-soft pt-1.5 text-[10px] text-ink-400">
       <span>行情 {stock.marketTimestamp ? formatDateTime(stock.marketTimestamp).slice(5) : stock.tradeDate ?? '时间待补充'}</span>
       <span className="inline-flex shrink-0 items-center text-brand-600">查看详情<ChevronRight aria-hidden="true" className="h-3 w-3" /></span>
     </div>
