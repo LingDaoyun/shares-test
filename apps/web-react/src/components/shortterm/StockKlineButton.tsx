@@ -12,22 +12,31 @@ import { StockIntradayChart } from './StockIntradayChart'
 type ChartKind = 'intraday' | 'daily'
 type ChartData = { kind: 'intraday'; data: StockIntradaySnapshot } | { kind: 'daily'; data: StockDailySnapshot }
 
-export function StockKlineButton({ symbol, name, tradeDate }: {
+export interface StockKlineSelection {
   symbol: string
   name: string
   tradeDate: string
-}) {
+}
+
+export function StockKlineButton({ symbol, name, tradeDate }: StockKlineSelection) {
   const [open, setOpen] = useState(false)
-  const [kind, setKind] = useState<ChartKind>('intraday')
 
   return <>
     <Button type="button" variant="ghost" className="px-2 py-1 text-xs"
       aria-label={`查看${name}分时和日线`} aria-haspopup="dialog" aria-expanded={open}
-      onClick={() => { setKind('intraday'); setOpen(true) }}>
+      onClick={() => setOpen(true)}>
       分时 / 日线
     </Button>
-    {open ? <DetailOverlay open title={`${name} · ${symbol} · 行情图`}
-      subtitle={`看板 / 观察日 ${tradeDate}`} onClose={() => setOpen(false)}>
+    {open ? <StockKlineDialog symbol={symbol} name={name} tradeDate={tradeDate} onClose={() => setOpen(false)} /> : null}
+  </>
+}
+
+export function StockKlineDialog({ symbol, name, tradeDate, onClose }: StockKlineSelection & { onClose: () => void }) {
+  const [kind, setKind] = useState<ChartKind>('intraday')
+
+  return (
+    <DetailOverlay open title={`${name} · ${symbol} · 行情图`}
+      subtitle={`看板 / 观察日 ${tradeDate}`} onClose={onClose}>
       <div className="space-y-4">
         <div role="group" aria-label="行情类型" className="flex gap-2">
           <Button type="button" variant={kind === 'intraday' ? 'primary' : 'secondary'}
@@ -37,8 +46,8 @@ export function StockKlineButton({ symbol, name, tradeDate }: {
         </div>
         <StockChartContent key={`${symbol}:${kind}`} symbol={symbol} kind={kind} observationDate={tradeDate} />
       </div>
-    </DetailOverlay> : null}
-  </>
+    </DetailOverlay>
+  )
 }
 
 export function StockChartContent({ symbol, kind, observationDate }: { symbol: string; kind: ChartKind; observationDate: string }) {

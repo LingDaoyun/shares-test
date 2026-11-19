@@ -3,6 +3,7 @@ package com.aistock.research.shortterm;
 import com.aistock.research.integration.eastmoney.EastMoneyClient;
 import com.aistock.research.integration.eastmoney.EastMoneyBrokenBoardPoolEntry;
 import com.aistock.research.integration.eastmoney.EastMoneyIndexVolumeBar;
+import com.aistock.research.integration.eastmoney.EastMoneyLimitDownPoolEntry;
 import com.aistock.research.integration.eastmoney.EastMoneyLimitUpPoolEntry;
 import org.junit.jupiter.api.Test;
 
@@ -94,6 +95,8 @@ class ShortTermLimitUpBoardServiceTest {
         assertThat(snapshot.sentiment().brokenCount()).isZero();
         assertThat(snapshot.sentiment().sealBreakRatioPercent()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(snapshot.sentiment().tone()).isEqualTo("情绪强势");
+        assertThat(snapshot.limitDownAvailable()).isTrue();
+        assertThat(snapshot.limitDownStocks()).isEmpty();
     }
 
     @Test
@@ -120,9 +123,34 @@ class ShortTermLimitUpBoardServiceTest {
         ShortTermLimitUpBoardSnapshot snapshot = new ShortTermLimitUpBoardService(client).snapshot(TRADE_DATE);
 
         assertThat(snapshot.available()).isTrue();
+        assertThat(snapshot.limitDownAvailable()).isFalse();
+        assertThat(snapshot.limitDownStocks()).isEmpty();
         assertThat(snapshot.sentiment().limitDownCount()).isNull();
         assertThat(snapshot.sentiment().explanation()).doesNotContain("跌停 0 家");
         assertThat(snapshot.dataGaps()).anyMatch(gap -> gap.contains("跌停家数缺失"));
+    }
+
+    @Test
+    void exposesTheDescendingLimitDownLadderEvenWhenTheUpPoolFails() {
+        EastMoneyClient client = mock(EastMoneyClient.class);
+        when(client.fetchLimitUpPool(TRADE_DATE)).thenThrow(new IllegalStateException("涨停池超时"));
+        when(client.fetchLimitDownPool(TRADE_DATE)).thenReturn(List.of(
+                new EastMoneyLimitDownPoolEntry("000001", "首跌", "银行", null, null, null, null, null, 0, 1),
+                new EastMoneyLimitDownPoolEntry("000002", "高度缺失", null, null, null, null, null, null, 0, null),
+                new EastMoneyLimitDownPoolEntry("000003", "最高板", "医药", null, null, null, null, LocalTime.of(9, 30), 0, 4)
+        ));
+
+        ShortTermLimitUpBoardSnapshot snapshot = new ShortTermLimitUpBoardService(client).snapshot(TRADE_DATE);
+
+        assertThat(snapshot.available()).isFalse();
+        assertThat(snapshot.unavailableReason()).contains("涨停池超时");
+        assertThat(snapshot.sentiment()).isNull();
+        assertThat(snapshot.limitDownAvailable()).isTrue();
+        assertThat(snapshot.limitDownStocks()).containsExactly(
+                new ShortTermLimitDownStock("000003", "最高板", "医药", 4, LocalTime.of(9, 30)),
+                new ShortTermLimitDownStock("000001", "首跌", "银行", 1, null),
+                new ShortTermLimitDownStock("000002", "高度缺失", null, null, null)
+        );
     }
 
     @Test

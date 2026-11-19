@@ -1679,6 +1679,29 @@ export interface ShortTermLimitUpBoardSnapshot {
   sentiment: ShortTermLimitUpSentiment | null
   marketTurnover: ShortTermMarketTurnover | null
   dataGaps: string[]
+  limitDownAvailable?: boolean
+  limitDownStocks?: ShortTermLimitDownStock[]
+}
+
+export interface ShortTermLimitDownStock {
+  symbol: string
+  name: string
+  industry: string | null
+  consecutiveBoards: number | null
+  lastSealTime: string | null
+}
+
+export interface ShortTermLimitBoardStockContext {
+  topics: string[]
+  reason: string | null
+}
+
+export interface ShortTermLimitBoardContext {
+  tradeDate: string
+  source: string
+  sourceUrl: string
+  up: Record<string, ShortTermLimitBoardStockContext>
+  down: Record<string, ShortTermLimitBoardStockContext>
 }
 
 export interface ShortTermRiskExclusion {

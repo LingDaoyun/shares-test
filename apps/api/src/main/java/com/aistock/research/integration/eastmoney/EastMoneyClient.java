@@ -1200,6 +1200,9 @@ public class EastMoneyClient {
             if (symbol == null || symbol.isBlank() || name == null) {
                 continue;
             }
+            JsonNode days = item.path("days");
+            Integer consecutiveBoards = days.isIntegralNumber() && days.canConvertToInt() && days.intValue() > 0
+                    ? days.intValue() : null;
             entries.add(new EastMoneyLimitDownPoolEntry(
                     symbol,
                     name,
@@ -1209,7 +1212,8 @@ public class EastMoneyClient {
                     decimal(item, "amount"),
                     decimal(item, "fund"),
                     sealTime(item, "lbt"),
-                    Math.max(0, integer(item, "oc"))
+                    Math.max(0, integer(item, "oc")),
+                    consecutiveBoards
             ));
         }
         return List.copyOf(entries);

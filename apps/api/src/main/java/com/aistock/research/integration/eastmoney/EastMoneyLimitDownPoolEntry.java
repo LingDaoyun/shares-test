@@ -15,6 +15,7 @@ public record EastMoneyLimitDownPoolEntry(
         BigDecimal amount,
         BigDecimal sealFunds,
         LocalTime lastSealTime,
-        int openCount
+        int openCount,
+        Integer consecutiveBoards
 ) {
 }

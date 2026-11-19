@@ -30,6 +30,7 @@ import type {
   ShortTermReport,
   ShortTermScanJobStatus,
   ShortTermIndustryLeaderSnapshot,
+  ShortTermLimitBoardContext,
   ShortTermLimitUpBoardSnapshot,
   ShortTermLimitUpIndustrySnapshot,
   ShortTermMarketBreadth,
@@ -224,6 +225,11 @@ export function fetchShortTermLimitUpBoard(date?: string) {
     .get<ShortTermLimitUpBoardSnapshot>('/short-term/limit-up-board', {
       params: date ? { date } : undefined
     })
+    .then((res) => res.data)
+}
+
+export function fetchShortTermLimitBoardContext(date: string, signal: AbortSignal) {
+  return http.get<ShortTermLimitBoardContext>('/short-term/limit-board-context', { params: { date }, signal, timeout: 50000 })
     .then((res) => res.data)
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BarChart3, ChevronRight, Loader2, RefreshCw } from 'lucide-react'
-import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
+import { fetchShortTermLimitBoardContext, fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from '../../api/client'
 import { DetailOverlay, isEscapeClose } from '../ui/DetailOverlay'
 import { Button } from '../ui/Button'
 import { CardPagination } from '../ui/CardPagination'
@@ -8,8 +8,9 @@ import { Tag } from '../ui/Badge'
 import { CatchUpFollowUpPanel } from './CatchUpFollowUpPanel'
 import { LimitUpIndustryOverlay, type LimitUpIndustrySelection } from './LimitUpIndustryOverlay'
 import { MarketFundFlowPanel } from './MarketFundFlowPanel'
+import { StockKlineDialog, type StockKlineSelection } from './StockKlineButton'
 import { formatAmount, formatDateTime, formatPercent, formatSignedPercent } from '../../lib/format'
-import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment, ShortTermMarketBreadth, ShortTermMarketTurnover } from '../../types'
+import type { ShortTermLimitBoardContext, ShortTermLimitDownStock, ShortTermLimitUpBoardSnapshot, ShortTermLimitUpSentiment, ShortTermLimitUpStock, ShortTermMarketBreadth, ShortTermMarketTurnover } from '../../types'
 
 const toneLabel: Record<string, 'success' | 'brand' | 'warning' | 'danger' | 'neutral'> = {
   接力退潮: 'danger',
@@ -28,7 +29,10 @@ const turnoverTone: Record<string, 'success' | 'warning' | 'neutral'> = {
 }
 
 export function LimitUpBoardPanel() {
+  const [view, setView] = useState<'ladder' | 'industry' | 'down'>('ladder')
   const [snapshot, setSnapshot] = useState<ShortTermLimitUpBoardSnapshot | null>(null)
+  const [boardContext, setBoardContext] = useState<ShortTermLimitBoardContext | null>(null)
+  const [contextLoading, setContextLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [breadth, setBreadth] = useState<ShortTermMarketBreadth | null>(null)
@@ -39,6 +43,7 @@ export function LimitUpBoardPanel() {
   const [firstBoardOnly, setFirstBoardOnly] = useState(false)
   const [fundRefreshKey, setFundRefreshKey] = useState(0)
   const [industrySelection, setIndustrySelection] = useState<LimitUpIndustrySelection | null>(null)
+  const [chartSelection, setChartSelection] = useState<StockKlineSelection | null>(null)
   const mounted = useRef(false)
   const refreshing = useRef(false)
   const refreshTimer = useRef<ReturnType<typeof setTimeout>>()
@@ -79,45 +84,82 @@ export function LimitUpBoardPanel() {
     }
   }, [refresh])
 
-  const visibleSnapshot = snapshot && firstBoardOnly
+  useEffect(() => {
+    if (!snapshot?.stocks.length && !snapshot?.limitDownStocks?.length) {
+      setContextLoading(false)
+      return
+    }
+    const controller = new AbortController()
+    setContextLoading(true)
+    void fetchShortTermLimitBoardContext(snapshot.tradeDate, controller.signal)
+      .then(context => {
+        if (!controller.signal.aborted) setBoardContext(context.tradeDate === snapshot.tradeDate ? context : null)
+      })
+      .catch(() => { if (!controller.signal.aborted) setBoardContext(null) })
+      .finally(() => { if (!controller.signal.aborted) setContextLoading(false) })
+    return () => controller.abort()
+  }, [snapshot])
+
+  const isDown = view === 'down'
+  const boardAvailable = isDown ? snapshot?.limitDownAvailable : snapshot?.available
+  const visibleSnapshot = snapshot && view === 'industry' && firstBoardOnly
     ? { ...snapshot, stocks: snapshot.stocks.filter(stock => stock.consecutiveBoards === 1) }
     : snapshot
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" onKeyDown={event => {
-      if ((industrySelection || marketOpen || followUpOpen) && isEscapeClose(event.key, event.defaultPrevented)) {
+      if ((chartSelection || industrySelection || marketOpen || followUpOpen) && isEscapeClose(event.key, event.defaultPrevented)) {
         event.preventDefault()
         event.stopPropagation()
+        setChartSelection(null)
         setIndustrySelection(null)
         setMarketOpen(false)
         setFollowUpOpen(false)
       }
     }}>
-      <div className="mb-4 flex shrink-0 flex-wrap justify-end gap-2">
-        <Button type="button" variant={firstBoardOnly ? 'primary' : 'secondary'} aria-pressed={firstBoardOnly}
-          title="仅查看首板涨停个股，再次点击恢复全部涨停"
-          onClick={() => { setFirstBoardOnly(value => !value); setIndustrySelection(null) }}>
-          首板涨停
-        </Button>
-        <Button type="button" icon={<RefreshCw aria-hidden="true" className="h-4 w-4" />}
-          loading={loading || breadthLoading} onClick={() => void refresh()}>
-          刷新涨停看板
-        </Button>
-        <Button type="button" icon={<BarChart3 aria-hidden="true" className="h-4 w-4" />}
-          aria-haspopup="dialog" aria-expanded={marketOpen} onClick={() => setMarketOpen(true)}>
-          市场情绪与行业分布
-        </Button>
-        <Button type="button" aria-haspopup="dialog" aria-expanded={followUpOpen} onClick={() => setFollowUpOpen(true)}>
-          观察与隔日反馈
-        </Button>
+      <div className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-2">
+        <div role="group" aria-label="涨停看板视图" className="flex flex-wrap gap-2">
+          <Button type="button" variant={view === 'ladder' ? 'primary' : 'secondary'}
+            aria-pressed={view === 'ladder'} onClick={() => setView('ladder')}>涨停梯队</Button>
+          <Button type="button" variant={view === 'industry' ? 'primary' : 'secondary'}
+            aria-pressed={view === 'industry'} onClick={() => setView('industry')}>行业涨停</Button>
+          <Button type="button" variant={isDown ? 'primary' : 'secondary'}
+            aria-pressed={isDown} onClick={() => setView('down')}>跌停天梯榜</Button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {view === 'industry' ? (
+            <Button type="button" variant={firstBoardOnly ? 'primary' : 'secondary'} aria-pressed={firstBoardOnly}
+              title="仅查看首板涨停个股，再次点击恢复全部涨停"
+              onClick={() => { setFirstBoardOnly(value => !value); setIndustrySelection(null) }}>
+              首板涨停
+            </Button>
+          ) : null}
+          <Button type="button" icon={<RefreshCw aria-hidden="true" className="h-4 w-4" />}
+            loading={loading || breadthLoading} onClick={() => void refresh()}>
+            刷新涨停看板
+          </Button>
+          <Button type="button" icon={<BarChart3 aria-hidden="true" className="h-4 w-4" />}
+            aria-haspopup="dialog" aria-expanded={marketOpen} onClick={() => setMarketOpen(true)}>
+            市场情绪与行业分布
+          </Button>
+          <Button type="button" aria-haspopup="dialog" aria-expanded={followUpOpen} onClick={() => setFollowUpOpen(true)}>
+            观察与隔日反馈
+          </Button>
+        </div>
       </div>
       <div className={!snapshot && loading && !error ? 'flex min-h-0 flex-1 items-center justify-center' : 'shrink-0'}>
-        <BoardSnapshotStatus snapshot={snapshot} loading={loading} error={error} />
+        <BoardSnapshotStatus snapshot={snapshot} loading={loading} error={error} isDown={isDown} />
       </div>
-      {!loading && (error || !snapshot?.available) ? (
+      {!loading && (error || !boardAvailable) ? (
         <div className="mb-3 shrink-0"><Button type="button" variant="ghost" loading={breadthLoading} onClick={() => void refresh()}>重新加载</Button></div>
       ) : null}
-      {visibleSnapshot?.available ? (
+      {snapshot && boardAvailable && view !== 'industry' ? (
+        <LimitBoardLadder key={view} snapshot={snapshot} isDown={isDown}
+          context={boardContext?.tradeDate === snapshot.tradeDate ? boardContext : null} contextLoading={contextLoading}
+          selectedSymbol={chartSelection?.symbol}
+          onSelectStock={({ symbol, name }) => setChartSelection({ symbol, name, tradeDate: snapshot.tradeDate })} />
+      ) : null}
+      {visibleSnapshot?.available && view === 'industry' ? (
         <LimitUpIndustryCards key={`${visibleSnapshot.tradeDate}:${firstBoardOnly}`} snapshot={visibleSnapshot}
           firstBoardOnly={firstBoardOnly} onSelectIndustry={(industry) => {
           setIndustrySelection({ industry, tradeDate: visibleSnapshot.tradeDate, fetchedAt: visibleSnapshot.fetchedAt, firstBoardOnly,
@@ -144,6 +186,7 @@ export function LimitUpBoardPanel() {
         <LimitUpIndustryOverlay key={`${industrySelection.tradeDate}:${industrySelection.industry}`}
           selection={industrySelection} onClose={() => setIndustrySelection(null)} />
       ) : null}
+      {chartSelection ? <StockKlineDialog {...chartSelection} onClose={() => setChartSelection(null)} /> : null}
       {followUpOpen ? (
         <DetailOverlay open title="观察与隔日反馈" onClose={() => setFollowUpOpen(false)}>
           <CatchUpFollowUpPanel />
@@ -166,7 +209,7 @@ interface LimitUpBoardDetailProps extends MarketBreadthProps {
   onRefresh: () => void
 }
 
-function BoardSnapshotStatus({ snapshot, loading, error }: Pick<LimitUpBoardDetailProps, 'snapshot' | 'loading' | 'error'>) {
+function BoardSnapshotStatus({ snapshot, loading, error, isDown = false }: Pick<LimitUpBoardDetailProps, 'snapshot' | 'loading' | 'error'> & { isDown?: boolean }) {
   if (error) {
     return <p role="alert" className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">
       涨停看板获取失败：{error}{snapshot ? '；当前保留上次快照（旧快照），请注意数据日和获取时间。' : ''}
@@ -177,12 +220,14 @@ function BoardSnapshotStatus({ snapshot, loading, error }: Pick<LimitUpBoardDeta
       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-50">
         <Loader2 aria-hidden="true" className="h-8 w-8 animate-spin text-brand-500 motion-reduce:animate-none" />
       </div>
-      <p className="text-sm font-medium text-ink-600">正在拉取涨停池数据…</p>
+      <p className="text-sm font-medium text-ink-600">正在拉取{isDown ? '跌停' : '涨停'}池数据…</p>
     </div>
     return <p className="py-6 text-center text-sm text-ink-400">暂无数据，请稍后重试。</p>
   }
-  if (!snapshot.available) {
-    return <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">{snapshot.unavailableReason ?? '涨停池数据不可用'}</p>
+  if (isDown ? !snapshot.limitDownAvailable : !snapshot.available) {
+    return <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+      {isDown ? '跌停池数据暂不可用' : snapshot.unavailableReason ?? '涨停池数据不可用'}
+    </p>
   }
   return null
 }
@@ -337,6 +382,92 @@ function SealBucket({ label, count, total }: { label: string; count: number; tot
   )
 }
 
+type LadderStock = ShortTermLimitUpStock | ShortTermLimitDownStock
+
+function LimitBoardLadder({ snapshot, isDown, context, contextLoading, selectedSymbol, onSelectStock }: {
+  snapshot: ShortTermLimitUpBoardSnapshot
+  isDown: boolean
+  context: ShortTermLimitBoardContext | null
+  contextLoading: boolean
+  selectedSymbol?: string
+  onSelectStock: (stock: LadderStock) => void
+}) {
+  const title = isDown ? '跌停天梯榜' : '涨停梯队'
+  const direction = isDown ? '跌停' : '涨停'
+  const stocks = isDown ? snapshot.limitDownStocks ?? [] : snapshot.stocks
+  const details = isDown ? context?.down : context?.up
+  const matchingContext = contextLoading && !context && stocks.length > 0
+  const byBoardCount = new Map<number, LadderStock[]>()
+  for (const stock of stocks) {
+    const count = isKnownBoardCount(stock.consecutiveBoards) ? stock.consecutiveBoards : 0
+    const group = byBoardCount.get(count)
+    if (group) group.push(stock)
+    else byBoardCount.set(count, [stock])
+  }
+  const groups = [...byBoardCount.entries()].sort(([a], [b]) => b - a)
+
+  return (
+    <section aria-label={title} className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="flex shrink-0 flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold text-ink-900">{title}</h2>
+        <p className="text-xs text-ink-500">
+          <time dateTime={snapshot.tradeDate}>{snapshot.tradeDate}</time> · {stocks.length} 只{direction} · 行业分类来自东方财富{direction}池
+          {context && details && Object.keys(details).length > 0 ? (
+            <> · 复盘来源 <a href={context.sourceUrl} target="_blank" rel="noreferrer" className="text-brand-700 hover:underline">{context.source}</a></>
+          ) : null}
+          {matchingContext ? <span role="status"> · 正在匹配当日题材</span> : null}
+        </p>
+      </div>
+      {groups.length ? (
+        <div role="region" aria-label={`${direction}梯队明细`} tabIndex={0}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-lg border border-line-soft bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-300">
+          <div className="divide-y divide-line-soft">
+            {groups.map(([count, stocks]) => (
+              <div key={count} className="grid sm:grid-cols-[7rem_minmax(0,1fr)]">
+                <div className="flex items-baseline gap-x-3 bg-line-soft/50 px-4 py-3 sm:flex-col sm:border-r sm:border-line-soft">
+                  <h3 className={`text-lg font-semibold ${isDown ? 'text-emerald-700' : 'text-rose-600'}`}>
+                    {count === 0 ? (isDown ? '板数未知' : '连板未知') : count === 1 ? (isDown ? '首跌停' : '首板') : `${count} 板`}
+                  </h3>
+                  <span className="text-xs text-ink-500">{stocks.length} 家</span>
+                </div>
+                <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2 p-2">
+                  {stocks.map(stock => {
+                    const detail = details?.[stock.symbol]
+                    const seal = 'firstSealTime' in stock ? `首封 ${shortTime(stock.firstSealTime)}` : `末封 ${shortTime(stock.lastSealTime)}`
+                    return <li key={stock.symbol} className="min-w-0 break-words">
+                      <Button type="button" variant="ghost" className="h-full w-full flex-col !items-start !justify-start !border-line-soft !px-3 !py-2 text-left"
+                        aria-label={`查看${stock.name}分时和日线`} aria-haspopup="dialog" aria-expanded={stock.symbol === selectedSymbol}
+                        title="查看分时和日线" onClick={() => onSelectStock(stock)}>
+                        <span className="flex flex-wrap items-baseline gap-x-2">
+                          <strong className="text-sm font-semibold text-brand-700">{stock.name}</strong>
+                          <span className="tabular text-xs text-ink-500">{stock.symbol}</span>
+                        </span>
+                        <span className="text-xs font-normal text-ink-500">
+                          行业 {stock.industry?.trim() || '未分类'} · {seal}
+                        </span>
+                        {detail?.topics.length ? (
+                          <span className="flex flex-wrap items-center gap-1">
+                            {detail.topics.map(topic => <Tag key={topic} tone="brand">{topic}</Tag>)}
+                          </span>
+                        ) : matchingContext ? null : <span className="text-xs font-normal text-ink-500">暂无当日题材</span>}
+                        {detail?.reason || (!isDown && !matchingContext) ? (
+                          <span className="text-xs font-normal leading-relaxed text-ink-700">
+                            {detail?.reason ? <><strong>复盘原因</strong> {detail.reason}</> : '暂无当日原因'}
+                          </span>
+                        ) : null}
+                      </Button>
+                    </li>
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : <p className="text-xs leading-relaxed text-ink-500">当日{direction}池暂无个股。</p>}
+    </section>
+  )
+}
+
 export function LimitUpIndustryCards({ snapshot, onSelectIndustry, firstBoardOnly = false }: {
   snapshot: ShortTermLimitUpBoardSnapshot
   onSelectIndustry?: (industry: string) => void
@@ -430,8 +561,8 @@ export function LimitUpIndustryCards({ snapshot, onSelectIndustry, firstBoardOnl
   )
 }
 
-function isKnownBoardCount(value: number) {
-  return Number.isInteger(value) && value > 0
+function isKnownBoardCount(value: number | null): value is number {
+  return value !== null && Number.isInteger(value) && value > 0
 }
 
 function shortTime(value: string | null) {

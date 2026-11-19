@@ -5,9 +5,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from './api/client'
+import { fetchShortTermLimitBoardContext, fetchShortTermLimitUpBoard, fetchShortTermMarketBreadth } from './api/client'
 import { fetchMarketThemes } from './api/marketThemes'
-import type { ShortTermLimitUpBoardSnapshot } from './types'
+import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpStock } from './types'
 
 vi.mock('./hooks/useBootstrap', () => ({ useBootstrap: vi.fn() }))
 vi.mock('./api/marketThemes', () => ({ fetchMarketThemes: vi.fn(), fetchMarketThemeDetail: vi.fn() }))
@@ -18,6 +18,7 @@ vi.mock('./pages/SettingsPage', () => ({
   SettingsPage: () => <section aria-label="配置页面">配置内容</section>
 }))
 vi.mock('./api/client', () => ({
+  fetchShortTermLimitBoardContext: vi.fn(),
   fetchShortTermLimitUpBoard: vi.fn(),
   fetchShortTermMarketBreadth: vi.fn(),
   fetchShortTermCatchUp: vi.fn(),
@@ -51,6 +52,7 @@ describe('App home routes and navigation', () => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     vi.clearAllMocks()
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(board)
+    vi.mocked(fetchShortTermLimitBoardContext).mockResolvedValue({ tradeDate: board.tradeDate, source: '', sourceUrl: '', up: {}, down: {} })
     vi.mocked(fetchShortTermMarketBreadth).mockResolvedValue(null as never)
     vi.stubGlobal('ResizeObserver', class {
       observe() {}
@@ -99,6 +101,43 @@ describe('App home routes and navigation', () => {
   it.each(['/', '/limit-up', '/unknown-page'])('opens the real limit-up home from %s', async path => {
     await renderRoute(path)
     expectHome()
+  })
+
+  it('opens the descending consecutive-board ladder and switches to the industry view using the same snapshot', async () => {
+    const stock: ShortTermLimitUpStock = {
+      symbol: '600001', name: '首板样本', industry: '半导体', latestPrice: 11, changePercent: 10,
+      amount: 100000000, turnoverRate: 2, consecutiveBoards: 1, statDays: 5, statBoards: 3,
+      sealFunds: 20000000, firstSealTime: '09:35:00', lastSealTime: '09:35:00', sealBreakCount: 0
+    }
+    vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue({
+      ...board, available: true, stocks: [
+        stock,
+        { ...stock, symbol: '600002', name: '三板样本', consecutiveBoards: 3 },
+        { ...stock, symbol: '600003', name: '最高板样本', consecutiveBoards: 10 },
+        { ...stock, symbol: '600004', name: '连板缺失样本', consecutiveBoards: 0 },
+        { ...stock, symbol: '600005', name: '同高度样本', consecutiveBoards: 10 }
+      ]
+    })
+    await renderRoute('/')
+
+    const button = (label: string) => Array.from(host.querySelectorAll<HTMLButtonElement>('main button'))
+      .find(node => node.textContent === label)!
+    const ladder = host.querySelector('section[aria-label="涨停梯队"]')
+    expect(button('涨停梯队')?.getAttribute('aria-pressed')).toBe('true')
+    expect(Array.from(ladder!.querySelectorAll('h3'), heading => heading.textContent))
+      .toEqual(['10 板', '3 板', '首板', '连板未知'])
+    expect(Array.from(ladder!.querySelectorAll('ul'), list => Array.from(list.querySelectorAll('li strong'), name => name.textContent)))
+      .toEqual([['最高板样本', '同高度样本'], ['三板样本'], ['首板样本'], ['连板缺失样本']])
+    expect(host.querySelector('section[aria-label="涨停行业卡片"]')).toBeNull()
+
+    await act(async () => { button('行业涨停').click() })
+    expect(button('行业涨停').getAttribute('aria-pressed')).toBe('true')
+    expect(host.querySelector('section[aria-label="涨停梯队"]')).toBeNull()
+    expect(host.querySelector('button[aria-label="查看半导体涨停明细"]')).not.toBeNull()
+
+    await act(async () => { button('涨停梯队').click() })
+    expect(host.querySelector('section[aria-label="涨停梯队"]')).not.toBeNull()
+    expect(fetchShortTermLimitUpBoard).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the short-term route independent of the home board', async () => {

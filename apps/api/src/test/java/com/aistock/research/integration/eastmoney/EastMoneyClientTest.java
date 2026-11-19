@@ -681,7 +681,7 @@ class EastMoneyClientTest {
                 + "]}}";
         String limitDownPayload = "{\"rc\":0,\"data\":{\"tc\":1,\"pool\":["
                 + "{\"c\":\"603102\",\"m\":1,\"n\":\"百合股份\",\"p\":39720,\"zdp\":-9.99,\"amount\":284086912,"
-                + "\"fund\":4202376,\"lbt\":150000,\"days\":1,\"oc\":13,\"hybk\":\"食品加工\"}"
+                + "\"fund\":4202376,\"lbt\":150000,\"days\":3,\"oc\":13,\"hybk\":\"食品加工\"}"
                 + "]}}";
 
         List<EastMoneyBrokenBoardPoolEntry> broken = client.readBrokenBoardPoolEntries(
@@ -705,7 +705,19 @@ class EastMoneyClientTest {
             assertThat(entry.sealFunds()).isEqualByComparingTo(new BigDecimal("4202376"));
             assertThat(entry.lastSealTime()).isEqualTo(LocalTime.of(15, 0, 0));
             assertThat(entry.openCount()).isEqualTo(13);
+            assertThat(entry.consecutiveBoards()).isEqualTo(3);
         });
+    }
+
+    @Test
+    void leavesMissingAndInvalidConsecutiveLimitDownCountsUnknown() throws Exception {
+        assertThat(client.readLimitDownPoolEntries(objectMapper.readTree("""
+                [
+                  {"c":"000001","n":"甲股"},
+                  {"c":"000002","n":"乙股","days":0},
+                  {"c":"000003","n":"丙股","days":1.5}
+                ]
+                """))).allSatisfy(entry -> assertThat(entry.consecutiveBoards()).isNull());
     }
 
     @Test

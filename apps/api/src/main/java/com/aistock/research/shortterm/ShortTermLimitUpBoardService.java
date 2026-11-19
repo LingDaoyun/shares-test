@@ -32,8 +32,7 @@ import java.util.stream.Collectors;
  * 涨停看板服务：拉取东方财富涨停池/炸板池/跌停池，聚合行业分布、连板梯队、
  * 炸板率与封板时间分布，并对外提供市场情绪判定的真实涨停池脉冲。
  *
- * <p>涨停池是主数据，获取失败时快照整体不可用；炸板池/跌停池独立容错，
- * 失败只标记数据缺口，不影响其余指标。盘中结果按 60 秒快照缓存，刷新即重取。
+ * <p>涨停池不可用时不生成涨停指标，跌停池独立提供梯队。盘中结果按 60 秒快照缓存。
  */
 @Service
 public class ShortTermLimitUpBoardService {
@@ -204,24 +203,31 @@ public class ShortTermLimitUpBoardService {
     private ShortTermLimitUpBoardSnapshot fetchSnapshot(LocalDate tradeDate) {
         Instant fetchedAt = Instant.now();
         List<EastMoneyLimitUpPoolEntry> limitUpEntries;
+        String limitUpUnavailableReason = null;
         try {
             limitUpEntries = eastMoneyClient.fetchLimitUpPool(tradeDate);
+            if (limitUpEntries.isEmpty()) {
+                limitUpUnavailableReason = "当日涨停池为空（可能是非交易日、盘前或数据源尚未生成）";
+            }
         } catch (Exception exception) {
             logger.warn("涨停池获取失败：{}", rootMessage(exception));
-            return ShortTermLimitUpBoardSnapshot.unavailable(
-                    tradeDate,
-                    fetchedAt,
-                    "东方财富涨停池获取失败：" + rootMessage(exception)
-            );
-        }
-        if (limitUpEntries.isEmpty()) {
-            return ShortTermLimitUpBoardSnapshot.unavailable(
-                    tradeDate,
-                    fetchedAt,
-                    "当日涨停池为空（可能是非交易日、盘前或数据源尚未生成）"
-            );
+            limitUpEntries = List.of();
+            limitUpUnavailableReason = "东方财富涨停池获取失败：" + rootMessage(exception);
         }
         List<String> dataGaps = new ArrayList<>();
+        List<EastMoneyLimitDownPoolEntry> limitDownEntries = null;
+        try {
+            limitDownEntries = eastMoneyClient.fetchLimitDownPool(tradeDate);
+            if (limitDownEntries == null) throw new IllegalStateException("跌停池未返回");
+        } catch (Exception exception) {
+            logger.warn("跌停池获取失败：{}", rootMessage(exception));
+            dataGaps.add("跌停池获取失败，跌停家数缺失：" + rootMessage(exception));
+        }
+        if (limitUpUnavailableReason != null) {
+            return ShortTermLimitUpBoardSnapshot.unavailable(
+                    tradeDate, fetchedAt, limitUpUnavailableReason, dataGaps,
+                    limitDownEntries != null, limitDownStocks(limitDownEntries));
+        }
         List<EastMoneyBrokenBoardPoolEntry> brokenEntries = null;
         boolean brokenBoardAvailable = true;
         try {
@@ -231,13 +237,6 @@ public class ShortTermLimitUpBoardService {
             brokenBoardAvailable = false;
             logger.warn("炸板池获取失败：{}", rootMessage(exception));
             dataGaps.add("炸板池获取失败，炸板率缺失：" + rootMessage(exception));
-        }
-        List<EastMoneyLimitDownPoolEntry> limitDownEntries = null;
-        try {
-            limitDownEntries = eastMoneyClient.fetchLimitDownPool(tradeDate);
-        } catch (Exception exception) {
-            logger.warn("跌停池获取失败：{}", rootMessage(exception));
-            dataGaps.add("跌停池获取失败，跌停家数缺失：" + rootMessage(exception));
         }
         ShortTermMarketTurnover marketTurnover = null;
         try {
@@ -429,8 +428,23 @@ public class ShortTermLimitUpBoardService {
                 sentiment(limitUpEntries, brokenBoardAvailable && brokenEntries != null ? brokenEntries.size() : null,
                         limitDownEntries == null ? null : limitDownEntries.size()),
                 marketTurnover,
-                dataGaps
+                dataGaps,
+                limitDownEntries != null,
+                limitDownStocks(limitDownEntries)
         );
+    }
+
+    private static List<ShortTermLimitDownStock> limitDownStocks(List<EastMoneyLimitDownPoolEntry> entries) {
+        if (entries == null) return List.of();
+        return entries.stream()
+                .sorted(Comparator.comparing(EastMoneyLimitDownPoolEntry::consecutiveBoards,
+                                Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(EastMoneyLimitDownPoolEntry::lastSealTime,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(EastMoneyLimitDownPoolEntry::symbol))
+                .map(entry -> new ShortTermLimitDownStock(
+                        entry.symbol(), entry.name(), entry.industry(), entry.consecutiveBoards(), entry.lastSealTime()))
+                .toList();
     }
 
     private static ShortTermBrokenBoardStock toBrokenStock(EastMoneyBrokenBoardPoolEntry entry) {

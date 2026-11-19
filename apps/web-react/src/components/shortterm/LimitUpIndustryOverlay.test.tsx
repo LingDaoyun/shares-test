@@ -3,7 +3,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchShortTermCatchUp, fetchShortTermLimitUpBoard, fetchShortTermLimitUpIndustry, fetchShortTermMarketBreadth, fetchShortTermMarketFundDirection } from '../../api/client'
+import { fetchShortTermCatchUp, fetchShortTermLimitBoardContext, fetchShortTermLimitUpBoard, fetchShortTermLimitUpIndustry, fetchShortTermMarketBreadth, fetchShortTermMarketFundDirection } from '../../api/client'
 import { LimitUpBoardPanel } from './LimitUpBoardPanel'
 import { fetchMarketThemes } from '../../api/marketThemes'
 import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpStock } from '../../types'
@@ -11,6 +11,7 @@ import type { ShortTermLimitUpBoardSnapshot, ShortTermLimitUpStock } from '../..
 vi.mock('../../api/marketThemes', () => ({ fetchMarketThemes: vi.fn(), fetchMarketThemeDetail: vi.fn() }))
 
 vi.mock('../../api/client', () => ({
+  fetchShortTermLimitBoardContext: vi.fn(),
   fetchShortTermLimitUpBoard: vi.fn(), fetchShortTermMarketBreadth: vi.fn(), fetchShortTermLimitUpIndustry: vi.fn(),
   fetchShortTermCatchUp: vi.fn(), fetchShortTermCatchUpFollowUp: vi.fn(), fetchStockDaily: vi.fn(), fetchStockIntraday: vi.fn(),
   fetchShortTermMarketFundDirection: vi.fn()
@@ -38,6 +39,7 @@ describe('Limit-up industry third-level detail', () => {
     vi.resetAllMocks()
     vi.mocked(fetchMarketThemes).mockResolvedValue({ tradeDate: null, fetchedAt: "2026-10-26T07:00:00Z", status: "UNAVAILABLE", source: "东方财富概念板块", totalConceptCount: 0, excludedStructuralCount: 0, validQuoteCount: 0, themes: [], dataGaps: ["题材源暂不可用"] })
     vi.mocked(fetchShortTermLimitUpBoard).mockResolvedValue(board)
+    vi.mocked(fetchShortTermLimitBoardContext).mockResolvedValue({ tradeDate: board.tradeDate, source: '', sourceUrl: '', up: {}, down: {} })
     vi.mocked(fetchShortTermMarketBreadth).mockResolvedValue(null as never)
     vi.mocked(fetchShortTermMarketFundDirection).mockResolvedValue({
       topInflows: [], topOutflows: [], coveredIndustryCount: 0, expectedIndustryCount: 0,
@@ -59,7 +61,9 @@ describe('Limit-up industry third-level detail', () => {
   })
   async function openBoard() {
     await act(async () => { root.render(<LimitUpBoardPanel />) })
-    await act(async () => { Array.from(host.querySelectorAll("button")).find(button => button.textContent === "行业")?.click() })
+    const industryView = Array.from(host.querySelectorAll('button')).find(button => button.textContent === '行业涨停')
+    expect(industryView).toBeDefined()
+    await act(async () => { industryView?.click() })
   }
   async function openIndustry() {
     await openBoard()
