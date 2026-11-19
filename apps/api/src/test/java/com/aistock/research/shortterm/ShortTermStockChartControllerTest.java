@@ -33,7 +33,7 @@ class ShortTermStockChartControllerTest {
                 point("600000", "2026-10-26T13:02", "11", "200"),
                 point("600000", "2026-10-26T09:30", "10.5", "50"),
                 point("600000", "2026-10-26T13:02", "11", "200")
-        ), FETCHED_AT);
+        ), FETCHED_AT, "东方财富");
 
         assertThat(result.tradeDate()).isEqualTo(LocalDate.parse("2026-10-26"));
         assertThat(result.source()).isEqualTo("东方财富");
@@ -56,7 +56,7 @@ class ShortTermStockChartControllerTest {
                 point("600000", "2026-10-26T15:01", "10", "100"),
                 point("600000", "2026-10-26T14:01", "10", "100"),
                 point("600000", "2026-10-27T09:30", "10", "100")
-        ), FETCHED_AT);
+        ), FETCHED_AT, "东方财富");
 
         assertThat(result.points()).isEmpty();
         assertThat(result.tradeDate()).isNull();
@@ -67,12 +67,43 @@ class ShortTermStockChartControllerTest {
         var point = new EastMoneyIntradayPoint("600000", LocalDateTime.parse("2026-10-23T15:00"),
                 null, new BigDecimal("10"), null, null,
                 new BigDecimal("-1"), new BigDecimal("-2"), BigDecimal.ZERO);
-        var result = ShortTermStockChartController.intradaySnapshot("600000", List.of(point), FETCHED_AT);
+        var result = ShortTermStockChartController.intradaySnapshot("600000", List.of(point), FETCHED_AT, "东方财富");
 
         assertThat(result.tradeDate()).isEqualTo(LocalDate.parse("2026-10-23"));
         assertThat(result.points().get(0).volume()).isNull();
         assertThat(result.points().get(0).amount()).isNull();
         assertThat(result.points().get(0).averagePrice()).isNull();
+    }
+
+    @Test
+    void fallsBackToSinaWhenEastMoneyTransportFails() {
+        var client = mock(EastMoneyClient.class);
+        var controller = new ShortTermStockChartController(client);
+        when(client.fetchIntradayOhlcv("600156")).thenThrow(new IllegalStateException("东方财富连接中断"));
+        when(client.fetchSinaIntradayTrends("600156")).thenReturn(List.of(
+                point("600156", "2026-10-22T15:00", "8.09", "97"),
+                point("600156", "2026-10-23T15:00", "8.90", "1024")
+        ));
+
+        var result = controller.intraday("600156");
+
+        assertThat(result.source()).isEqualTo("新浪");
+        assertThat(result.tradeDate()).isEqualTo(LocalDate.parse("2026-10-23"));
+        assertThat(result.volumeUnit()).isEqualTo("手");
+        assertThat(result.points()).singleElement().satisfies(point ->
+                assertThat(point.volume()).isEqualByComparingTo("1024"));
+    }
+
+    @Test
+    void preservesEmptyPrimarySnapshotWhenSinaFails() {
+        var client = mock(EastMoneyClient.class);
+        when(client.fetchIntradayOhlcv("600156")).thenReturn(List.of());
+        when(client.fetchSinaIntradayTrends("600156")).thenThrow(new IllegalStateException("新浪连接中断"));
+
+        var result = new ShortTermStockChartController(client).intraday("600156");
+
+        assertThat(result.source()).isEqualTo("东方财富");
+        assertThat(result.points()).isEmpty();
     }
 
     @Test
