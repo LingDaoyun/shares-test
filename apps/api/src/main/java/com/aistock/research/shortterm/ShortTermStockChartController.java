@@ -20,6 +20,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.CancellationException;
 
 @RestController
 @RequestMapping("/api/short-term/stocks")
@@ -34,9 +35,32 @@ public class ShortTermStockChartController {
     @GetMapping("/{symbol}/intraday")
     public ShortTermStockIntradaySnapshot intraday(@PathVariable String symbol) {
         requireSymbol(symbol);
-        // EastMoney supplies dated minute volume in hands. Tencent minute units vary by security.
-        List<EastMoneyIntradayPoint> points = eastMoneyClient.fetchIntradayOhlcv(symbol);
-        return intradaySnapshot(symbol, points, Instant.now());
+        ShortTermStockIntradaySnapshot primary = null;
+        IllegalStateException eastMoneyFailure = null;
+        try {
+            primary = intradaySnapshot(symbol, eastMoneyClient.fetchIntradayOhlcv(symbol), Instant.now(), "东方财富");
+            if (!primary.points().isEmpty()) {
+                return primary;
+            }
+        } catch (IllegalStateException exception) {
+            eastMoneyFailure = exception;
+        }
+        try {
+            var backup = intradaySnapshot(symbol, eastMoneyClient.fetchSinaIntradayTrends(symbol), Instant.now(), "新浪");
+            if (!backup.points().isEmpty()) {
+                return backup;
+            }
+        } catch (CancellationException exception) {
+            throw exception;
+        } catch (IllegalStateException exception) {
+            if (eastMoneyFailure != null) {
+                eastMoneyFailure.addSuppressed(exception);
+            }
+        }
+        if (eastMoneyFailure != null) {
+            throw eastMoneyFailure;
+        }
+        return primary;
     }
 
     @GetMapping("/{symbol}/daily")
@@ -63,7 +87,7 @@ public class ShortTermStockChartController {
     }
 
     static ShortTermStockIntradaySnapshot intradaySnapshot(
-            String symbol, List<EastMoneyIntradayPoint> rows, Instant fetchedAt
+            String symbol, List<EastMoneyIntradayPoint> rows, Instant fetchedAt, String source
     ) {
         LocalDateTime now = LocalDateTime.ofInstant(fetchedAt, MARKET_ZONE);
         Map<LocalDateTime, ShortTermStockIntradaySnapshot.Point> byMinute = new TreeMap<>();
@@ -79,7 +103,7 @@ public class ShortTermStockChartController {
                 .max(LocalDate::compareTo).orElse(null);
         List<ShortTermStockIntradaySnapshot.Point> points = byMinute.values().stream()
                 .filter(point -> point.minute().toLocalDate().equals(tradeDate)).toList();
-        return new ShortTermStockIntradaySnapshot(symbol, tradeDate, "东方财富", "手", fetchedAt, points);
+        return new ShortTermStockIntradaySnapshot(symbol, tradeDate, source, "手", fetchedAt, points);
     }
 
     static ShortTermStockDailySnapshot dailySnapshot(

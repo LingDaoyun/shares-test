@@ -799,6 +799,60 @@ public class EastMoneyClient {
         }
     }
 
+    public List<EastMoneyIntradayPoint> fetchSinaIntradayTrends(String symbol) {
+        String code = tencentCode(symbol);
+        if (code == null) {
+            return List.of();
+        }
+        String url = "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData"
+                + "?symbol=" + encodeQueryValue(code) + "&scale=1&ma=no&datalen=320";
+        try {
+            byte[] body = fetchBytesOnceWithCurl(url, null, "https://finance.sina.com.cn/", 3, 5, 7, 0);
+            return readSinaIntradayPoints(symbol, objectMapper.readTree(body));
+        } catch (CancellationException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new IllegalStateException("新浪分时数据获取失败：" + symbol, exception);
+        }
+    }
+
+    List<EastMoneyIntradayPoint> readSinaIntradayPoints(String symbol, JsonNode rows) {
+        if (rows == null || !rows.isArray()) {
+            return List.of();
+        }
+        List<EastMoneyIntradayPoint> points = new ArrayList<>();
+        LocalDate tradeDate = null;
+        BigDecimal totalShares = BigDecimal.ZERO;
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        for (JsonNode row : rows) {
+            LocalDateTime minute;
+            try {
+                minute = LocalDateTime.parse(row.path("day").asText().replace(' ', 'T'));
+            } catch (DateTimeException exception) {
+                continue;
+            }
+            BigDecimal close = positiveOrNull(decimal(row.path("close").asText(null)));
+            BigDecimal shares = decimal(row.path("volume").asText(null));
+            BigDecimal amount = decimal(row.path("amount").asText(null));
+            if (close == null || shares == null || amount == null || shares.signum() < 0 || amount.signum() < 0) {
+                continue;
+            }
+            if (!minute.toLocalDate().equals(tradeDate)) {
+                tradeDate = minute.toLocalDate();
+                totalShares = BigDecimal.ZERO;
+                totalAmount = BigDecimal.ZERO;
+            }
+            totalShares = totalShares.add(shares);
+            totalAmount = totalAmount.add(amount);
+            BigDecimal average = totalShares.signum() > 0
+                    ? totalAmount.divide(totalShares, 4, RoundingMode.HALF_UP) : null;
+            points.add(new EastMoneyIntradayPoint(symbol, minute, decimal(row.path("open").asText(null)),
+                    close, decimal(row.path("high").asText(null)), decimal(row.path("low").asText(null)),
+                    shares.movePointLeft(2), amount, average));
+        }
+        return points;
+    }
+
     /** Two dated index sessions; explicit codes prevent confusing Shanghai index 000001 with a stock. */
     public synchronized List<EastMoneyIntradayPoint> fetchIndexIntradayTrends(String indexCode) {
         String secId = switch (indexCode) {

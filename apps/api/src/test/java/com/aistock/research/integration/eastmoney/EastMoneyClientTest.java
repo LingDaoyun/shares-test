@@ -348,6 +348,26 @@ class EastMoneyClientTest {
     }
 
     @Test
+    void shouldConvertSinaMinuteSharesToHandsAndCalculateAveragePerSession() throws Exception {
+        JsonNode rows = objectMapper.readTree("""
+                [
+                  {"day":"2026-11-18 15:00:00","close":"8.09","volume":"9700","amount":"78473"},
+                  {"day":"2026-11-19 09:31:00","close":"8.77","volume":"36365495","amount":"321003755.4888"},
+                  {"day":"2026-11-19 09:32:00","close":"8.77","volume":"5490200","amount":"47386921.3790"}
+                ]
+                """);
+
+        List<EastMoneyIntradayPoint> points = client.readSinaIntradayPoints("600156", rows);
+
+        assertThat(points).hasSize(3);
+        assertThat(points.get(1).minute().toString()).isEqualTo("2026-11-19T09:31");
+        assertThat(points.get(1).volume()).isEqualByComparingTo("363654.95");
+        assertThat(points.get(1).amount()).isEqualByComparingTo("321003755.4888");
+        assertThat(points.get(1).averagePrice()).isEqualByComparingTo("8.8272");
+        assertThat(points.get(2).averagePrice()).isEqualByComparingTo("8.8014");
+    }
+
+    @Test
     void shouldParseTencentIntradayCumulativeRowsAsMinuteDeltas() throws Exception {
         JsonNode rows = objectMapper.readTree("""
                 [
